@@ -53,10 +53,12 @@ for (const tool of ['Bash', 'PowerShell'] as const) {
     const stdout = (got.result as { stdout: string }).stdout
 
     expect(saved).toHaveLength(1)
-    expect(saved[0]!.path).toMatch(/^C:\\Temp\\claude-output\\\d+-.+\.log$/)
+    // The host resolves a written path its own way on each platform; the file name is what the two sides share.
+    const name = saved[0]!.path.split(/[\\/]/).pop()!
+    expect(name).toMatch(/^\d+-.+\.log$/)
     expect(saved[0]!.text).toContain('line 200')
     expect(stdout).not.toContain('line 200\n')
-    expect(stdout).toContain(`Full output: ${saved[0]!.path}`)
+    expect(stdout).toContain(`Full output: C:\\Temp\\claude-output\\${name}]`)
   })
 }
 
