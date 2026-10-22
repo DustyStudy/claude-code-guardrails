@@ -1,0 +1,10 @@
+{
+  "name": "commit-identity-guard",
+  "version": "0.2.0",
+  "description": "In repos of the GitHub owners set in COMMIT_GUARD_OWNERS, denies commits and PRs that carry a Claude trailer, and commits not authored from a GitHub noreply address",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

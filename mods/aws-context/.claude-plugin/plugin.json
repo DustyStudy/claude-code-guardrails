@@ -1,0 +1,11 @@
+{
+  "name": "aws-context",
+  "version": "0.2.0",
+  "description": "Shows the AWS profile, region and partition above the prompt, highlighted for GovCloud or for profiles named in AWS_CONTEXT_HIGHLIGHT",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

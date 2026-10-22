@@ -1,0 +1,11 @@
+{
+  "name": "clean-view",
+  "version": "0.2.0",
+  "description": "Hides tool calls and code; shows a checklist of the plan, the current step and what is left",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

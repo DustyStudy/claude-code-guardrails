@@ -1,0 +1,10 @@
+{
+  "name": "tf-lint",
+  "version": "0.2.0",
+  "description": "Denies edits that write an AWS access key, private key or API token, and flags Terraform edits with a hardcoded partition ARN or SSH/RDP open to the world",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

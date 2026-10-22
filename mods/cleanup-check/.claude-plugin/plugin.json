@@ -1,0 +1,10 @@
+{
+  "name": "cleanup-check",
+  "version": "0.1.0",
+  "description": "Status line after each turn listing what is left to clean up: a merged branch still checked out, merged branches to delete, saved Terraform plans",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

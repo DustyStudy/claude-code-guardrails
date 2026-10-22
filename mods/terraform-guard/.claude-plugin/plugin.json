@@ -1,0 +1,10 @@
+{
+  "name": "terraform-guard",
+  "version": "0.2.0",
+  "description": "Denies terraform apply/destroy with -auto-approve, and apply without a saved plan file",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

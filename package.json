@@ -1,0 +1,13 @@
+{
+  "name": "claude-code-guardrails",
+  "private": true,
+  "description": "Guardrails for Claude Code working on AWS and Terraform",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/test-all.mjs"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-code": "2.1.309"
+  }
+}

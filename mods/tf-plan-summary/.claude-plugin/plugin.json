@@ -1,0 +1,11 @@
+{
+  "name": "tf-plan-summary",
+  "version": "0.1.0",
+  "description": "A tool that sums up a saved Terraform plan in a few lines: counts, destroys and replaces, and security-sensitive changes, so the model never reads the raw plan",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

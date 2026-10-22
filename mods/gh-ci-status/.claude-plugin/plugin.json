@@ -1,0 +1,11 @@
+{
+  "name": "gh-ci-status",
+  "version": "0.2.0",
+  "description": "A band above the prompt with the checks of every open pull request of yours, and a Merge button once they pass",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

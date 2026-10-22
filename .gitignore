@@ -1,0 +1,4 @@
+node_modules/
+# Written by the engine when a mod is opened in a session.
+.claude-plugin/types/
+*.log
