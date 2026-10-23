@@ -1,6 +1,6 @@
 {
   "name": "output-trimmer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cuts long output of noisy commands (terraform init/plan/apply, scanners, installs) to its head, error lines and tail, with the full output saved to a file",
   "author": {
     "name": "Dustin Arrington",

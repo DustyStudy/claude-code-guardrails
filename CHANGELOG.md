@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-22)
 
 - output-trimmer: each save empties saved logs older than seven days, so full
   plan and scan output does not stay in the temp folder.
