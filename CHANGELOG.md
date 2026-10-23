@@ -4,6 +4,9 @@
 
 - output-trimmer: each save empties saved logs older than seven days, so full
   plan and scan output does not stay in the temp folder.
+- codex-meter (new): a status line with the Codex plan's 5-hour and weekly
+  usage from Codex's session logs, a warning near a limit, and an optional
+  per-session run limit.
 
 ## 0.1.0 (2026-10-22)
 

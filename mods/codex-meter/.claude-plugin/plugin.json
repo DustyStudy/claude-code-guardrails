@@ -1,0 +1,11 @@
+{
+  "name": "codex-meter",
+  "version": "0.2.0",
+  "description": "Status line with the Codex plan's 5-hour and weekly usage from its session logs, a warning near the limit, and the Codex runs this session",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
