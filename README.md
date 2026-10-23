@@ -123,7 +123,9 @@ when it would be worth lifting.
   as GovCloud only once a `us-gov-` region appears.
 - **tf-reminder** keeps one reminder for the session, not one per folder: a
   `terraform fmt` in one stack clears an edit made in another.
-- **output-trimmer** leaves its saved logs to the OS temp cleanup.
+- **output-trimmer** empties saved logs older than seven days each time it
+  saves one. The mod API has no file delete, so the empty files stay in
+  `$TEMP/claude-output` until you delete that folder.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
   something runs `git fetch --prune`.
 - **gh-ci-status** lists the 20 most recently updated open pull requests. A

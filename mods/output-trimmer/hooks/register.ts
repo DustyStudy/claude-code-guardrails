@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 // Commands whose output is long and mostly progress: inits, plans and applies, scanners, installs, image builds.
 const NOISY =
@@ -10,6 +10,8 @@ const TAIL = 40
 const MAX_FLAGGED = 30
 // Lines worth keeping from the cut middle: what failed and what warned.
 const FLAGGED = /\b(error|errors|fail|failed|failure|denied|fatal|panic|exception|warn|warning)\b|✗/i
+// Saved logs older than this are emptied: they can hold plan values and are only read within a session or two.
+const KEEP_MS = 7 * 24 * 60 * 60 * 1000
 
 /** The head, the flagged lines of the middle and the tail of a long output; undefined when it is kept whole. */
 export const trim = (text: string, path: string): string | undefined => {
@@ -33,6 +35,21 @@ export const trim = (text: string, path: string): string | undefined => {
   ].join('\n')
 }
 
+// shortcut: the host has no file delete, so an old log is emptied and its 0-byte file stays; delete the folder by hand if the count ever matters.
+const prune = async ($: EngineInterface, dir: string, sep: string, cutoff: number, keep: string) => {
+  // A linked folder could point the sweep at files that are not this mod's.
+  if ((await $.fs.stat(dir)).isLink) {
+    return
+  }
+
+  for (const entry of await $.fs.list(dir)) {
+    if (entry.kind === 'file' && entry.name.endsWith('.log') && entry.name !== keep && entry.size > 0 && entry.mtimeMs < cutoff) {
+      // One log that cannot be written must not stop the rest.
+      await $.fs.write(dir + sep + entry.name, '').catch(() => undefined)
+    }
+  }
+}
+
 export const register: Register = on => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const done = await next(e)
@@ -41,11 +58,13 @@ export const register: Register = on => {
       return done
     }
 
-    // shortcut: the files are left to the OS temp cleanup; prune them here if the folder ever grows large.
     const temp = (await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? '/tmp'
     // The path the model is told reads as its platform writes it.
     const sep = temp.includes('\\') ? '\\' : '/'
-    const path = [temp, 'claude-output', `${Date.now()}-${e.tool_use_id}.log`].join(sep)
+    const dir = [temp, 'claude-output'].join(sep)
+    const now = Date.now()
+    const name = `${now}-${e.tool_use_id}.log`
+    const path = [dir, name].join(sep)
     const { stdout, stderr } = done.result as { stdout?: unknown; stderr?: unknown }
 
     if (typeof stdout !== 'string' || typeof stderr !== 'string') {
@@ -65,6 +84,9 @@ export const register: Register = on => {
     } catch {
       return done
     }
+
+    // Best effort: a failed prune never costs the model its result.
+    await prune($, dir, sep, now - KEEP_MS, name).catch(() => undefined)
 
     // A new result, so no ref; other hooks' reminders to the model stay.
     return {

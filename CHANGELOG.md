@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- output-trimmer: each save empties saved logs older than seven days, so full
+  plan and scan output does not stay in the temp folder.
+
 ## 0.1.0 (2026-10-22)
 
 First public release: eleven mods.

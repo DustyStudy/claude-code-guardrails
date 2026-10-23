@@ -6,13 +6,41 @@ import { trim } from './register'
 const lines = (n: number, at: Record<number, string> = {}) =>
   Array.from({ length: n }, (_, i) => at[i + 1] ?? `line ${i + 1}`).join('\n')
 
-// Answers the command beneath the mod with `stdout`, and records what the mod saved.
-const shell = (on: On, stdout: string, write: 'ok' | 'fail' = 'ok', context?: string[]) => {
+const DAY = 24 * 60 * 60 * 1000
+
+type Folder = {
+  // What the saved-log folder lists besides the logs this test saves.
+  logs?: { name: string; kind?: 'file' | 'dir'; size: number; ageDays: number }[]
+  // How old the logs this test saves look: a clock moved forward makes them old.
+  savedAgeDays?: number
+  isLinked?: boolean
+  canList?: boolean
+  // A log whose cleanup write is refused.
+  locked?: string
+}
+
+// Answers the command beneath the mod with `stdout`, stands in for the saved-log folder, and records what the mod wrote.
+const shell = (on: On, stdout: string, write: 'ok' | 'fail' = 'ok', context?: string[], folder: Folder = {}) => {
   const saved: { path: string; text: string }[] = []
+  const name = (path: string) => path.split(/[\\/]/).pop()!
   on('tool.call', () => ({ result: { stdout, stderr: '', interrupted: false }, ...(context ? { context } : {}) }))
   on('env.get', (_, e) => ({ value: e.name === 'TEMP' ? 'C:\\Temp' : undefined }))
+  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: folder.isLinked ?? false } }))
+  on('fs.list', () => {
+    if (folder.canList === false) {
+      throw new Error('EACCES')
+    }
+    const logs = [
+      ...(folder.logs ?? []),
+      ...saved.map(s => ({ name: name(s.path), kind: 'file' as const, size: s.text.length, ageDays: folder.savedAgeDays ?? 0 })),
+    ]
+
+    return {
+      value: logs.map(l => ({ name: l.name, kind: l.kind ?? 'file', size: l.size, mtimeMs: Date.now() - l.ageDays * DAY, isLink: false })),
+    }
+  })
   on('fs.write', (_, e) => {
-    if (write === 'fail') {
+    if (write === 'fail' || name(e.path) === folder.locked) {
       throw new Error('disk full')
     }
     saved.push({ path: e.path, text: e.text })
@@ -22,6 +50,9 @@ const shell = (on: On, stdout: string, write: 'ok' | 'fail' = 'ok', context?: st
 
   return saved
 }
+
+// The folder part of a written path, as the host resolved it.
+const folderOf = (path: string) => path.slice(0, path.length - path.split(/[\\/]/).pop()!.length)
 
 test('a short output is kept whole', () => {
   expect(trim(lines(120), 'f.log')).toBeUndefined()
@@ -90,5 +121,53 @@ test('a cut result keeps the reminders other hooks gave the model', async ($, on
   const got = await $.tool.call({ tool: 'Bash', command: 'terraform init' })
 
   expect(got.context).toEqual(['terraform fmt not run'])
+  expect((got.result as { stdout: string }).stdout).toContain('[output-trimmer:')
+})
+
+test('a save empties saved logs older than a week, and only those', async ($, on) => {
+  const saved = shell(on, lines(400), 'ok', undefined, {
+    logs: [
+      { name: 'old.log', size: 900, ageDays: 8 },
+      { name: 'recent.log', size: 900, ageDays: 6 },
+      { name: 'emptied.log', size: 0, ageDays: 30 },
+      { name: 'notes.txt', size: 900, ageDays: 30 },
+      { name: 'sub.log', kind: 'dir', size: 0, ageDays: 30 },
+    ],
+  })
+  await $.tool.call({ tool: 'Bash', command: 'terraform plan' })
+  expect(saved).toHaveLength(2)
+  // Emptied in the folder the log was saved to, whatever spelling the host gives that folder.
+  expect(saved[1]!.path).toBe(`${folderOf(saved[0]!.path)}old.log`)
+  expect(saved[1]!.text).toBe('')
+})
+
+test('the log just saved is kept even when the clock says it is old', async ($, on) => {
+  const saved = shell(on, lines(400), 'ok', undefined, { savedAgeDays: 30 })
+  await $.tool.call({ tool: 'Bash', command: 'terraform plan' })
+  expect(saved).toHaveLength(1)
+  expect(saved[0]!.text).toContain('line 200')
+})
+
+test('a linked log folder is not swept', async ($, on) => {
+  const saved = shell(on, lines(400), 'ok', undefined, { isLinked: true, logs: [{ name: 'old.log', size: 900, ageDays: 8 }] })
+  await $.tool.call({ tool: 'Bash', command: 'terraform plan' })
+  expect(saved).toHaveLength(1)
+})
+
+test('one log that cannot be emptied does not stop the rest', async ($, on) => {
+  const saved = shell(on, lines(400), 'ok', undefined, {
+    locked: 'a.log',
+    logs: [
+      { name: 'a.log', size: 900, ageDays: 8 },
+      { name: 'b.log', size: 900, ageDays: 8 },
+    ],
+  })
+  await $.tool.call({ tool: 'Bash', command: 'terraform plan' })
+  expect(saved.map(s => s.path.split(/[\\/]/).pop()).slice(1)).toEqual(['b.log'])
+})
+
+test('a failed prune still hands back the cut output', async ($, on) => {
+  shell(on, lines(400), 'ok', undefined, { canList: false })
+  const got = await $.tool.call({ tool: 'Bash', command: 'terraform plan' })
   expect((got.result as { stdout: string }).stdout).toContain('[output-trimmer:')
 })
