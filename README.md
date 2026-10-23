@@ -5,10 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Eleven mods that stop risky commands
+when it works on AWS and Terraform. Twelve mods that stop risky commands
 before they run, catch secrets before they are written, flag insecure
-Terraform as it is edited, and keep long command output out of the model's
-context.
+Terraform as it is edited, keep long command output out of the model's
+context, and show how much of a Codex plan is left.
 
 **At a glance**
 
@@ -20,7 +20,7 @@ context.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 362 tests across the eleven mods, run in CI against a pinned
+- **Result:** 392 tests across the twelve mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -45,6 +45,7 @@ context.
 | [aws-context](mods/aws-context) | Display | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | A status line after each turn: a merged branch still checked out, merged branches to delete, saved plan files left behind. |
 | [clean-view](mods/clean-view) | Display | Hides tool calls and shows the agent's plan as a checklist with progress. |
+| [codex-meter](mods/codex-meter) | Display and reminder | A status line with your Codex plan's 5-hour and weekly usage and when each resets, read from Codex's own session logs. Near a limit it marks the line, notifies you once, and tells the model after each Codex run. |
 
 Guards deny rather than ask: in auto mode an "ask" is settled by a
 classifier, not by a person, so a deny is the only answer that reliably
@@ -77,13 +78,19 @@ in; tf-plan-summary needs `terraform`.
 
 ### Settings
 
-Two mods read a setting from the same `env` block. Both do nothing extra
-until it is set.
+Three mods read a setting from the same `env` block. Each is optional.
+commit-identity-guard and aws-context do nothing extra until theirs is set.
 
 | Variable | Mod | Value |
 |---|---|---|
 | `COMMIT_GUARD_OWNERS` | commit-identity-guard | Comma-separated GitHub owners whose repos the rules cover, such as `my-user,my-org`. |
 | `AWS_CONTEXT_HIGHLIGHT` | aws-context | Comma-separated text that marks a sensitive profile name, such as `security,111122223333`. |
+| `CODEX_METER_WARN_PERCENT` | codex-meter | The used percent of a Codex window that brings the warning, 1 to 100. Default `80`. |
+| `CODEX_METER_SESSION_RUNS` | codex-meter | The Codex runs one session should make, such as `2` for one review and one confirm. Past it the line says so. Not set, no run limit. |
+
+codex-meter reads `$CODEX_HOME`, or `~/.codex` when that is not set. The
+usage appears once the [Codex CLI](https://github.com/openai/codex), signed
+in with a ChatGPT plan, has run on this machine in the last seven days.
 
 ## Development
 
@@ -126,6 +133,10 @@ when it would be worth lifting.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
   `$TEMP/claude-output` until you delete that folder.
+- **codex-meter** knows the usage as of Codex's last report, so it updates
+  when Codex runs, not as time passes; a window whose reset time has passed
+  reads 0%. It reads Codex's session log format, which Codex may change, and
+  skips a log over 4 MiB. A run is counted by its command line.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
   something runs `git fetch --prune`.
 - **gh-ci-status** lists the 20 most recently updated open pull requests. A
