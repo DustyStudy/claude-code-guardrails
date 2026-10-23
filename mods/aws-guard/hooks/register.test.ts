@@ -45,6 +45,25 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['aws iam delete-role help', true],
   ['aws iam delete-role --generate-cli-skeleton', true],
   ['aws iam delete-role --role-name x # help', false],
+  // AWS Tools for PowerShell: the same calls by cmdlet; reads and -WhatIf pass.
+  ['Remove-IAMRole -RoleName it-admin -Force', false],
+  ['Get-IAMRoleList | Where-Object RoleName -like "temp*" | Remove-IAMRole -Force', false],
+  ['AWS.Tools.IdentityManagement\\Remove-IAMRolePolicy -RoleName x -PolicyName y', false],
+  ['Remove-IAMPolicyVersion -PolicyArn x -VersionId v1', false],
+  ['Move-ORGAccount -AccountId 1 -SourceParentId r -DestinationParentId ou', false],
+  ['Add-ORGPolicyToTarget -PolicyId p -TargetId r', false],
+  ['Request-KMSKeyDeletion -KeyId abc -PendingWindowInDay 7', false],
+  ['Remove-KMSImportedKeyMaterial -KeyId abc', false],
+  ['Invoke-Command { Remove-IAMRole -RoleName x }', false],
+  ['Remove-IAMRole -RoleName x -WhatIf', true],
+  ['Get-IAMRole -RoleName x', true],
+  ['Get-ORGAccountList', true],
+  ['Get-KMSKey -KeyId abc', true],
+  ['Write-Host "Remove-IAMRole is denied"', true],
+  ['Remove-Item ./org-notes.txt', true],
+  ['New-ORGOrganizationalUnit -ParentId r -Name Sandbox', false],
+  ['Remove-OrganizationRelationship -Identity Contoso', true],
+  ['Set-OrganizationConfig -OAuth2ClientProfileEnabled $true', true],
 ]
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
@@ -66,3 +85,9 @@ for (const tool of ['Bash', 'PowerShell'] as const) {
     })
   }
 }
+
+test('a cmdlet is named in the deny as written', async ($, on) => {
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  const ran = await $.tool.call({ tool: 'PowerShell', command: 'Get-IAMRoleList | Remove-IAMRole -Force' })
+  expect(JSON.stringify(ran)).toContain('`Remove-IAMRole` needs the user')
+})

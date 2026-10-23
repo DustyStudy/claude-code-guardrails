@@ -20,7 +20,7 @@ context, and show how much of a Codex plan is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 392 tests across the twelve mods, run in CI against a pinned
+- **Result:** 454 tests across the twelve mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -35,10 +35,10 @@ context, and show how much of a Codex plan is left.
 | Mod | Kind | What it does |
 |---|---|---|
 | [terraform-guard](mods/terraform-guard) | Guard | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
-| [aws-guard](mods/aws-guard) | Guard | Denies AWS CLI calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, and hands the command to the user to run. |
+| [aws-guard](mods/aws-guard) | Guard | Denies AWS CLI and AWS Tools for PowerShell calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, and hands the command to the user to run. |
 | [tf-lint](mods/tf-lint) | Guard and linter | Denies edits that write an AWS access key, a private key or an API token. Flags Terraform that hardcodes the `arn:aws:` partition or opens SSH/RDP to `0.0.0.0/0`. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
-| [tf-reminder](mods/tf-reminder) | Reminder | A status line while `terraform fmt` or `validate` has not run since the last `.tf` edit. |
+| [tf-reminder](mods/tf-reminder) | Reminder | A status line while `terraform fmt` or `validate` has not run since the last `.tf` edit, tracked per folder. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests, Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
@@ -118,18 +118,23 @@ when it would be worth lifting.
 - **Command-line guards** (terraform-guard, aws-guard, commit-identity-guard)
   read the command as written. They do not expand shell variables or
   aliases, and a script file that runs the command itself is not read.
-- **aws-guard** covers the AWS CLI. AWS Tools for PowerShell cmdlets and
-  SDK scripts are not checked.
+- **aws-guard** covers the AWS CLI and AWS Tools for PowerShell cmdlets called
+  by name. SDK scripts, and a cmdlet called through a variable, are not
+  checked.
 - **tf-lint** reads only the text being written, block by block. A rule split
   across edits or built from variables is missed; run Checkov on the whole
   file for that.
-- **commit-identity-guard** does not read a commit message given with `-F`,
-  and it identifies a repo by its `origin` remote.
-- **aws-context** shows the profile and region it saw in commands or the
-  environment. It does not read `~/.aws/config`, so a GovCloud profile shows
-  as GovCloud only once a `us-gov-` region appears.
-- **tf-reminder** keeps one reminder for the session, not one per folder: a
-  `terraform fmt` in one stack clears an edit made in another.
+- **commit-identity-guard** reads a message file given with `-F`, `--file` or
+  `--body-file`, but not a message piped in with `-F -`. It identifies a repo
+  by its `origin` remote.
+- **aws-context** takes a profile's region from the command, then the
+  environment, then the profile's section of `~/.aws/config` (or
+  `AWS_CONFIG_FILE`), which it rereads at most every 30 seconds. It does not
+  follow `source_profile` or SSO session settings.
+- **tf-reminder** follows a leading `cd`, `-chdir` and the paths given to
+  `fmt`. A `cd` later in the line, `pushd` or `Set-Location` do not move it,
+  and a target filled in at run time (`{}`, a variable) counts as the whole
+  folder tree it runs in.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
   `$TEMP/claude-output` until you delete that folder.
