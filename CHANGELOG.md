@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- aws-guard: also denies the AWS Tools for PowerShell cmdlets for the same
+  calls (`Remove-IAMRole`, Organizations changes, `Request-KMSKeyDeletion`);
+  `-WhatIf` passes.
+- aws-context: takes a profile's region from `~/.aws/config` when no command
+  or variable sets one, so a GovCloud profile is flagged before any region
+  appears.
+- commit-identity-guard: reads message files given with `-F`, `--file` or
+  `--body-file` for Claude trailers.
+- tf-reminder: tracks `fmt` and `validate` per folder, so a run in one stack
+  no longer clears an edit in another; the status line names the folders.
+
 ## 0.2.0 (2026-10-22)
 
 - output-trimmer: each save empties saved logs older than seven days, so full

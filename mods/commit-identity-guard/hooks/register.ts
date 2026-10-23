@@ -12,9 +12,13 @@ const AUTHOR = /--author[= ][^<\n]*<["']?([^\s"'<>]+@[^\s"'<>]+)/g
 const SET_EMAIL = /(?:(?:user|author|committer)\.email=|GIT_(?:AUTHOR|COMMITTER)_EMAIL=)["']?([^\s"'<>]+@[^\s"'<>]+)/g
 // The address in `git var GIT_AUTHOR_IDENT`'s "Name <address> time zone".
 const IDENT_EMAIL = /<([^<>]*)>/
-// shortcut: the repo is the session's folder unless git's global options name one (`-C <dir>`), the command starts with `cd <dir>`, or `gh` is given `-R <owner>/<repo>`; a message read from a file (-F) is not inspected, upgrade to a commit-msg hook in the repos if that gets used.
+// shortcut: the repo is the session's folder unless git's global options name one (`-C <dir>`), the command starts with `cd <dir>`, or `gh` is given `-R <owner>/<repo>`; a message piped in (-F -) is not inspected, upgrade to a commit-msg hook in the repos if that gets used.
 const GIT_DIR = /\s-C\s+(?:"([^"]*)"|'([^']*)'|(\S+))/g
 const CD = /(?:^|&&|;)\s*cd\s+["']?([^"';&|\n]+?)["']?\s*(?:&&|;|\n)/
+// A message or body read from a file: git commit -F/--file, gh pr --body-file/-F.
+// -F also takes its value attached: -Fmsg.txt.
+const MESSAGE_FILE = /\s(?:-F(?:\s+|=)?|--file(?:\s+|=)|--body-file(?:\s+|=))(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/g
+const ABSOLUTE = /^([a-zA-Z]:)?[\\/]/
 
 export const register: Register = on => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
@@ -54,7 +58,16 @@ export const register: Register = on => {
       return next(e)
     }
 
-    if (TRAILER.test(e.command)) {
+    // A message file is read where git and gh look for it: the cd and each -C in turn, an absolute one resetting the path.
+    const base = dirs.filter((_, i) => i % 2 === 1).reduce((path, dir) => (ABSOLUTE.test(dir) || path === '' ? dir : `${path}/${dir}`), '')
+    const files = [...e.command.matchAll(MESSAGE_FILE)]
+      .map(([, a, b, c]) => (a ?? b ?? c ?? '').replace(/^\/([a-zA-Z])\//, '$1:/'))
+      .filter(file => file !== '' && file !== '-')
+      .map(file => (ABSOLUTE.test(file) || base === '' ? file : `${base}/${file}`))
+    // An unreadable file passes: git or gh will fail on it themselves.
+    const messages = await Promise.all(files.map(file => $.fs.read(file).then(String, () => '')))
+
+    if (TRAILER.test(e.command) || messages.some(message => TRAILER.test(message))) {
       return { deny: `${$.plugin.name}: no Claude trailers in ${owner} repos. Remove the Co-Authored-By / Generated with Claude Code line and retry.` }
     }
 

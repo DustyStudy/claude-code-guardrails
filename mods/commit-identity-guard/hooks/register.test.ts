@@ -1,3 +1,4 @@
+import type { EngineInterface, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 const COVERED = 'https://github.com/example-org/widgets.git'
@@ -158,4 +159,63 @@ test('an owner name that is not a GitHub name is ignored, not read as a pattern'
   await $.tool.call({ tool: 'Bash', command: `git commit -m "x\n\n${TRAILER}"` })
 
   expect(hasRun).toBe(true)
+})
+
+// A covered repo with a noreply identity, its message files served from `files`; returns whether the command ran and the files read.
+const withFiles = async ($: EngineInterface, on: On, command: string, files: Record<string, string>) => {
+  mock.env(on, { COMMIT_GUARD_OWNERS: 'example-org' })
+  const read: string[] = []
+  let hasRun = false
+  on('process.run', ($, e) => ({
+    value: {
+      exitCode: 0,
+      stdout: e.argv.includes('remote') ? `${COVERED}\n` : `Jane Doe <${NOREPLY}> 1792700000 +0000\n`,
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  on('fs.read', (_, e) => {
+    // The file name, as the host resolves a path its own way on each platform.
+    const path = e.path.replace(/\\/g, '/')
+    const name = Object.keys(files).find(one => path.endsWith(one))
+    read.push(path)
+    if (name === undefined) {
+      throw new Error('ENOENT')
+    }
+
+    return { value: files[name] }
+  })
+  on('tool.call', { tool: ['Bash'] }, () => {
+    hasRun = true
+
+    return { result: { stdout: '', stderr: '', interrupted: false } }
+  })
+  const ran = JSON.stringify(await $.tool.call({ tool: 'Bash', command }))
+
+  return { hasRun, ran, read }
+}
+
+for (const command of ['git commit -F msg.txt', 'git commit -Fmsg.txt', 'gh pr create --title t -Fmsg.txt','git commit --file=msg.txt', 'git commit --file "msg.txt"', 'gh pr create --title t --body-file msg.txt', 'gh pr edit 3 -F msg.txt']) {
+  test(`denies a Claude trailer read from a file: ${command}`, async ($, on) => {
+    const { hasRun, ran } = await withFiles($, on, command, { 'msg.txt': `feat: x\n\n${TRAILER}\n` })
+    expect(hasRun).toBe(false)
+    expect(TRAILERS.test(ran)).toBe(true)
+  })
+}
+
+test('runs a clean message file, and one it cannot read', async ($, on) => {
+  expect((await withFiles($, on, 'git commit -F msg.txt && git commit -F gone.txt', { 'msg.txt': 'feat: x\n' })).hasRun).toBe(true)
+})
+
+test('reads a message file from the folder the command names', async ($, on) => {
+  const { hasRun, read } = await withFiles($, on, 'cd /c/repos/widgets && git commit -F .git/msg.txt', { 'widgets/.git/msg.txt': TRAILER })
+  expect(hasRun).toBe(false)
+  expect(read.some(path => path.endsWith('repos/widgets/.git/msg.txt'))).toBe(true)
+})
+
+test('a message piped in is not read', async ($, on) => {
+  const { hasRun, read } = await withFiles($, on, 'printf "x" | git commit -F -', {})
+  expect(hasRun).toBe(true)
+  expect(read).toEqual([])
 })

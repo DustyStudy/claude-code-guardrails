@@ -1,7 +1,7 @@
 {
   "name": "tf-reminder",
-  "version": "0.2.0",
-  "description": "Status line reminder when .tf files were edited and terraform fmt or validate has not run since",
+  "version": "0.3.0",
+  "description": "Status line reminder when .tf files were edited and terraform fmt or validate has not run in that folder since",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"
