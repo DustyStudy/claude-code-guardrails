@@ -13,6 +13,61 @@ const MANAGEMENT_PORTS = [22, 3389]
 const port = (body: string, name: string) =>
   Number(new RegExp(`\\b${name}\\s*=\\s*"?(-?\\d+)`).exec(body)?.[1] ?? Number.NaN)
 
+// The body of each block whose header matches, with its nested blocks and maps emptied so a setting is read at the block's own level; a block the text cuts off is skipped.
+const bodiesOf = (text: string, header: RegExp) =>
+  [...text.matchAll(new RegExp(`${header.source}\\s*\\{`, 'g'))].flatMap(match => {
+    const start = (match.index ?? 0) + match[0].length
+    let depth = 1
+
+    for (let i = start; i < text.length; i += 1) {
+      depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0
+
+      if (depth === 0) {
+        let body = text.slice(start, i)
+
+        while (/\{[^{}]*[^{}\s][^{}]*\}/.test(body)) {
+          body = body.replace(/\{[^{}]*\}/g, '{}')
+        }
+
+        return [body]
+      }
+    }
+
+    return []
+  })
+
+// The NIST rules for KMS keys and GovCloud providers, read from whole resource and provider blocks.
+const keyAndProviderFindings = (source: string): string[] => {
+  // A brace inside a string ("closing }") is text, not a block.
+  const text = source.replace(/"(?:\\.|[^"\\])*"/g, quoted => quoted.replace(/[{}]/g, ''))
+  const found: string[] = []
+
+  for (const body of bodiesOf(text, /resource\s+"aws_kms_key"\s+"[^"]*"/)) {
+    const spec = /\b(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body)?.[2] ?? 'SYMMETRIC_DEFAULT'
+    const window = /\bdeletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body)
+
+    // Only symmetric encryption keys rotate.
+    if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(body)) {
+      found.push('creates a KMS key without enable_key_rotation = true')
+    }
+
+    // A window from a variable passes: its value is not in the text.
+    const days = window?.[1] === undefined ? undefined : Number(window[1])
+
+    if (window === null || (days !== undefined && (days < 7 || days > 30))) {
+      found.push('creates a KMS key without a deletion_window_in_days of 7 to 30')
+    }
+  }
+
+  for (const body of bodiesOf(text, /provider\s+"aws"/)) {
+    if (/\bregion\s*=\s*"us-gov-/.test(body) && !/\buse_fips_endpoint\s*=\s*true\b/.test(body)) {
+      found.push('configures a GovCloud provider without use_fips_endpoint = true')
+    }
+  }
+
+  return found
+}
+
 // shortcut: reads only the text being written, block by innermost braces; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
 const findings = (source: string): string[] => {
   const text = source
@@ -20,7 +75,7 @@ const findings = (source: string): string[] => {
     .map(line => line.replace(/(^|\s)(#|\/\/).*$/, ''))
     .join('\n')
     .replace(/\$\{[^}]*\}/g, '')
-  const found: string[] = []
+  const found = keyAndProviderFindings(text)
 
   if (/arn:aws(-us-gov|-cn)?:/.test(text)) {
     found.push(
