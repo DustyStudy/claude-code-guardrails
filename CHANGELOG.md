@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-10-24)
 
+- model-guard (new): starts every subagent on the model named in
+  `MODEL_GUARD_SUBAGENT_MODEL`, and denies Codex runs that leave out the flags
+  in `MODEL_GUARD_CODEX_ARGS`.
+- tf-lint: flags a KMS key without `enable_key_rotation = true` or a
+  `deletion_window_in_days` of 7 to 30, and a GovCloud provider without
+  `use_fips_endpoint = true`.
 - aws-guard: also denies the AWS Tools for PowerShell cmdlets for the same
   calls (`Remove-IAMRole`, Organizations changes, `Request-KMSKeyDeletion`);
   `-WhatIf` passes.

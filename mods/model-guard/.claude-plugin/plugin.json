@@ -1,0 +1,10 @@
+{
+  "name": "model-guard",
+  "version": "0.1.0",
+  "description": "Starts every subagent on the model you name, and denies Codex runs that leave out the flags you require",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}
