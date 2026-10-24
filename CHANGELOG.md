@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- taint-guard (new): once a session reads untrusted content (WebFetch,
+  WebSearch, an untrusted MCP tool, a `curl` or `Invoke-WebRequest`), denies
+  network tools, `git push`, `gh` and AWS writes, `terraform apply`, package
+  publishes, untrusted MCP tools and WebFetch with a query string until the
+  user types `/taint-clear`. `TAINT_GUARD_TRUSTED` names trusted MCP tools.
+
 ## 0.3.0 (2026-10-24)
 
 - model-guard (new): starts every subagent on the model named in
