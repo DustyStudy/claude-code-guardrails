@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- gh-ci-status: also lists open Dependabot pull requests on repositories you
+  own, so you can review and merge them from the band.
+
 ## 0.5.0 (2026-10-24)
 
 - destructive-guard (new): denies recursive deletes outside the project or

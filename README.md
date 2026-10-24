@@ -46,7 +46,7 @@ much of a Codex plan is left.
 | [tf-reminder](mods/tf-reminder) | Reminder | A status line while `terraform fmt` or `validate` has not run since the last `.tf` edit, tracked per folder. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
-| [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests, Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
+| [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests and Dependabot's on your repositories, Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | A status line after each turn: a merged branch still checked out, merged branches to delete, saved plan files left behind. |
 | [clean-view](mods/clean-view) | Display | Hides tool calls and shows the agent's plan as a checklist with progress. |
@@ -176,7 +176,8 @@ when it would be worth lifting.
   clean.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
   something runs `git fetch --prune`.
-- **gh-ci-status** lists the 20 most recently updated open pull requests. A
+- **gh-ci-status** lists the 20 most recently updated open pull requests of
+  yours and 20 of Dependabot's (on repositories you own, not an org's). A
   failing log over 4 MiB is cut by the host before the tail is taken; the
   `checks` tool says so when it happens.
 

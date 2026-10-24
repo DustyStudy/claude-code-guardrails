@@ -11,13 +11,18 @@ const ON_BUTTON = 'inverseText'
 // Lines of a failing log the model reads: the error is almost always at the end.
 const LOG_LINES = 60
 const LINE_CHARS = 300
-// shortcut: the 20 most recently updated open pull requests, paginate if more are ever open at once.
-const QUERY = `{ viewer { pullRequests(first: 20, states: OPEN, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes {
-  number url isDraft headRefOid headRefName baseRefName mergeStateStatus repository { nameWithOwner }
+// The person's own pull requests, and Dependabot's on the repositories the person owns.
+// shortcut: the 20 most recently updated of each, paginate if more are ever open at once.
+const QUERY = `{
+  mine: search(type: ISSUE, first: 20, query: "is:pr is:open author:@me sort:updated-desc") { ...prs }
+  bots: search(type: ISSUE, first: 20, query: "is:pr is:open author:app/dependabot user:@me archived:false sort:updated-desc") { ...prs }
+}
+fragment prs on SearchResultItemConnection { nodes { ... on PullRequest {
+  number url isDraft updatedAt headRefOid headRefName baseRefName mergeStateStatus repository { nameWithOwner }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
     ... on CheckRun { name conclusion detailsUrl } ... on StatusContext { context state targetUrl }
   } } } } } }
-} } } }`
+} } }`
 const ACTIONS_JOB = /\/actions\/runs\/\d+\/job\/(\d+)/
 const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE']
 
@@ -69,7 +74,10 @@ const refresh = async ($: EngineInterface): Promise<Pr[] | null> => {
       return null
     }
 
-    const list: Pr[] = JSON.parse(got.stdout).data.viewer.pullRequests.nodes.map(toPr)
+    const { mine, bots } = JSON.parse(got.stdout).data
+    const list: Pr[] = [...mine.nodes, ...bots.nodes]
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+      .map(toPr)
     await update($, prs, () => list)
 
     return list

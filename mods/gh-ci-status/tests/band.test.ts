@@ -45,8 +45,11 @@ const node = (number: number, state: string | null, failing?: string) => ({
   },
 })
 
+// The search answer: the person's own pull requests, then Dependabot's.
+const answer = (mine: unknown[], bots: unknown[] = []) => JSON.stringify({ data: { mine: { nodes: mine }, bots: { nodes: bots } } })
+
 // Answers gh beneath the mod: the query from `open`, and records every merge asked for.
-const gh = (on: On, open: { nodes: unknown[] }, whileMerging?: () => Promise<void>) => {
+const gh = (on: On, open: { nodes: unknown[]; bots?: unknown[] }, whileMerging?: () => Promise<void>) => {
   const merges: string[][] = []
   on('process.run', async (_, e) => {
     if (e.argv[1] === 'run') {
@@ -66,7 +69,7 @@ const gh = (on: On, open: { nodes: unknown[] }, whileMerging?: () => Promise<voi
     return {
       value: {
         ...OK,
-        stdout: JSON.stringify({ data: { viewer: { pullRequests: { nodes: open.nodes } } } }),
+        stdout: answer(open.nodes, open.bots),
       },
     }
   })
@@ -101,6 +104,18 @@ test('only a pull request whose checks passed gets Merge, and it takes two press
   expect(merges).toEqual([
     ['gh', 'pr', 'merge', 'https://github.com/o/r/pull/1', '--squash', '--delete-branch', '--match-head-commit', 'sha1'],
   ])
+})
+
+test("Dependabot's pull requests join the person's own, most recently updated first", async ($, on) => {
+  const clock = mock.clock(on)
+  const at = (n: number, updatedAt: string) => ({ ...node(n, 'SUCCESS'), updatedAt })
+  on('tool.call', () => ({ result: '' }))
+  gh(on, { nodes: [at(1, '2026-10-20T00:00:00Z'), at(3, '2026-10-10T00:00:00Z')], bots: [at(2, '2026-10-15T00:00:00Z')] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const got = await $.tool.call({ tool: 'mcp__gh-ci-status__checks' as const, tool_use_id: 't1' })
+  expect(String(got.result).match(/#\d/g)).toEqual(['#1', '#2', '#3'])
 })
 
 test('while gh merges, the row says merging and has no button', async ($, on) => {
@@ -279,7 +294,7 @@ test('the checks tool says when gh failed, and does not pass an old list off as 
   let isOnline = true
   on('process.run', async () => ({
     value: isOnline
-      ? { ...OK, stdout: JSON.stringify({ data: { viewer: { pullRequests: { nodes: [{ ...node(1, 'SUCCESS'), mergeStateStatus: 'BEHIND' }] } } } }) }
+      ? { ...OK, stdout: answer([{ ...node(1, 'SUCCESS'), mergeStateStatus: 'BEHIND' }]) }
       : { ...OK, exitCode: 1, stdout: '' },
   }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
