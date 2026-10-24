@@ -21,7 +21,7 @@ much of a Codex plan is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 492 tests across the thirteen mods, run in CI against a pinned
+- **Result:** 505 tests across the thirteen mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 

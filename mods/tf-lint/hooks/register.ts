@@ -37,12 +37,14 @@ const bodiesOf = (text: string, header: RegExp) =>
   })
 
 // The NIST rules for KMS keys and GovCloud providers, read from whole resource and provider blocks.
-const keyAndProviderFindings = (text: string): string[] => {
+const keyAndProviderFindings = (source: string): string[] => {
+  // A brace inside a string ("closing }") is text, not a block.
+  const text = source.replace(/"(?:\\.|[^"\\])*"/g, quoted => quoted.replace(/[{}]/g, ''))
   const found: string[] = []
 
   for (const body of bodiesOf(text, /resource\s+"aws_kms_key"\s+"[^"]*"/)) {
     const spec = /\b(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body)?.[2] ?? 'SYMMETRIC_DEFAULT'
-    const window = /\bdeletion_window_in_days\s*=\s*(\S+)/.exec(body)?.[1]
+    const window = /\bdeletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body)
 
     // Only symmetric encryption keys rotate.
     if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(body)) {
@@ -50,7 +52,9 @@ const keyAndProviderFindings = (text: string): string[] => {
     }
 
     // A window from a variable passes: its value is not in the text.
-    if (window === undefined || (/^\d+$/.test(window) && (Number(window) < 7 || Number(window) > 30))) {
+    const days = window?.[1] === undefined ? undefined : Number(window[1])
+
+    if (window === null || (days !== undefined && (days < 7 || days > 30))) {
       found.push('creates a KMS key without a deletion_window_in_days of 7 to 30')
     }
   }

@@ -17,19 +17,31 @@ const required = (setting: string) => {
   )
 }
 
-// A flag with its value as one word (--model=x) or two (--model x).
-const has = (args: readonly string[], { flag, value }: { flag: string; value?: string }) =>
-  value === undefined
-    ? args.includes(flag)
-    : args.some((arg, i) => arg === `${flag}=${value}` || (arg === flag && args[i + 1] === value))
+// A flag with its value as one word (--model=x) or two (--model x). The last one given wins, and words after -- are the prompt.
+const has = (all: readonly string[], { flag, value }: { flag: string; value?: string }) => {
+  const args = all.includes('--') ? all.slice(0, all.indexOf('--')) : all
 
-// The argument lists of the Codex runs in a command: the ones that spend the plan, not --version or login.
+  if (value === undefined) {
+    return args.includes(flag)
+  }
+
+  const given = args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] : arg.startsWith(`${flag}=`) ? [arg.slice(flag.length + 1)] : []))
+
+  return given.at(-1) === value
+}
+
+// The argument lists of the Codex runs in a command: the ones that spend the plan, not --version, --help or login.
 // shortcut: a CLI run is any call with an exec, e or review word, so a flag whose value is one of those counts too; parse the CLI's options if that bites.
 const codexRuns = (command: string) => [
-  ...invocations(command, NODE)
-    .filter(args => /codex-companion\.mjs$/i.test(args[0] ?? '') && COMPANION_RUN.test(args[1] ?? ''))
-    .map(args => args.slice(2)),
-  ...invocations(command, CODEX).filter(args => args.some(arg => CLI_RUN.test(arg))),
+  ...invocations(command, NODE).flatMap(all => {
+    // Node's own flags (--no-warnings) come before the script.
+    const args = all.slice(all.findIndex(arg => !arg.startsWith('-')))
+
+    return /codex-companion\.mjs$/i.test(args[0] ?? '') && COMPANION_RUN.test(args[1] ?? '') ? [args.slice(2)] : []
+  }),
+  ...invocations(command, CODEX).filter(
+    args => args.some(arg => CLI_RUN.test(arg)) && !args.some(arg => /^(-h|--help|help)$/.test(arg)),
+  ),
 ]
 
 export const register: Register = on => {
