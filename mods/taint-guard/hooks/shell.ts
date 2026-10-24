@@ -1,4 +1,4 @@
-// Finds where a command line really runs a given program. The same file sits in terraform-guard, aws-guard, tf-reminder, model-guard and taint-guard: keep the copies identical.
+// Finds where a command line really runs a given program. The same file sits in terraform-guard, aws-guard, tf-reminder, model-guard, taint-guard and destructive-guard: keep the copies identical.
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
