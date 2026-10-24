@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-24)
 
 - destructive-guard (new): denies recursive deletes outside the project or
   a temp folder, `git push --force`, `reset --hard`, `clean -f`,
