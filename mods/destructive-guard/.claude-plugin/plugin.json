@@ -1,0 +1,10 @@
+{
+  "name": "destructive-guard",
+  "version": "0.5.0",
+  "description": "Denies commands that destroy work for good: recursive deletes outside the project, git push --force, reset --hard, clean -f, DROP and TRUNCATE, disk formats",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

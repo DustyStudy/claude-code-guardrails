@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- destructive-guard (new): denies recursive deletes outside the project or
+  a temp folder, `git push --force`, `reset --hard`, `clean -f`,
+  `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE`
+  sent to a database client, and disk formats.
+
 ## 0.4.0 (2026-10-24)
 
 - taint-guard (new): once a session reads untrusted content (WebFetch,

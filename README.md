@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Fourteen mods that stop risky commands
-before they run, lock outbound commands once a session has read untrusted
+when it works on AWS and Terraform. Fifteen mods that stop risky commands
+before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
 context, keep subagents and Codex on the models you choose, and show how
@@ -22,7 +22,7 @@ much of a Codex plan is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 611 tests across the fourteen mods, run in CI against a pinned
+- **Result:** 809 tests across the fifteen mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -38,6 +38,7 @@ much of a Codex plan is left.
 |---|---|---|
 | [terraform-guard](mods/terraform-guard) | Guard | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
 | [aws-guard](mods/aws-guard) | Guard | Denies AWS CLI and AWS Tools for PowerShell calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, and hands the command to the user to run. |
+| [destructive-guard](mods/destructive-guard) | Guard | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [taint-guard](mods/taint-guard) | Guard | Once the session reads untrusted content (a web page, a search, an MCP result, a `curl`), denies what could send data out or publish: network tools, `git push`, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, WebFetch with a query string. You lift the lock with `/taint-clear`. |
 | [tf-lint](mods/tf-lint) | Guard and linter | Denies edits that write an AWS access key, a private key or an API token. Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
@@ -154,6 +155,14 @@ when it would be worth lifting.
   companion script or the `codex` CLI by name, and reads the flags as
   written: `-m` does not stand in for `--model`, and a flag set only in
   Codex's config does not count.
+- **destructive-guard** reads a delete's targets as written: a path built
+  at run time, `find -delete`, a script file, or SQL in a file given with
+  `-f` is not read. The project is the session's folder unless that is home
+  or a drive root, where only temp folders count. A `cd` in the command adds
+  its folder as a base for relative targets, in any order. Paths are compared
+  as written, so a symlink or junction inside the project that points out of
+  it is followed by `rm` but not by the guard. Cloud deletes
+  (`aws s3 rb`, `terminate-instances`) are left to aws-guard and IAM.
 - **taint-guard** cuts the blast radius of a prompt injection; it does not
   detect one. It knows the sinks by program name, so a script that opens a
   socket itself (`python -c`, `node -e`) passes, as does a file read with
