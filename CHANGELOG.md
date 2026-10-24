@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-24)
 
 - taint-guard (new): once a session reads untrusted content (WebFetch,
   WebSearch, an untrusted MCP tool, a `curl` or `Invoke-WebRequest`), denies
