@@ -23,6 +23,6 @@ declare module 'claude-code' {
   }
 
   interface PluginState {
-    'gh-ci-status': { prs: Pr[]; armed: string; merging: string; rebasing: string }
+    'gh-ci-status': { prs: Pr[]; armed: string; merging: string; rebasing: string; merged: string[] }
   }
 }
