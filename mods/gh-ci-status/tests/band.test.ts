@@ -140,6 +140,22 @@ test('while gh merges, the row says merging and has no button', async ($, on) =>
   expect(seen[1]).toBe('no button')
 })
 
+test('after a merge the row leaves, though search still lists it as open', async ($, on) => {
+  const clock = mock.clock(on)
+  const key = 'merge-https://github.com/o/r/pull/1'
+  gh(on, { nodes: [node(1, 'SUCCESS'), node(2, 'SUCCESS')] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  await ui.press({ key })
+  await ui.press({ key })
+  await clock.advance(30_000)
+
+  expect(await ui.find({ key })).toBeUndefined()
+  expect(await ui.find({ key: 'merge-https://github.com/o/r/pull/2' })).toBeDefined()
+})
+
 test('a pull request behind its base gets Rebase instead of Merge, and one press rebases', async ($, on) => {
   const clock = mock.clock(on)
   const open = { nodes: [{ ...node(1, 'SUCCESS'), mergeStateStatus: 'BEHIND' }] }

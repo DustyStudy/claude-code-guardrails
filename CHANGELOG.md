@@ -4,6 +4,8 @@
 
 - gh-ci-status: also lists open Dependabot pull requests on repositories you
   own, so you can review and merge them from the band.
+- gh-ci-status: a pull request you merge from the band leaves it right away,
+  instead of coming back with Merge while GitHub search still lists it as open.
 
 ## 0.5.0 (2026-10-24)
 

@@ -33,6 +33,8 @@ const armed = atom({ plugin: 'gh-ci-status', key: 'armed' } as const, '')
 const merging = atom({ plugin: 'gh-ci-status', key: 'merging' } as const, '')
 // The url of the pull request being rebased right now.
 const rebasing = atom({ plugin: 'gh-ci-status', key: 'rebasing' } as const, '')
+// Urls this session merged: search still lists a pull request as open for a while after its merge.
+const merged = atom({ plugin: 'gh-ci-status', key: 'merged' } as const, [])
 
 const toPr = (node: any): Pr => {
   const rollup = node.commits?.nodes?.[0]?.commit?.statusCheckRollup
@@ -75,7 +77,9 @@ const refresh = async ($: EngineInterface): Promise<Pr[] | null> => {
     }
 
     const { mine, bots } = JSON.parse(got.stdout).data
+    const gone = await read($, merged)
     const list: Pr[] = [...mine.nodes, ...bots.nodes]
+      .filter(node => !gone.includes(node.url))
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
       .map(toPr)
     await update($, prs, () => list)
@@ -172,6 +176,10 @@ const press = async ($: EngineInterface, pr: Pr) => {
       ['gh', 'pr', 'merge', pr.url, '--squash', '--delete-branch', '--match-head-commit', pr.sha],
       { timeoutMs: 60_000 },
     )
+    if (done.exitCode === 0) {
+      // A merged pull request never reopens, so the url stays out for the session.
+      await update($, merged, gone => [...gone, pr.url])
+    }
     $.ui.toast(
       done.exitCode === 0
         ? `Merged ${pr.repo} #${pr.number}`
