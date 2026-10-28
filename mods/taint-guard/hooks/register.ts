@@ -86,11 +86,35 @@ const hasQuery = (url: unknown) => {
 }
 
 // The trusted prefixes: the repo's own, and the ones TAINT_GUARD_TRUSTED adds, comma-separated.
-const trusted = (setting: string | undefined) => [...TRUSTED, ...(setting ?? '').split(',').map(one => one.trim()).filter(Boolean)]
+const trusted = (setting: string | undefined) => [...TRUSTED, ...list(setting)]
+
+const list = (setting: string | undefined) => (setting ?? '').split(',').map(one => one.trim()).filter(Boolean)
+
+// Lowercase, punycode, no trailing dot: how a URL and a setting both name a host.
+const hostOf = (url: string) => new URL(url).hostname.replace(/\.$/, '')
+
+// A host TAINT_GUARD_TRUSTED_HOSTS names, or a subdomain of one. WebFetch follows a redirect only to the same host with or without www., so both must be trusted.
+const isTrustedUrl = (url: unknown, setting: string | undefined) => {
+  try {
+    const host = hostOf(String(url))
+    const hosts = list(setting).flatMap(one => {
+      try {
+        return [hostOf(`http://${one}`)]
+      } catch {
+        return []
+      }
+    })
+    const isListed = (name: string) => hosts.some(one => name === one || name.endsWith(`.${one}`))
+
+    return isListed(host) && isListed(host.startsWith('www.') ? host.slice(4) : `www.${host}`)
+  } catch {
+    return false
+  }
+}
 
 // What a tool call reads from outside, as the deny will name it; undefined when it reads nothing untrusted.
 const reads = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean): string | undefined => {
-  if (e.tool === 'WebFetch') {
+  if (e.tool === 'WebFetch' && !isTrusted) {
     return `WebFetch ${String(e.url)}`
   }
 
@@ -145,7 +169,10 @@ export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
   on('tool.call', async ($, e, next) => {
     const call = e as unknown as { tool: string; [key: string]: unknown }
-    const isTrusted = trusted(await $.env.get('TAINT_GUARD_TRUSTED')).some(prefix => call.tool.startsWith(prefix))
+    const isTrusted =
+      call.tool === 'WebFetch'
+        ? isTrustedUrl(call.url, await $.env.get('TAINT_GUARD_TRUSTED_HOSTS'))
+        : trusted(await $.env.get('TAINT_GUARD_TRUSTED')).some(prefix => call.tool.startsWith(prefix))
     const tainted = await read($, source)
     const out = tainted === '' ? undefined : sends(call, isTrusted)
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- taint-guard: `TAINT_GUARD_TRUSTED_HOSTS` names hosts (and their
+  subdomains) whose pages a WebFetch reads without tainting the session.
+- gh-ci-status: shows "needs approval", "changes requested", "awaiting
+  deployment: <job>" for a job held by an environment's protection rules, and
+  "blocked by a branch rule"; Merge appears only when nothing holds it.
+
 - gh-ci-status: also lists open Dependabot pull requests on repositories you
   own, so you can review and merge them from the band.
 - gh-ci-status: a pull request you merge from the band leaves it right away,
