@@ -187,6 +187,31 @@ test('TAINT_GUARD_TRUSTED adds trusted MCP tools', async ($, on) => {
   expect(calls.length).toBe(3)
 })
 
+test('TAINT_GUARD_TRUSTED_HOSTS: a fetch from a listed host or its subdomain does not taint; a lookalike does', async ($, on) => {
+  const calls = engine(on, { TAINT_GUARD_TRUSTED_HOSTS: 'amazon.com, Docs.Example.com' })
+
+  await $.tool.call({ tool: 'WebFetch', url: 'https://docs.aws.amazon.com/iam/', prompt: 'p' } as never)
+  await $.tool.call({ tool: 'WebFetch', url: 'https://docs.example.com/guide', prompt: 'p' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git push' })
+  await $.tool.call({ tool: 'WebFetch', url: 'https://amazon.com.attacker.example/', prompt: 'p' } as never)
+  const ran = await $.tool.call({ tool: 'Bash', command: 'git push' })
+
+  expect(calls).toEqual(['WebFetch', 'WebFetch', 'Bash', 'WebFetch'])
+  expect(JSON.stringify(ran)).toContain('amazon.com.attacker.example')
+})
+
+test('TAINT_GUARD_TRUSTED_HOSTS: a www. host alone does not count, as WebFetch follows its redirect to the bare host', async ($, on) => {
+  const calls = engine(on, { TAINT_GUARD_TRUSTED_HOSTS: 'www.example.com, bücher.example' })
+
+  await $.tool.call({ tool: 'WebFetch', url: 'https://xn--bcher-kva.example./page', prompt: 'p' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git push' })
+  await $.tool.call({ tool: 'WebFetch', url: 'https://www.example.com/', prompt: 'p' } as never)
+  const ran = await $.tool.call({ tool: 'Bash', command: 'git push' })
+
+  expect(calls).toEqual(['WebFetch', 'Bash', 'WebFetch'])
+  expect(JSON.stringify(ran)).toContain('www.example.com')
+})
+
 test('the person clears the lock; the model cannot', async ($, on) => {
   const calls = engine(on)
   on('command.run', () => ({ text: '' }))

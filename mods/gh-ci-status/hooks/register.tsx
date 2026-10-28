@@ -18,9 +18,9 @@ const QUERY = `{
   bots: search(type: ISSUE, first: 20, query: "is:pr is:open author:app/dependabot user:@me archived:false sort:updated-desc") { ...prs }
 }
 fragment prs on SearchResultItemConnection { nodes { ... on PullRequest {
-  number url isDraft updatedAt headRefOid headRefName baseRefName mergeStateStatus repository { nameWithOwner }
+  number url isDraft updatedAt headRefOid headRefName baseRefName mergeStateStatus reviewDecision repository { nameWithOwner }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
-    ... on CheckRun { name conclusion detailsUrl } ... on StatusContext { context state targetUrl }
+    ... on CheckRun { name status conclusion detailsUrl } ... on StatusContext { context state targetUrl }
   } } } } } }
 } } }`
 const ACTIONS_JOB = /\/actions\/runs\/\d+\/job\/(\d+)/
@@ -43,6 +43,8 @@ const toPr = (node: any): Pr => {
   const bad = failed[0]
   // The log comes from the first failed Actions job, which an external status before it must not hide.
   const job = failed.find((one: any) => ACTIONS_JOB.test(one.detailsUrl ?? '')) ?? bad
+  // A job held by an environment's protection rules: required reviewers, a wait timer, a custom rule.
+  const held = (rollup?.contexts?.nodes ?? []).find((one: any) => one.status === 'WAITING')
 
   return {
     url: node.url,
@@ -63,6 +65,14 @@ const toPr = (node: any): Pr => {
     failingUrl: job?.detailsUrl ?? job?.targetUrl ?? '',
     behind: node.mergeStateStatus === 'BEHIND',
     conflicts: node.mergeStateStatus === 'DIRTY',
+    review:
+      node.reviewDecision === 'CHANGES_REQUESTED'
+        ? 'changes requested'
+        : node.reviewDecision === 'REVIEW_REQUIRED'
+          ? 'needs approval'
+          : '',
+    waiting: held?.name ?? '',
+    blocked: node.mergeStateStatus === 'BLOCKED',
     branch: `${node.headRefName} onto ${node.baseRefName}`,
   }
 }
@@ -90,24 +100,39 @@ const refresh = async ($: EngineInterface): Promise<Pr[] | null> => {
   }
 }
 
-// What the band says: the one thing that blocks the merge, else the checks.
+// What the band says: the one thing that blocks the merge, else the checks. Only 'checks passed' gets Merge.
 const statusOf = (pr: Pr) =>
   pr.conflicts && !pr.isDraft
     ? 'merge conflicts'
     : pr.behind && !pr.isDraft
       ? 'needs rebase'
-      : pr.checks === 'passed'
-        ? 'checks passed'
-        : pr.checks === 'pending'
-          ? 'checks running'
-          : pr.checks === 'failed'
-            ? `failed: ${pr.failing || 'checks'}`
-            : 'no checks'
+      : pr.review === 'changes requested'
+        ? 'changes requested'
+        : pr.checks === 'failed'
+          ? `failed: ${pr.failing || 'checks'}`
+          : pr.waiting !== ''
+            ? `awaiting deployment: ${pr.waiting}`
+            : pr.checks === 'pending'
+              ? 'checks running'
+              : pr.review === 'needs approval'
+                ? 'needs approval'
+                : pr.blocked && pr.checks === 'passed'
+                  ? 'blocked by a branch rule'
+                  : pr.checks === 'passed'
+                    ? 'checks passed'
+                    : 'no checks'
 
 // What the model reads: the checks always, and what else stands in the way of a merge.
 const summaryOf = (pr: Pr) => {
   const checks = pr.checks === 'failed' ? `failed (${pr.failing || 'checks'})` : pr.checks === 'pending' ? 'running' : pr.checks
-  const blocks = [pr.isDraft && 'draft', pr.conflicts && 'merge conflicts', pr.behind && 'needs rebase'].filter(Boolean)
+  const blocks = [
+    pr.isDraft && 'draft',
+    pr.conflicts && 'merge conflicts',
+    pr.behind && 'needs rebase',
+    pr.review,
+    pr.waiting && `${pr.waiting} held by a deployment protection rule`,
+    pr.blocked && !pr.review && pr.checks === 'passed' && 'blocked by a branch rule',
+  ].filter(Boolean)
 
   return `${pr.repo} #${pr.number}: checks ${checks}${blocks.length > 0 ? `; ${blocks.join(', ')}` : ''} ${pr.url}`
 }
@@ -166,8 +191,8 @@ const press = async ($: EngineInterface, pr: Pr) => {
       return
     }
 
-    if (now.behind) {
-      $.ui.toast(`${pr.repo} #${pr.number} not merged: it needs a rebase first`)
+    if (statusOf(now) !== 'checks passed') {
+      $.ui.toast(`${pr.repo} #${pr.number} not merged: ${statusOf(now)}`)
 
       return
     }
@@ -331,6 +356,10 @@ export const register: Register = on => {
                 ? (['×', 'error'] as const)
               : status === 'needs rebase'
                 ? (['↻', 'warning'] as const)
+              : status === 'changes requested'
+                ? (['×', 'error'] as const)
+              : status.startsWith('awaiting') || status === 'needs approval' || status.startsWith('blocked')
+                ? (['◌', 'warning'] as const)
               : pr.checks === 'passed'
                 ? (['✓', 'success'] as const)
                 : pr.checks === 'pending'
@@ -359,7 +388,7 @@ export const register: Register = on => {
                 {!isBusy && pr.conflicts && !pr.isDraft && button(`resolve-${pr.url}`, 'Resolve', 'error', () => resolve($, pr))}
                 {!isBusy && pr.behind && !pr.isDraft && button(`rebase-${pr.url}`, 'Rebase', 'warning', () => rebase($, pr))}
                 {!isBusy && !pr.conflicts && !pr.behind && pr.checks === 'failed' && button(`fix-${pr.url}`, 'Fix', 'error', () => fix($, pr))}
-                {!isBusy && !pr.behind && !pr.conflicts && pr.checks === 'passed' && !pr.isDraft &&
+                {!isBusy && status === 'checks passed' && !pr.isDraft &&
                   button(
                     `merge-${pr.url}`,
                     isConfirming ? 'Press again to merge' : 'Merge',

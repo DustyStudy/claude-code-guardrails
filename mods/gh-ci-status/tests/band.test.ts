@@ -194,8 +194,46 @@ test('a pull request with conflicts gets Resolve, which drafts the ask and runs 
   expect(drafts[0]).toContain('https://github.com/o/r/pull/1 (feat onto main)')
 })
 
+// What GitHub says of a pull request whose checks passed, and what its row says instead of Merge.
+const HELD = {
+  'needs approval': { reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED' },
+  'changes requested': { reviewDecision: 'CHANGES_REQUESTED', mergeStateStatus: 'BLOCKED' },
+  'blocked by a branch rule': { reviewDecision: 'APPROVED', mergeStateStatus: 'BLOCKED' },
+}
+
+for (const [status, fields] of Object.entries(HELD)) {
+  test(`a pull request that GitHub holds says ${status}, with no Merge, here and in the checks tool`, async ($, on) => {
+    const clock = mock.clock(on)
+    on('tool.call', () => ({ result: '' }))
+    gh(on, { nodes: [{ ...node(1, 'SUCCESS'), ...fields }] })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.advance(30_000)
+
+    const ui = await $.ui.mount(BAND)
+    expect(await ui.find({ key: 'merge-https://github.com/o/r/pull/1' })).toBeUndefined()
+    expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain(status)
+    expect(String((await $.tool.call({ tool: 'mcp__gh-ci-status__checks' as const, tool_use_id: 't1' })).result)).toContain(status)
+  })
+}
+
+test('a job held by a deployment protection rule says so instead of checks running', async ($, on) => {
+  const clock = mock.clock(on)
+  const pr = node(1, 'PENDING')
+  pr.commits.nodes[0]!.commit.statusCheckRollup = {
+    state: 'PENDING',
+    contexts: { nodes: [{ name: 'deploy', status: 'WAITING', conclusion: null, detailsUrl: JOB } as never] },
+  }
+  gh(on, { nodes: [pr] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('awaiting deployment: deploy')
+})
+
 // What the pull request turned into between the first press and the second.
 const CHANGED = {
+  'it now needs approval': [{ ...node(1, 'SUCCESS'), reviewDecision: 'REVIEW_REQUIRED', mergeStateStatus: 'BLOCKED' }],
   'its checks went back to running': [node(1, 'PENDING')],
   'its head moved to a commit nobody pressed Merge on': [{ ...node(1, 'SUCCESS'), headRefOid: 'other' }],
   'it became a draft': [{ ...node(1, 'SUCCESS'), isDraft: true }],

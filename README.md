@@ -46,7 +46,7 @@ much of a Codex plan is left.
 | [tf-reminder](mods/tf-reminder) | Reminder | A status line while `terraform fmt` or `validate` has not run since the last `.tf` edit, tracked per folder. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
-| [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests and Dependabot's on your repositories, Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
+| [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests and Dependabot's on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule), Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | A status line after each turn: a merged branch still checked out, merged branches to delete, saved plan files left behind. |
 | [clean-view](mods/clean-view) | Display | Hides tool calls and shows the agent's plan as a checklist with progress. |
@@ -94,6 +94,7 @@ theirs is set.
 | `MODEL_GUARD_SUBAGENT_MODEL` | model-guard | The model every subagent starts on, such as `opus`. A fork always runs on the session's own model. |
 | `MODEL_GUARD_CODEX_ARGS` | model-guard | The flags every Codex run must pass, written as you pass them, such as `--model gpt-6-astra --effort high`. |
 | `TAINT_GUARD_TRUSTED` | taint-guard | Comma-separated MCP tool name prefixes whose results are trusted and which stay usable in a tainted session, such as `mcp__plugin_context7_,mcp__plugin_semgrep_guardian__`. clean-view's and tf-plan-summary's tools are always trusted; gh-ci-status's is not, since an Actions log carries a pull request's text. |
+| `TAINT_GUARD_TRUSTED_HOSTS` | taint-guard | Comma-separated hosts whose pages a WebFetch reads without tainting the session, such as `docs.aws.amazon.com,learn.microsoft.com`. A host also covers its subdomains. Name the bare domain, not a `www.` host: WebFetch follows a redirect between the two, so a `www.` host alone is never trusted. Name only sites whose pages no outsider writes: not `github.com` or a forum. WebSearch and `curl` still taint. |
 | `CODEX_METER_WARN_PERCENT` | codex-meter | The used percent of a Codex window that brings the warning, 1 to 100. Default `80`. |
 | `CODEX_METER_SESSION_RUNS` | codex-meter | The Codex runs one session should make, such as `2` for one review and one confirm. Past it the line says so. Not set, no run limit. |
 

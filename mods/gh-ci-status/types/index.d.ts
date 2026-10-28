@@ -13,6 +13,12 @@ export type Pr = {
   behind: boolean
   // It conflicts with its base: someone has to resolve that before it can rebase or merge.
   conflicts: boolean
+  // What reviewers decided: '' when no review is required or it is approved.
+  review: '' | 'needs approval' | 'changes requested'
+  // A job held for an environment's required reviewers, by name; '' when none.
+  waiting: string
+  // A branch rule holds the merge (a review, a required check, an unresolved conversation).
+  blocked: boolean
   branch: string
 }
 
