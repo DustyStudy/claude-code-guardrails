@@ -11,11 +11,12 @@ const ON_BUTTON = 'inverseText'
 // Lines of a failing log the model reads: the error is almost always at the end.
 const LOG_LINES = 60
 const LINE_CHARS = 300
-// The person's own pull requests, and Dependabot's on the repositories the person owns.
+// The person's own pull requests, and Dependabot's and the workflows' (release-please) on the repositories the person owns.
 // shortcut: the 20 most recently updated of each, paginate if more are ever open at once.
 const QUERY = `{
   mine: search(type: ISSUE, first: 20, query: "is:pr is:open author:@me sort:updated-desc") { ...prs }
   bots: search(type: ISSUE, first: 20, query: "is:pr is:open author:app/dependabot user:@me archived:false sort:updated-desc") { ...prs }
+  actions: search(type: ISSUE, first: 20, query: "is:pr is:open author:app/github-actions user:@me archived:false sort:updated-desc") { ...prs }
 }
 fragment prs on SearchResultItemConnection { nodes { ... on PullRequest {
   number url isDraft updatedAt headRefOid headRefName baseRefName mergeStateStatus reviewDecision repository { nameWithOwner }
@@ -74,6 +75,27 @@ const toPr = (node: any): Pr => {
     waiting: held?.name ?? '',
     blocked: node.mergeStateStatus === 'BLOCKED',
     branch: `${node.headRefName} onto ${node.baseRefName}`,
+    runs: [],
+  }
+}
+
+// The workflow runs on the head commit that wait for someone to approve them; they never reach the checks rollup.
+// shortcut: one call per pull request with no checks on each poll, cache by sha if the rate limit ever bites.
+const waitingRuns = async ($: EngineInterface, pr: Pr): Promise<number[]> => {
+  if (pr.checks !== 'none') {
+    return []
+  }
+
+  try {
+    const got = await $.process.run([
+      'gh', 'api', `repos/${pr.repo}/actions/runs?head_sha=${pr.sha}&status=action_required`,
+      // A fork's pull request can carry the same commit: only runs on the repository's own branches count.
+      '--jq', `[.workflow_runs[] | select(.event == "pull_request" and .head_repository.full_name == "${pr.repo}") | .id]`,
+    ])
+
+    return got.exitCode === 0 ? JSON.parse(got.stdout) : []
+  } catch {
+    return []
   }
 }
 
@@ -86,12 +108,13 @@ const refresh = async ($: EngineInterface): Promise<Pr[] | null> => {
       return null
     }
 
-    const { mine, bots } = JSON.parse(got.stdout).data
+    const { mine, bots, actions } = JSON.parse(got.stdout).data
     const gone = await read($, merged)
-    const list: Pr[] = [...mine.nodes, ...bots.nodes]
+    const list: Pr[] = [...mine.nodes, ...bots.nodes, ...(actions?.nodes ?? [])]
       .filter(node => !gone.includes(node.url))
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
       .map(toPr)
+    await Promise.all(list.map(async pr => (pr.runs = await waitingRuns($, pr))))
     await update($, prs, () => list)
 
     return list
@@ -120,7 +143,9 @@ const statusOf = (pr: Pr) =>
                   ? 'blocked by a branch rule'
                   : pr.checks === 'passed'
                     ? 'checks passed'
-                    : 'no checks'
+                    : pr.runs.length > 0
+                      ? 'workflows need approval'
+                      : 'no checks'
 
 // What the model reads: the checks always, and what else stands in the way of a merge.
 const summaryOf = (pr: Pr) => {
@@ -132,6 +157,7 @@ const summaryOf = (pr: Pr) => {
     pr.review,
     pr.waiting && `${pr.waiting} held by a deployment protection rule`,
     pr.blocked && !pr.review && pr.checks === 'passed' && 'blocked by a branch rule',
+    pr.runs.length > 0 && `${pr.runs.length} workflow runs need the user's approval`,
   ].filter(Boolean)
 
   return `${pr.repo} #${pr.number}: checks ${checks}${blocks.length > 0 ? `; ${blocks.join(', ')}` : ''} ${pr.url}`
@@ -237,6 +263,49 @@ const rebase = async ($: EngineInterface, pr: Pr) => {
   } finally {
     await refresh($)
     await update($, rebasing, () => '')
+  }
+}
+
+// Two presses, like Merge: approving lets the workflows run with the repository's secrets. A button only, never a tool,
+// so no text the model reads can approve a run.
+const approve = async ($: EngineInterface, pr: Pr) => {
+  const id = `approve:${idOf(pr)}`
+
+  if ((await read($, armed)) !== id) {
+    await update($, armed, () => id)
+
+    return
+  }
+
+  await update($, armed, () => '')
+
+  try {
+    // Look again: only runs still waiting on the commit that was pressed.
+    const now = (await refresh($))?.find(one => one.url === pr.url)
+
+    if (now?.sha !== pr.sha || now.runs.length === 0) {
+      $.ui.toast(`${pr.repo} #${pr.number}: no workflow runs wait for approval on the commit you pressed`)
+
+      return
+    }
+
+    const done = await Promise.all(
+      now.runs.map(run =>
+        $.process.run(['gh', 'api', '-X', 'POST', `repos/${pr.repo}/actions/runs/${run}/approve`, '--silent'], {
+          timeoutMs: 60_000,
+        }),
+      ),
+    )
+    const failed = done.filter(one => one.exitCode !== 0)
+    $.ui.toast(
+      failed.length === 0
+        ? `Approved ${done.length} workflow runs on ${pr.repo} #${pr.number}`
+        : `${pr.repo} #${pr.number}: ${failed.length} of ${done.length} runs not approved: ${failed[0]!.stderr.trim().split('\n').pop()}`,
+    )
+  } catch {
+    $.ui.toast(`${pr.repo} #${pr.number}: gh did not answer, check the pull request`)
+  } finally {
+    await refresh($)
   }
 }
 
@@ -358,7 +427,7 @@ export const register: Register = on => {
                 ? (['↻', 'warning'] as const)
               : status === 'changes requested'
                 ? (['×', 'error'] as const)
-              : status.startsWith('awaiting') || status === 'needs approval' || status.startsWith('blocked')
+              : status.startsWith('awaiting') || status === 'needs approval' || status === 'workflows need approval' || status.startsWith('blocked')
                 ? (['◌', 'warning'] as const)
               : pr.checks === 'passed'
                 ? (['✓', 'success'] as const)
@@ -388,6 +457,14 @@ export const register: Register = on => {
                 {!isBusy && pr.conflicts && !pr.isDraft && button(`resolve-${pr.url}`, 'Resolve', 'error', () => resolve($, pr))}
                 {!isBusy && pr.behind && !pr.isDraft && button(`rebase-${pr.url}`, 'Rebase', 'warning', () => rebase($, pr))}
                 {!isBusy && !pr.conflicts && !pr.behind && pr.checks === 'failed' && button(`fix-${pr.url}`, 'Fix', 'error', () => fix($, pr))}
+                {/* A review that is also required must not hide it: the runs never start otherwise. */}
+                {!isBusy && pr.runs.length > 0 && !pr.conflicts && !pr.behind &&
+                  button(
+                    `approve-${pr.url}`,
+                    waiting === `approve:${idOf(pr)}` ? 'Press again to approve' : 'Approve',
+                    'warning',
+                    () => approve($, pr),
+                  )}
                 {!isBusy && status === 'checks passed' && !pr.isDraft &&
                   button(
                     `merge-${pr.url}`,

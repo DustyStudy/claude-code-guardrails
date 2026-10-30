@@ -20,6 +20,8 @@ export type Pr = {
   // A branch rule holds the merge (a review, a required check, an unresolved conversation).
   blocked: boolean
   branch: string
+  // Workflow runs on the head commit held for approval (a pull request a workflow opened), by id.
+  runs: number[]
 }
 
 declare module 'claude-code' {
