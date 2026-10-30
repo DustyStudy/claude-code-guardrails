@@ -45,13 +45,29 @@ const node = (number: number, state: string | null, failing?: string) => ({
   },
 })
 
-// The search answer: the person's own pull requests, then Dependabot's.
-const answer = (mine: unknown[], bots: unknown[] = []) => JSON.stringify({ data: { mine: { nodes: mine }, bots: { nodes: bots } } })
+// The search answer: the person's own pull requests, then Dependabot's, then the workflows'.
+const answer = (mine: unknown[], bots: unknown[] = [], actions: unknown[] = []) =>
+  JSON.stringify({ data: { mine: { nodes: mine }, bots: { nodes: bots }, actions: { nodes: actions } } })
 
-// Answers gh beneath the mod: the query from `open`, and records every merge asked for.
-const gh = (on: On, open: { nodes: unknown[]; bots?: unknown[] }, whileMerging?: () => Promise<void>) => {
+type Open = { nodes: unknown[]; bots?: unknown[]; actions?: unknown[]; waiting?: Record<string, number[]>; lookups?: string[][] }
+
+// Answers gh beneath the mod: the query and the runs held for approval from `open`, and records every merge and approval asked for.
+const gh = (on: On, open: Open, whileMerging?: () => Promise<void>) => {
   const merges: string[][] = []
   on('process.run', async (_, e) => {
+    if (e.argv[1] === 'api' && e.argv[2] !== 'graphql') {
+      if (e.argv.includes('POST')) {
+        merges.push([...e.argv])
+
+        return { value: { ...OK, stdout: '' } }
+      }
+
+      open.lookups?.push([...e.argv])
+      const sha = String(e.argv[2]).match(/head_sha=(\w+)/)?.[1] ?? ''
+
+      return { value: { ...OK, stdout: JSON.stringify(open.waiting?.[sha] ?? []) } }
+    }
+
     if (e.argv[1] === 'run') {
       merges.push([...e.argv])
       const log = Array.from({ length: 80 }, (_, i) => `build\tRun tests\t2026-10-22T10:00:00.0000000Z line ${i + 1}`)
@@ -69,7 +85,7 @@ const gh = (on: On, open: { nodes: unknown[]; bots?: unknown[] }, whileMerging?:
     return {
       value: {
         ...OK,
-        stdout: answer(open.nodes, open.bots),
+        stdout: answer(open.nodes, open.bots, open.actions),
       },
     }
   })
@@ -230,6 +246,77 @@ test('a job held by a deployment protection rule says so instead of checks runni
   const ui = await $.ui.mount(BAND)
   expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('awaiting deployment: deploy')
 })
+
+test("a workflow's pull request with runs held for approval gets Approve, and two presses approve each run", async ($, on) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => ({ result: '' }))
+  const approvals = gh(on, { nodes: [], actions: [node(1, null)], waiting: { sha1: [11, 12] } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  const key = 'approve-https://github.com/o/r/pull/1'
+  expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('◌ workflows need approval')
+  expect(String((await $.tool.call({ tool: 'mcp__gh-ci-status__checks' as const, tool_use_id: 't1' })).result)).toContain(
+    "2 workflow runs need the user's approval",
+  )
+
+  await ui.press({ key })
+  expect(approvals).toEqual([])
+  await ui.press({ key })
+  expect(approvals).toEqual([
+    ['gh', 'api', '-X', 'POST', 'repos/o/r/actions/runs/11/approve', '--silent'],
+    ['gh', 'api', '-X', 'POST', 'repos/o/r/actions/runs/12/approve', '--silent'],
+  ])
+})
+
+test('a required review does not hide Approve, and the lookup keeps only runs on the repository itself', async ($, on) => {
+  const clock = mock.clock(on)
+  const lookups: string[][] = []
+  gh(on, { nodes: [], actions: [{ ...node(1, null), reviewDecision: 'REVIEW_REQUIRED' }], waiting: { sha1: [11] }, lookups })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('needs approval')
+  expect(await ui.find({ key: 'approve-https://github.com/o/r/pull/1' })).toBeDefined()
+  expect(lookups[0]?.at(-1)).toContain('.head_repository.full_name == "o/r"')
+})
+
+test('a pull request with no checks and no runs held says no checks, with no Approve', async ($, on) => {
+  const clock = mock.clock(on)
+  gh(on, { nodes: [node(1, null)] })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  expect(await ui.find({ key: 'approve-https://github.com/o/r/pull/1' })).toBeUndefined()
+  expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('no checks')
+})
+
+// What the workflow's pull request turned into between the first Approve and the second.
+const MOVED = {
+  'its head moved to a commit nobody pressed Approve on': { actions: [{ ...node(1, null), headRefOid: 'other' }], waiting: { other: [13] } },
+  'its runs were approved elsewhere': { actions: [node(1, null)], waiting: {} },
+}
+
+for (const [why, after] of Object.entries(MOVED)) {
+  test(`the second press does not approve when ${why}`, async ($, on) => {
+    const clock = mock.clock(on)
+    const open: Open = { nodes: [], actions: [node(1, null)], waiting: { sha1: [11] } }
+    const approvals = gh(on, open)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.advance(30_000)
+
+    const ui = await $.ui.mount(BAND)
+    const key = 'approve-https://github.com/o/r/pull/1'
+    await ui.press({ key })
+    Object.assign(open, after)
+    await ui.press({ key })
+
+    expect(approvals).toEqual([])
+  })
+}
 
 // What the pull request turned into between the first press and the second.
 const CHANGED = {

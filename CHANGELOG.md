@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- gh-ci-status: also lists pull requests a workflow opened (release-please)
+  on repositories you own. When their workflow runs wait for approval, the row
+  says "workflows need approval" and an Approve button approves them in two
+  presses. Approving is a button only, so the model cannot do it.
+
 ## 0.6.0 (2026-10-28)
 
 - taint-guard: `TAINT_GUARD_TRUSTED_HOSTS` names hosts (and their
