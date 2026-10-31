@@ -5,8 +5,6 @@ import { invocations } from './shell'
 
 // What tainted the session ('' while clean): held for the session, so a new session starts clean.
 const source = atom({ plugin: 'taint-guard', key: 'source' } as const, '')
-// Set by a clear, until the turn it ran in ends and the session is told to go on.
-const resume = atom({ plugin: 'taint-guard', key: 'resume' } as const, false)
 
 // The repo's own tools that return local data. gh-ci-status is not one: an Actions log carries a pull request's text.
 const TRUSTED = ['mcp__clean-view__', 'mcp__tf-plan-summary__']
@@ -179,22 +177,13 @@ export const register: Register = on => {
       return { text: 'Taint Guard: nothing to clear.' }
     }
 
-    // The person cleared it to let the blocked work go on: the session picks up where it stopped once this command's turn ends.
-    await update($, resume, () => true)
+    // The person cleared it to let the blocked work go on. The host refuses a submit from command.run, and a command typed at an
+    // idle prompt ends no model turn for turn.complete to follow, so a timer (its own dispatch) submits.
+    $.clock.after(100, () => {
+      void $.prompt.submit({ text: 'Taint Guard is cleared. Continue where you left off.' })
+    })
 
     return { text: `Taint Guard: cleared (it came from ${was}).` }
-  })
-
-  // A submit from command.run would wait on the turn the command holds, so it goes here.
-  on('turn.complete', async ($, e, next) => {
-    const done = await next(e)
-
-    if (await read($, resume)) {
-      await update($, resume, () => false)
-      void $.prompt.submit({ text: 'Taint Guard is cleared. Continue where you left off.' })
-    }
-
-    return done
   })
 
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.

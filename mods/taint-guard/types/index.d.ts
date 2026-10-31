@@ -3,6 +3,6 @@ export type Source = string
 
 declare module 'claude-code' {
   interface PluginState {
-    'taint-guard': { source: Source; resume: boolean }
+    'taint-guard': { source: Source }
   }
 }
