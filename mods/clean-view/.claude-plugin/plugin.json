@@ -1,7 +1,7 @@
 {
   "name": "clean-view",
-  "version": "0.2.0",
-  "description": "Hides tool calls and code; shows a checklist of the plan, the current step and what is left",
+  "version": "0.3.0",
+  "description": "Hides tool calls and code; shows the plan as a checklist, an orchestrated flow with tiered Opus workers, and a live agents pane",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"

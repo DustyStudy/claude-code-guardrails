@@ -49,7 +49,7 @@ much of a Codex plan is left.
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | A band with the checks of your open pull requests and Dependabot's on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule), Merge/Rebase/Fix buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | A status line after each turn: a merged branch still checked out, merged branches to delete, saved plan files left behind. |
-| [clean-view](mods/clean-view) | Display | Hides tool calls and shows the agent's plan as a checklist with progress. |
+| [clean-view](mods/clean-view) | Display | Hides tool calls and shows the agent's plan as a checklist with progress; `/clean-view:clean-flow` runs a task through tiered Opus workers with a live agents pane (`/clean-agents`). |
 | [codex-meter](mods/codex-meter) | Display and reminder | A status line with your Codex plan's 5-hour and weekly usage and when each resets, read from Codex's own session logs. Near a limit it marks the line, notifies you once, and tells the model after each Codex run. |
 
 Guards deny rather than ask: in auto mode an "ask" is settled by a
