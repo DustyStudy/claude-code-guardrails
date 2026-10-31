@@ -1,0 +1,11 @@
+{
+  "name": "usage-band",
+  "version": "0.1.0",
+  "description": "Claude and Codex plan usage left, with reset times, in a band above the prompt on Claude Code Desktop",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
