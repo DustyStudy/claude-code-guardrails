@@ -6,6 +6,11 @@
   on repositories you own. When their workflow runs wait for approval, the row
   says "workflows need approval" and an Approve button approves them in two
   presses. Approving is a button only, so the model cannot do it.
+- taint-guard: a `gh api` GET to GitHub runs in a tainted session; a method,
+  field or input flag, `--hostname`, a full URL, or `GH_HOST` still deny it.
+- taint-guard: `TAINT_GUARD_READ_SERVERS` names MCP servers whose read tools
+  (`search`, `get`, `list`, `read`, `query`) still taint the session but stay
+  usable once it is tainted.
 
 ## 0.6.0 (2026-10-28)
 
