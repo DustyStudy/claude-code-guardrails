@@ -3,9 +3,16 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ClaudeLimit, Window } from '../types'
 
-// The terminal already shows usage in statusline.js and codex-meter's status line; Desktop draws neither, so the band is Desktop's alone.
+// The terminal already shows Claude's usage in statusline.js; Desktop draws no status line, so the band is Desktop's alone.
 const SURFACES = ['desktop']
-// Codex files its session logs under sessions/YYYY/MM/DD by the local day the session started (as codex-meter reads them).
+// The runs that spend the Codex plan: the companion's review, adversarial-review and task, and the CLI's own exec and review.
+// shortcut: matched on the command text, so `echo "codex exec"` counts too; harmless for a warning, parse it if that skews it.
+// The CLI may be a quoted path (& "C:/tools/codex.cmd" exec) and take flags first (codex -m gpt-6-astra exec).
+const SPENDS =
+  /codex-companion\.mjs["']?\s+(review|adversarial-review|task)\b|(^|[\s;&|(])["']?([^\s"';&|]*[\\/])?codex(\.exe|\.cmd|\.ps1)?["']?(\s+-{1,2}[\w-]+(=\S+|\s+(?!(exec|e|review)\b)[^\s-]\S*)?)*\s+(exec|e|review)\b/i
+// A Codex window with this share left or less, the band's red, warns the model and the user.
+const WARN_LEFT = 20
+// Codex files its session logs under sessions/YYYY/MM/DD by the local day the session started.
 const DAYS_SEARCHED = 7
 const LOGS_READ = 3
 // $.fs.read rejects past 4 MiB.
@@ -58,6 +65,10 @@ export const until = (at: number | undefined, now: number) => {
       ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
       : `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`
 }
+
+/** One sentence per Codex window nearly out. */
+export const warnings = (bars: Bar[], now: number) =>
+  bars.filter(b => b.left <= WARN_LEFT).map(b => `Codex ${b.span} limit has ${b.left}% left, resets in ${until(b.resetsAt, now)}.`)
 
 const dayOf = (ms: number, back = 0) => {
   const day = new Date(ms)
@@ -124,6 +135,33 @@ const refresh = async ($: EngineInterface) => {
   await update($, codex, () => windows)
 }
 
+// Rereads Codex's usage after a run, notifies once per window nearly out, and returns a sentence per such window for the model.
+const warn = async ($: EngineInterface): Promise<string[]> => {
+  const windows = await codexUsage($).catch(() => [] as Window[])
+  await update($, codex, () => windows)
+  const now = await $.clock.now()
+  const low = windows.filter(w => codexBars([w], now)[0]!.left <= WARN_LEFT)
+
+  if (low.length === 0) {
+    return []
+  }
+
+  const warned = ((await $.store.get('warned')) ?? []) as string[]
+  const due = low.filter(w => !warned.includes(`${w.window_minutes}:${w.resets_at}`))
+
+  if (due.length > 0) {
+    // Only live windows are kept, so the list stays at a few entries.
+    const live = warned.filter(k => Number(k.split(':')[1]) * 1000 > now)
+    await $.store.set('warned', [...live, ...due.map(w => `${w.window_minutes}:${w.resets_at}`)])
+    // Not awaited: a slow notification must not hold up the tool result.
+    void $.ui.notify(warnings(codexBars(due, now), now).join(' '), { title: 'Codex usage' }).catch(() => undefined)
+  }
+
+  return warnings(codexBars(low, now), now)
+}
+
+let warning: Promise<unknown> = Promise.resolve()
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const done = await next(e)
@@ -138,6 +176,22 @@ export const register: Register = on => {
     await update($, claude, () => e.rateLimits)
 
     return next(e)
+  })
+
+  // After a Codex run, the model is told when a Codex window is nearly out, so the next review can wait; the user is notified once per window.
+  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+    const done = await next(e)
+
+    if (done.deny !== undefined || !SPENDS.test(e.command)) {
+      return done
+    }
+
+    // One warning at a time, so runs that end together notify once; a failure here never costs the tool its result.
+    const warned = warning.then(() => warn($))
+    warning = warned.catch(() => undefined)
+    const notes = await warned.catch(() => [] as string[])
+
+    return notes.length === 0 ? done : { ...done, context: [...(done.context ?? []), `${$.plugin.name}: ${notes.join(' ')}`] }
   })
 
   // A Codex run ends inside a turn, so its log is read again once the turn is done.
