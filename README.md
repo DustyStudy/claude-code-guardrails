@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Sixteen mods that stop risky commands
+when it works on AWS and Terraform. Fourteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -22,7 +22,7 @@ much of your Claude and Codex plans is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 845 tests across the sixteen mods, run in CI against a pinned
+- **Result:** 892 tests across the fourteen mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
