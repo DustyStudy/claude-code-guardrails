@@ -168,13 +168,16 @@ export const register: Register = on => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const done = await next(e)
 
-    if (done.deny !== undefined || !SPENDS.test(e.command)) {
+    // Every run in the command: codex exec a; codex exec b is two.
+    const ran = e.command.match(new RegExp(SPENDS.source, 'gi'))?.length ?? 0
+
+    if (done.deny !== undefined || ran === 0) {
       return done
     }
 
     // One count at a time, so runs that end together are each counted.
     const shown = counting.then(async () => {
-      await update($, session, runs => runs + 1)
+      await update($, session, runs => runs + ran)
 
       return show($)
     })

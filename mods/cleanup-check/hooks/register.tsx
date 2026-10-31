@@ -24,16 +24,23 @@ export type Repo = {
 
 /** What is left to clean up, one short item each. */
 export const leftovers = ({ current, base, merged, gone, pushed, elsewhere, untracked }: Repo): string[] => {
-  // Finished work: its remote went with the merge, or it was pushed and is merged; a branch just made from the base is neither.
-  const isDone = (branch: string) => gone.includes(branch) || (merged.includes(branch) && pushed.includes(branch))
-  const others = [...new Set([...merged, ...gone])].filter(
-    one => one !== base && one !== current && !elsewhere.includes(one) && isDone(one),
-  )
+  // Merged: pushed, and in the base's history; a branch just made from the base is not.
+  const isMerged = (branch: string) => merged.includes(branch) && pushed.includes(branch)
+  // Its remote is gone: a squash merge with --delete-branch leaves that, but so does deleting it unmerged, so it is not called merged.
+  const isGone = (branch: string) => gone.includes(branch) && !isMerged(branch)
+  const isOther = (one: string) => one !== base && one !== current && !elsewhere.includes(one)
+  const done = merged.filter(one => isOther(one) && isMerged(one))
+  const orphans = gone.filter(one => isOther(one) && isGone(one))
   const plans = untracked.filter(one => PLAN_FILE.test(one))
+  const isCurrent = current !== '' && current !== base
 
   return [
-    ...(current !== '' && current !== base && isDone(current) ? [`${current} is merged: switch to ${base} and pull`] : []),
-    ...(others.length > 0 ? [`${others.length} merged branch${others.length > 1 ? 'es' : ''} to delete: ${others.join(', ')}`] : []),
+    ...(isCurrent && isMerged(current) ? [`${current} is merged: switch to ${base} and pull`] : []),
+    ...(isCurrent && isGone(current) ? [`${current}'s remote branch is gone: if it was merged, switch to ${base} and pull`] : []),
+    ...(done.length > 0 ? [`${done.length} merged branch${done.length > 1 ? 'es' : ''} to delete: ${done.join(', ')}`] : []),
+    ...(orphans.length > 0
+      ? [`${orphans.length} branch${orphans.length > 1 ? 'es' : ''} whose remote is gone, delete if merged: ${orphans.join(', ')}`]
+      : []),
     ...(plans.length > 0 ? [`${plans.length} saved plan${plans.length > 1 ? 's' : ''}: ${plans.join(', ')}`] : []),
   ]
 }

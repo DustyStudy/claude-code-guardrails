@@ -42,6 +42,11 @@ const CASES: readonly (readonly [string, string, string, string, true | RegExp, 
   ['a personal address after a quoted -c value', COVERED, 'me@example.com', 'git -c user.name="Jane Doe" commit -m "fix: y"', ADDRESS],
   ['a command that is not a commit', COVERED, 'me@example.com', 'git log --grep commit', true],
   ['a commit through a quoted path to git', COVERED, 'me@example.com', '& "C:/tools/git.exe" commit -m fix', ADDRESS],
+  ['two commits in one command', COVERED, NOREPLY, 'git -C a commit -m x && git -C b commit -m y', /one git commit per command/],
+  ['a commit reusing a personal author by -C', COVERED, NOREPLY, 'git commit -C abc123', ADDRESS, { author: 'me@example.com' }],
+  ['a commit reusing a Claude-trailer message by --reuse-message', COVERED, NOREPLY, 'git commit --reuse-message=abc123', /Claude trailer/, { message: `feat: x\n\n${TRAILER}` }],
+  ['a commit reusing a clean noreply commit', COVERED, NOREPLY, 'git commit -C abc123', true],
+  ['a message that names git commit', COVERED, NOREPLY, 'git commit -m "fix: guard git commit identity"', true],
 ]
 
 for (const [name, remote, email, command, expected, head] of CASES) {
@@ -205,8 +210,12 @@ for (const command of ['git commit -F msg.txt', 'git commit -Fmsg.txt', 'gh pr c
   })
 }
 
-test('runs a clean message file, and one it cannot read', async ($, on) => {
-  expect((await withFiles($, on, 'git commit -F msg.txt && git commit -F gone.txt', { 'msg.txt': 'feat: x\n' })).hasRun).toBe(true)
+test('runs a clean message file', async ($, on) => {
+  expect((await withFiles($, on, 'git commit -F msg.txt', { 'msg.txt': 'feat: x\n' })).hasRun).toBe(true)
+})
+
+test('runs a message file it cannot read', async ($, on) => {
+  expect((await withFiles($, on, 'git commit -F gone.txt', {})).hasRun).toBe(true)
 })
 
 test('reads a message file from the folder the command names', async ($, on) => {

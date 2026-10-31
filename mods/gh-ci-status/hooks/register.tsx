@@ -79,10 +79,11 @@ const toPr = (node: any): Pr => {
   }
 }
 
-// The workflow runs on the head commit that wait for someone to approve them; they never reach the checks rollup.
-// shortcut: one call per pull request with no checks on each poll, cache by sha if the rate limit ever bites.
+// The workflow runs on the head commit that wait for someone to approve them; they never reach the checks rollup,
+// so one workflow can pass while another waits.
+// shortcut: one call per pull request with no checks or passed checks on each poll, cache by sha if the rate limit ever bites.
 const waitingRuns = async ($: EngineInterface, pr: Pr): Promise<number[]> => {
-  if (pr.checks !== 'none') {
+  if (pr.checks !== 'none' && pr.checks !== 'passed') {
     return []
   }
 
@@ -139,12 +140,12 @@ const statusOf = (pr: Pr) =>
               ? 'checks running'
               : pr.review === 'needs approval'
                 ? 'needs approval'
-                : pr.blocked && pr.checks === 'passed'
-                  ? 'blocked by a branch rule'
-                  : pr.checks === 'passed'
-                    ? 'checks passed'
-                    : pr.runs.length > 0
-                      ? 'workflows need approval'
+                : pr.runs.length > 0
+                  ? 'workflows need approval'
+                  : pr.blocked && pr.checks === 'passed'
+                    ? 'blocked by a branch rule'
+                    : pr.checks === 'passed'
+                      ? 'checks passed'
                       : 'no checks'
 
 // What the model reads: the checks always, and what else stands in the way of a merge.

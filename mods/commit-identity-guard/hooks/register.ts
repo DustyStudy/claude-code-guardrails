@@ -19,6 +19,8 @@ const CD = /(?:^|&&|;)\s*cd\s+["']?([^"';&|\n]+?)["']?\s*(?:&&|;|\n)/
 // -F also takes its value attached: -Fmsg.txt.
 const MESSAGE_FILE = /\s(?:-F(?:\s+|=)?|--file(?:\s+|=)|--body-file(?:\s+|=))(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/g
 const ABSOLUTE = /^([a-zA-Z]:)?[\\/]/
+// After `commit`, -C or --reuse-message names a commit whose message and author are reused.
+const REUSE = /\s(?:-C|--reuse-message)(?:\s+|=)?(?:"([^"]+)"|'([^']+)'|([^\s;&|"']+))/
 
 export const register: Register = on => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
@@ -27,6 +29,14 @@ export const register: Register = on => {
 
     if (!isCommit && !PR.test(e.command)) {
       return next(e)
+    }
+
+    // The checks below read the first commit's repo and settings, so a second commit (another -C, cd or identity) would pass unread.
+    // Counted with quoted text emptied, so a message that names `git commit` is not a second one.
+    const unquoted = e.command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""')
+
+    if ((unquoted.match(new RegExp(COMMIT.source, 'g')) ?? []).length > 1) {
+      return { deny: `${$.plugin.name}: run one git commit per command, so each one's repo and identity are checked.` }
     }
 
     // The owners whose repos the rules cover, comma-separated; none set, nothing is checked.
@@ -88,10 +98,16 @@ export const register: Register = on => {
         : await Promise.all(['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT'].map(async ident => IDENT_EMAIL.exec(await git('var', ident))?.[1]))
       const after = e.command.slice((commit?.index ?? 0) + (commit?.[0].length ?? 0))
       // An amend keeps the old author unless told otherwise, and with --no-edit the old message too.
-      const amended = /\s--amend\b/.test(after) ? (await git('log', '-1', '--format=%ae%n%B')).split('\n') : undefined
-      const keptAuthor = amended !== undefined && !/\s--(reset-author|author)\b/.test(after) ? [amended[0] ?? ''] : []
+      // -C <commit> (--reuse-message) takes another commit's author and message the same way, with no editor.
+      const reused = REUSE.exec(after)
+      // A -C names the source even on an amend (--amend -C HEAD~1).
+      const ref = reused?.[1] ?? reused?.[2] ?? reused?.[3] ?? (/\s--amend\b/.test(after) ? 'HEAD' : undefined)
+      const amended = ref === undefined ? undefined : (await git('log', '-1', '--format=%ae%n%B', ref)).split('\n')
+      // A ref git cannot read gives no author: git will fail on it itself.
+      const keptAuthor = amended?.[0] && !/\s--(reset-author|author)\b/.test(after) ? [amended[0]] : []
+      const keepsMessage = /\s--no-edit\b/.test(after) || reused !== null
 
-      if (amended !== undefined && /\s--no-edit\b/.test(after) && TRAILER.test(amended.slice(1).join('\n'))) {
+      if (amended !== undefined && keepsMessage && TRAILER.test(amended.slice(1).join('\n'))) {
         return { deny: `${$.plugin.name}: the commit being amended carries a Claude trailer. Amend with a message without it.` }
       }
 
