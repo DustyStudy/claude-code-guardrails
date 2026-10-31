@@ -7,7 +7,7 @@ import { invocations } from './shell'
 const source = atom({ plugin: 'taint-guard', key: 'source' } as const, '')
 
 // The repo's own tools that return local data. gh-ci-status is not one: an Actions log carries a pull request's text.
-const TRUSTED = ['mcp__clean-view__', 'mcp__tf-plan-summary__']
+const TRUSTED = ['mcp__tf-plan-summary__']
 
 const bin = (names: string) => new RegExp(String.raw`^(.*[\\/])?(${names})(\.exe|\.cmd|\.ps1)?$`, 'i')
 

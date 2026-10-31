@@ -63,3 +63,54 @@ test('the band shows Claude and Codex usage on desktop only', async ($, on) => {
   expect(await terminal.find({ type: 'Text', text: 'Claude' })).toBeUndefined()
   await terminal.unmount()
 })
+
+// Serves today's Codex log with a 5-hour window `used` percent used, keeps the store in memory and records notifications.
+const codexHost = (on: Parameters<Parameters<typeof test>[1]>[1], used: number) => {
+  const store: Record<string, unknown> = {}
+  const notified: string[] = []
+  const log = JSON.stringify({
+    payload: { rate_limits: { primary: { used_percent: used, window_minutes: 300, resets_at: (NOW + 2 * HOUR) / 1000 } } },
+  })
+  mock.clock(on, { now: NOW })
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  on('env.get', (_, e) => ({ value: e.name === 'CODEX_HOME' ? '/codex' : undefined }))
+  on('fs.list', (_, e) => ({
+    value: e.path.replace(/\\/g, '/').endsWith('sessions/2026/10/31') ? [{ name: 'rollout-a.jsonl', kind: 'file', size: 100, mtimeMs: NOW, isLink: false }] : [],
+  }))
+  on('fs.read', () => ({ value: log }))
+  on('store.get', (_, e) => ({ value: store[e.key] }))
+  on('store.set', (_, e) => {
+    store[e.key] = e.value
+
+    return { value: undefined }
+  })
+  on('ui.notify', (_, e) => {
+    notified.push(e.text)
+
+    return { value: { isSent: true, channel: 'terminal_bell' } }
+  })
+
+  return notified
+}
+
+test('a Codex run with a window nearly out tells the model each time and notifies the user once', async ($, on) => {
+  const notified = codexHost(on, 85)
+  const first = await $.tool.call({ tool: 'PowerShell', command: 'Get-Content brief.md | codex exec --model gpt-6-astra -' })
+  const second = await $.tool.call({ tool: 'Bash', command: 'node scripts/codex-companion.mjs task' })
+
+  expect(first.context?.[0]).toBe('usage-band: Codex 5h limit has 15% left, resets in 2h 0m.')
+  expect(second.context).toHaveLength(1)
+  expect(notified).toEqual(['Codex 5h limit has 15% left, resets in 2h 0m.'])
+})
+
+test('a Codex run with room left, or a command that is not a run, adds nothing', async ($, on) => {
+  codexHost(on, 50)
+  expect((await $.tool.call({ tool: 'Bash', command: 'codex exec -' })).context).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Bash', command: 'codex --version' })).context).toBeUndefined()
+})
+
+test('Codex runs that end together notify once', async ($, on) => {
+  const notified = codexHost(on, 90)
+  await Promise.all([1, 2, 3].map(() => $.tool.call({ tool: 'Bash', command: 'codex exec -' })))
+  expect(notified).toHaveLength(1)
+})

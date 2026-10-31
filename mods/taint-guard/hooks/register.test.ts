@@ -198,10 +198,10 @@ test('an untrusted MCP tool taints, and is denied once tainted; trusted ones run
 
   await $.tool.call({ tool: 'mcp__gmail__read', id: '1' } as never)
   const send = await $.tool.call({ tool: 'mcp__gmail__send', to: 'x' } as never)
-  await $.tool.call({ tool: 'mcp__clean-view__plan', steps: [] } as never)
+  await $.tool.call({ tool: 'mcp__tf-plan-summary__plan_summary', plan: 'tfplan' } as never)
 
   expect(JSON.stringify(send)).toContain('mcp__gmail__send is blocked')
-  expect(calls).toEqual(['mcp__gmail__read', 'mcp__clean-view__plan'])
+  expect(calls).toEqual(['mcp__gmail__read', 'mcp__tf-plan-summary__plan_summary'])
 })
 
 test('TAINT_GUARD_READ_SERVERS: reads on a listed server taint but run again once tainted; its writes and reads elsewhere are denied', async ($, on) => {

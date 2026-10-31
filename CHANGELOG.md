@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Removed clean-view, tf-reminder and codex-meter, which duplicated what
+  Claude Code Desktop already shows or drew only in the CLI. Desktop has its
+  own task list and hides tool calls; tf-reminder's status line never showed
+  there. Drop them from `CLAUDE_CODE_PLUGIN_DIRS`, and remove
+  `CODEX_METER_WARN_PERCENT` and `CODEX_METER_SESSION_RUNS` if set.
+- usage-band: takes over codex-meter's warning. After a Codex run with a
+  window at 20% left or less, it tells the model so the next review can wait,
+  and notifies you once per window.
+- README: lists jev-guard.
 - terraform-guard: denies `-auto-approve` passed through `TF_CLI_ARGS`,
   `TF_CLI_ARGS_apply` or `TF_CLI_ARGS_destroy`, set in the command or
   inherited.
