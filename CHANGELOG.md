@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- taint-guard: `/taint-clear` continues the session where it stopped, so you
+  no longer type "continue" after clearing the lock.
 - gh-ci-status: also lists pull requests a workflow opened (release-please)
   on repositories you own. When their workflow runs wait for approval, the row
   says "workflows need approval" and an Approve button approves them in two
