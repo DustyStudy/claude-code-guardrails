@@ -25,13 +25,21 @@ const FETCH = bin('curl|wget|Invoke-WebRequest|iwr|Invoke-RestMethod|irm')
 const AWS_VALUE = /^--(profile|region|output|query|color|ca-bundle|cli-read-timeout|cli-connect-timeout|cli-binary-format)$/
 const AWS_READ = /^((get|list|describe|head|lookup|filter|batch-get)-[\w-]*|scan|query|ls|tail|wait|help)$/
 const GH_READ = /^(view|list|status|checks|diff)$/
+// A gh api call stays a GET to GitHub without these: a field, input or method in any short-flag cluster (-iXDELETE), another host, or a full URL.
+const GH_API_WRITE = /^(--method|--field|--raw-field|--input|--hostname)(=|$)|^-[^-]*[fFX]|:\/\//
+// Settings that point gh at another host, wherever the line sets them (VAR=x prefix, env, $env:).
+const GH_OTHER_HOST = /GH_HOST|ENTERPRISE_TOKEN/i
+
+// An MCP tool whose action only reads, by name: on a server TAINT_GUARD_READ_SERVERS names, it still taints but is not a sink.
+// shortcut: by tool name, and the call's arguments still reach that server; list only servers whose operator is not an attacker (first-party connectors, the app's own tools).
+const MCP_READ = /__(search|get|list|read|query)(_[\w-]*)?$/
 
 // A publishing word anywhere among the bare words, so global options and nested commands (docker image push, yarn npm publish) do not hide it.
 const anyOf = (verbs: RegExp) => (args: readonly string[]) => words(args).some(word => verbs.test(word))
 
 // shortcut: the CLIs below by name; a script that opens a socket itself (python -c, node -e) passes, upgrade with an OS sandbox's network allowlist.
 // Each sink: its name in a deny, the program, and whether a call of it sends data out or changes something beyond this machine.
-const SINKS: readonly (readonly [string, RegExp, (args: readonly string[]) => boolean])[] = [
+const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], command: string) => boolean])[] = [
   [
     'a network tool',
     bin('curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Send-MailMessage|Start-BitsTransfer|bitsadmin'),
@@ -45,12 +53,14 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[]) => bo
   [
     'a gh call that writes',
     bin('gh'),
-    args => {
+    (args, command) => {
       // The group and verb by position, so an option's value (--template list) cannot stand in for a read verb.
       const at = /^(-R|--repo)$/.test(args[0] ?? '') ? 2 : /^--repo=/.test(args[0] ?? '') ? 1 : 0
       const [group, verb] = args.slice(at)
 
-      return !(group === 'status' || (group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
+      const isApiGet = group === 'api' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_API_WRITE.test(arg))
+
+      return !(group === 'status' || isApiGet || (group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
     },
   ],
   [
@@ -70,7 +80,7 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[]) => bo
 ]
 
 // The first call in a command line that sends or publishes, by name.
-const sinkIn = (command: string) => SINKS.find(([, binary, isSink]) => invocations(command, binary).some(isSink))?.[0]
+const sinkIn = (command: string) => SINKS.find(([, binary, isSink]) => invocations(command, binary).some(args => isSink(args, command)))?.[0]
 
 // Bash drops a backslash before a letter (git pu\sh is git push), so the line is read with and without them.
 const sink = (command: string, tool: string) =>
@@ -174,7 +184,9 @@ export const register: Register = on => {
         ? isTrustedUrl(call.url, await $.env.get('TAINT_GUARD_TRUSTED_HOSTS'))
         : trusted(await $.env.get('TAINT_GUARD_TRUSTED')).some(prefix => call.tool.startsWith(prefix))
     const tainted = await read($, source)
-    const out = tainted === '' ? undefined : sends(call, isTrusted)
+    const isListedRead =
+      MCP_READ.test(call.tool) && list(await $.env.get('TAINT_GUARD_READ_SERVERS')).some(prefix => call.tool.startsWith(prefix))
+    const out = tainted === '' ? undefined : sends(call, isTrusted || isListedRead)
 
     if (out !== undefined) {
       return {
