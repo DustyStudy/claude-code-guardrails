@@ -254,3 +254,27 @@ test('the person clears the lock; the model cannot', async ($, on) => {
   expect(calls.filter(one => one === 'Bash').length).toBe(1)
   expect(JSON.stringify(await $.command.run(CLEAR))).toContain('nothing to clear')
 })
+
+test('a clear by the person continues the session once its turn ends, once; nothing to clear does not', async ($, on) => {
+  engine(on)
+  const prompts: string[] = []
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', (_, e) => {
+    prompts.push(e.text)
+
+    return { text: e.text }
+  })
+  const end = () => $.turn.complete({ reason: 'answer', answer: '' } as never)
+
+  await $.command.run(CLEAR)
+  await end()
+  expect(prompts).toEqual([])
+
+  await $.tool.call(FETCHED as never)
+  await $.command.run(CLEAR)
+  expect(prompts).toEqual([])
+
+  await end()
+  await end()
+  expect(prompts).toEqual(['Taint Guard is cleared. Continue where you left off.'])
+})
