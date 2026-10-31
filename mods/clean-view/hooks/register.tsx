@@ -109,7 +109,7 @@ export const register: Register = on => {
         if (!(await read($, agents)).some(one => one.status === 'running')) return
         const at = await $.clock.now()
         await update($, now, () => at)
-      })()
+      })().catch(() => undefined)
     })
 
     return next(e)

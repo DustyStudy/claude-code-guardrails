@@ -19,7 +19,7 @@ const CASES: readonly (readonly [string, readonly string[], string | undefined])
   ['an edit by absolute path, done by absolute -chdir', ['/repo/net/vpc.tf', 'terraform -chdir=/repo/net fmt && terraform -chdir=/repo/net validate'], undefined],
   ['a Windows path and a Git Bash path to one folder', ['C:\\work\\net\\vpc.tf', 'cd /c/work/net && terraform fmt && terraform validate'], undefined],
   ['both, then another edit', ['main.tf', 'terraform fmt; terraform validate', 'iam.tf'], 'terraform fmt and validate not run since the last .tf edit'],
-  ['a failed validate', ['main.tf', 'terraform fmt', 'FAIL terraform validate'], 'terraform validate not run since the last .tf edit'],
+  ['a failed validate', ['main.tf', 'terraform fmt', 'terraform validate # FAIL'], 'terraform validate not run since the last .tf edit'],
   ['prose naming both commands', ['main.tf', 'echo "terraform fmt and terraform validate"'], 'terraform fmt and validate not run since the last .tf edit'],
   ['both behind a profile variable', ['main.tf', 'AWS_PROFILE=security terraform fmt && AWS_PROFILE=security terraform validate'], undefined],
   ['prose with separators inside quotes', ['main.tf', 'echo "example; terraform fmt; terraform validate"'], 'terraform fmt and validate not run since the last .tf edit'],
@@ -36,7 +36,7 @@ for (const [name, steps, expected] of CASES) {
     on('tool.call', { tool: 'Write' }, () => ({ result: {} as never }))
     on('tool.call', { tool: 'Bash' }, ($, e) => ({
       result: { stdout: '', stderr: '', interrupted: false },
-      ...(e.command.startsWith('FAIL') ? { isError: true } : {}),
+      ...(e.command.includes('FAIL') ? { isError: true } : {}),
     }))
     on('ui.status', ($, e) => {
       status = e.text

@@ -13,8 +13,14 @@ test('a branch just made from the base is not taken for merged work', () => {
   expect(leftovers({ ...CLEAN, current: 'feat/new', merged: ['main', 'feat/new'] })).toEqual([])
 })
 
-test('a branch whose remote went with a squash merge is finished', () => {
+test('a branch whose remote is gone is not called merged: a squash merge and an unmerged delete look alike', () => {
   expect(leftovers({ ...CLEAN, current: 'feat/done', gone: ['feat/done'], pushed: ['main', 'feat/done'] })).toEqual([
+    "feat/done's remote branch is gone: if it was merged, switch to main and pull",
+  ])
+})
+
+test('a pushed branch in the base is merged', () => {
+  expect(leftovers({ ...CLEAN, current: 'feat/done', merged: ['main', 'feat/done'], pushed: ['main', 'feat/done'] })).toEqual([
     'feat/done is merged: switch to main and pull',
   ])
 })
@@ -29,7 +35,11 @@ test('other finished branches and saved plans are listed, not ones in another wo
       elsewhere: ['wt'],
       untracked: ['.terraform/', 'stack/tfplan', 'gd.tfplan', 'notes.md'],
     }),
-  ).toEqual(['2 merged branches to delete: fix/a, feat/b', '2 saved plans: stack/tfplan, gd.tfplan'])
+  ).toEqual([
+    '1 merged branch to delete: fix/a',
+    '1 branch whose remote is gone, delete if merged: feat/b',
+    '2 saved plans: stack/tfplan, gd.tfplan',
+  ])
 })
 
 // Answers git beneath the mod from a table of argv prefixes, and records the status line.

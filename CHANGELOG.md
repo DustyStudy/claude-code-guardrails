@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- terraform-guard: denies `-auto-approve` passed through `TF_CLI_ARGS`,
+  `TF_CLI_ARGS_apply` or `TF_CLI_ARGS_destroy`, set in the command or
+  inherited.
+- Shell parser (terraform-guard, aws-guard, destructive-guard, model-guard,
+  taint-guard, tf-reminder): a heredoc piped to a shell (`bash <<EOF`,
+  `cat <<EOF | sh`) is now read as a script. Other heredocs, like commit
+  messages, are still treated as plain text.
+- aws-guard: `aws iam delete-role --role-name help` is no longer mistaken for
+  a help call.
+- destructive-guard: each `cd` resolves from the folder the previous one
+  landed in, so `cd ..; cd ..; rm -rf app/cache` is checked where it actually
+  runs.
+- jev-guard: denies secrets passed by variable (`$env:AWS_SECRET_ACCESS_KEY`),
+  and treats a GovCloud region set on the active profile in the AWS config
+  file as GovCloud work.
+- tf-lint: a `tags = { ... }` map no longer hides an open management port on
+  a security group rule resource.
+- commit-identity-guard: checks commits run through a quoted path to git.
+- clean-view, taint-guard: timer callbacks no longer leave unhandled
+  rejections.
+- taint-guard: once tainted, a WebFetch is denied when its URL carries data:
+  a query string, userinfo, or a path segment or host label shaped like
+  encoded data (base64, hex, a token). Plain docs and GitHub URLs still run,
+  and hosts in `TAINT_GUARD_TRUSTED_HOSTS` always run.
+- gh-ci-status: also finds workflow runs waiting for approval when other
+  checks passed. Such a pull request reads "workflows need approval" with
+  Approve, not "checks passed" with Merge.
+- cleanup-check: a branch whose remote is gone but that git does not see as
+  merged is no longer called merged. It shows as "remote is gone, delete if
+  merged", since a squash merge and an unmerged delete look alike.
+- commit-identity-guard: denies more than one `git commit` per command, so
+  each one's repo and identity are checked. `git commit -C <commit>` and
+  `--reuse-message` are checked like `--amend`: the reused author and message
+  count.
+- codex-meter: counts every Codex run in a command, not one per command.
+
 - cleanup-check: works in Desktop too, where what is left to clean up shows
   in a line above the prompt, since Desktop draws no mod status lines.
 - taint-guard: `/taint-clear` continues the session where it stopped, so you

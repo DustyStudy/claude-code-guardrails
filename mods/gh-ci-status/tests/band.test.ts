@@ -270,6 +270,20 @@ test("a workflow's pull request with runs held for approval gets Approve, and tw
   ])
 })
 
+test('a run held for approval beside a passing check reads as needing approval, not checks passed', async ($, on) => {
+  const clock = mock.clock(on)
+  on('tool.call', () => ({ result: '' }))
+  gh(on, { nodes: [], actions: [node(1, 'SUCCESS')], waiting: { sha1: [11] } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  expect((await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')).toContain('workflows need approval')
+  expect(String((await $.tool.call({ tool: 'mcp__gh-ci-status__checks' as const, tool_use_id: 't1' })).result)).toContain(
+    "1 workflow runs need the user's approval",
+  )
+})
+
 test('a required review does not hide Approve, and the lookup keeps only runs on the repository itself', async ($, on) => {
   const clock = mock.clock(on)
   const lookups: string[][] = []

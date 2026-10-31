@@ -140,6 +140,12 @@ test('runs that end together are each counted', async ($, on) => {
   expect(status.at(-1)).toMatch(/· 3 runs this session \(over 2\)$/)
 })
 
+test('each run in one command counts', async ($, on) => {
+  const { status } = host(on, windows(20, 5))
+  await $.tool.call({ tool: 'Bash', command: 'codex exec "task one"; codex exec "task two"' })
+  expect(status.at(-1)).toMatch(/· 2 runs this session$/)
+})
+
 test('the warning percent is read from CODEX_METER_WARN_PERCENT', async ($, on) => {
   const { status } = host(on, windows(85, 13), { CODEX_METER_WARN_PERCENT: '90' })
   const got = await $.tool.call({ tool: 'Bash', command: `${COMPANION} task` })

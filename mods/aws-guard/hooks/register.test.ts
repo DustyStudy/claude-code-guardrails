@@ -64,6 +64,8 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['New-ORGOrganizationalUnit -ParentId r -Name Sandbox', false],
   ['Remove-OrganizationRelationship -Identity Contoso', true],
   ['Set-OrganizationConfig -OAuth2ClientProfileEnabled $true', true],
+  ['aws iam delete-role --role-name help', false],
+  ['aws iam delete-role help', true],
 ]
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
