@@ -17,12 +17,12 @@ const CMDLET_IN_TEXT = new RegExp(String.raw`(?<![\w-])${CMDLET_NAME}(?![\w-])`,
 
 // The service and operation are the first two bare words, wherever the global options sit.
 const mutation = (args: readonly string[]): string | undefined => {
-  const [service, operation, next] = args.filter(
+  const [service, operation] = args.filter(
     (word, i) => !word.startsWith('-') && !VALUE_OPTION.test(args[i - 1] ?? ''),
   )
   const call = `${service} ${operation}`
-  // `help` and a skeleton only print: nothing is called.
-  const isDryRun = next === 'help' || args.includes('--generate-cli-skeleton')
+  // `help` right after the operation and a skeleton only print: nothing is called. `--role-name help` is a value.
+  const isDryRun = args[args.indexOf(operation ?? '') + 1] === 'help' || args.includes('--generate-cli-skeleton')
 
   return operation !== undefined && !isDryRun && MUTATION.test(call) ? call : undefined
 }

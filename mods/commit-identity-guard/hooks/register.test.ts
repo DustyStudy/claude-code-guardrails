@@ -41,6 +41,7 @@ const CASES: readonly (readonly [string, string, string, string, true | RegExp, 
   ['a commit outside any repo', '', '', 'git commit -m "x"', true],
   ['a personal address after a quoted -c value', COVERED, 'me@example.com', 'git -c user.name="Jane Doe" commit -m "fix: y"', ADDRESS],
   ['a command that is not a commit', COVERED, 'me@example.com', 'git log --grep commit', true],
+  ['a commit through a quoted path to git', COVERED, 'me@example.com', '& "C:/tools/git.exe" commit -m fix', ADDRESS],
 ]
 
 for (const [name, remote, email, command, expected, head] of CASES) {

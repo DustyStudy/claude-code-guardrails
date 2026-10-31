@@ -6,7 +6,9 @@ const WRAPPER =
 // What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
 const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
 const OPERATOR = /^[;|&(){}`\n]$/
-const HEREDOC = /<<-?\s*["']?(\w+)["']?[\s\S]*?\n\s*\1\b/g
+const HEREDOC = /<<-?\s*["']?(\w+)["']?([\s\S]*?)\n\s*\1\b/g
+// A shell named on a heredoc's opening line reads the body as its script: bash <<EOF, cat <<EOF | sh.
+const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 const SUBSTITUTION = /\$\(([^()]*)\)|`([^`\n]*)`/
 // A word (quoted runs and ${VAR} kept whole), or one operator that ends a command. A brace is one: a group, or a PowerShell script block.
 const TOKEN = /(?:"(?:\\.|[^"\\])*"|'[^']*'|>&|\$\{[^}]*\}|[^\s"';|&(){}`])+|[;|&(){}`\n]/g
@@ -19,7 +21,7 @@ const withoutRedirections = (words: readonly string[]) =>
     (word, i) => !/^\d*[<>]/.test(word) && !/^\d*[<>]+&?$/.test(words[i - 1] ?? ''),
   )
 
-// shortcut: no variable or alias expansion, and heredoc bodies are skipped (a script fed to a shell that way is not read); it errs toward finding a call, so `echo '$(prog …)'` and `bash -c echo prog …` count as calls; cost grows with the square of the number of substitutions. Upgrade to a real shell parser if any of these bites.
+// shortcut: no variable or alias expansion, and heredoc bodies are skipped unless a shell on the opening line reads them; it errs toward finding a call, so `echo '$(prog …)'` and `bash -c echo prog …` count as calls; cost grows with the square of the number of substitutions. Upgrade to a real shell parser if any of these bites.
 /** The argument list of every call to `binary` in `source`, wrappers, subshells and substitutions included. */
 export const invocations = (source: string, binary: RegExp, depth = 0): string[][] => {
   const found: string[][] = []
@@ -28,8 +30,20 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
     return found
   }
 
-  // Line continuations join (bash's \ leaves nothing behind, so a split word is whole again); heredoc bodies are data.
-  let text = source.replace(/\\\r?\n/g, '').replace(/`\r?\n/g, ' ').replace(HEREDOC, '')
+  // Line continuations join (bash's \ leaves nothing behind, so a split word is whole again); heredoc bodies are data unless a shell runs them.
+  let text = source
+    .replace(/\\\r?\n/g, '')
+    .replace(/`\r?\n/g, ' ')
+    .replace(HEREDOC, (_, _tag: string, rest: string, at: number, whole: string) => {
+      // A comment on the opening line (cat > x.sh <<EOF # bash script) names no shell.
+      const opening = `${whole.slice(whole.lastIndexOf('\n', at) + 1, at)} ${rest.split('\n')[0]}`.replace(/(^|\s)#.*$/, '')
+
+      if (SHELL.test(opening)) {
+        found.push(...invocations(rest.slice(rest.indexOf('\n') + 1), binary, depth + 1))
+      }
+
+      return ''
+    })
 
   // A substitution runs its body wherever it sits, inside double quotes too.
   for (let body = SUBSTITUTION.exec(text); body !== null; body = SUBSTITUTION.exec(text)) {

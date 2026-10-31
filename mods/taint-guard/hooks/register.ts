@@ -180,7 +180,7 @@ export const register: Register = on => {
     // The person cleared it to let the blocked work go on. The host refuses a submit from command.run, and a command typed at an
     // idle prompt ends no model turn for turn.complete to follow, so a timer (its own dispatch) submits.
     $.clock.after(100, () => {
-      void $.prompt.submit({ text: 'Taint Guard is cleared. Continue where you left off.' })
+      void $.prompt.submit({ text: 'Taint Guard is cleared. Continue where you left off.' }).catch(() => undefined)
     })
 
     return { text: `Taint Guard: cleared (it came from ${was}).` }

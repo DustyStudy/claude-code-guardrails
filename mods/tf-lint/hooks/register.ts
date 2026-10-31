@@ -83,7 +83,8 @@ const findings = (source: string): string[] => {
     )
   }
 
-  const blocks = [...text.matchAll(/([^\n{}]*)\{([^{}]*)\}/g)].map(
+  // A tags map is not a block: dropped, it leaves the resource body innermost. Other maps may hold rules (locals), so they stay.
+  const blocks = [...text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null').matchAll(/([^\n{}]*)\{([^{}]*)\}/g)].map(
     ([, head = '', body = '']) => ({ head, body }),
   )
 

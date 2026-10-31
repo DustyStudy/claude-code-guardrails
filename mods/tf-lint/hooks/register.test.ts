@@ -46,6 +46,7 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['an all-protocol ingress rule resource', 'sg.tf', 'resource "aws_vpc_security_group_ingress_rule" "all" {\n  ip_protocol = "-1"\n  cidr_ipv6 = "::/0"\n}', /port 22 and 3389/],
   ['all-protocol named only in a trailing comment', 'sg.tf', 'ingress {\n  protocol = "tcp" # protocol = "-1"\n  from_port = 443\n  to_port = 443\n  cidr_blocks = ["0.0.0.0/0"]\n}', null],
   ['clean Terraform', 'sg.tf', CLEAN, null],
+  ['an ingress rule resource with tags', 'sg.tf', 'resource "aws_vpc_security_group_ingress_rule" "ssh" {\n  from_port = 22\n  to_port = 22\n  cidr_ipv4 = "0.0.0.0/0"\n  tags = { Name = "ssh" }\n}', /port 22 /],
   ['a KMS key with neither setting', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "logs"\n  tags = {\n    team = "sec"\n  }\n}', /enable_key_rotation = true; and .*deletion_window_in_days of 7 to 30/],
   ['a KMS key whose rotation sits only in a nested block', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  deletion_window_in_days = 30\n  dynamic "x" {\n    content {\n      enable_key_rotation = true\n    }\n  }\n}', /enable_key_rotation/],
   ['a compliant KMS key with a brace in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "closing } brace"\n  enable_key_rotation     = true\n  deletion_window_in_days = 30\n}', null],

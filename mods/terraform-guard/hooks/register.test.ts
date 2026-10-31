@@ -69,13 +69,31 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform state show destroy', true],
   ['terraform apply -help', true],
   ['terraform -chdir=stack apply', false],
+  // Flags passed through Terraform's environment, and a script a shell reads from a heredoc.
+  ['TF_CLI_ARGS_destroy=-auto-approve terraform destroy', false],
+  ["$env:TF_CLI_ARGS_destroy='-auto-approve'; terraform destroy", false],
+  ["bash <<'EOF'\nterraform destroy -auto-approve\nEOF", false],
+  ['cat <<EOF | sh\nterraform apply -auto-approve\nEOF', false],
+  ['"/bin/bash" <<EOF\nterraform destroy -auto-approve\nEOF', false],
+  ["cat > install.sh <<'EOF' # bash script\nterraform destroy -auto-approve\nEOF", true],
+  ["TF_CLI_ARGS='-auto-approve=false' terraform apply tfplan", true],
 ]
+
+test('an -auto-approve inherited through TF_CLI_ARGS_destroy is denied', async ($, on) => {
+  on('env.get', (_, e) => ({ value: e.name === 'TF_CLI_ARGS_destroy' ? '-auto-approve' : undefined }))
+  on('tool.call', { tool: ['Bash'] }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'terraform destroy' })).deny).toMatch(/auto-approve is not allowed/)
+  // TF_CLI_ARGS_destroy is destroy's alone.
+  expect((await $.tool.call({ tool: 'Bash', command: 'terraform apply tfplan' })).deny).toBeUndefined()
+})
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
   for (const [command, isAllowed] of CASES) {
     test(`${tool} ${isAllowed ? 'runs' : 'is denied'}: ${command}`, async ($, on) => {
       let hasRun = false
 
+      on('env.get', () => ({ value: undefined }))
       on('tool.call', { tool: [tool] }, () => {
         hasRun = true
 

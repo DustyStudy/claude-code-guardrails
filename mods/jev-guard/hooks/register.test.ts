@@ -39,6 +39,9 @@ const CASES: readonly (readonly [string, boolean])[] = [
   [`${JEV} -Question 'Which?' -Path:.env`, false],
   // $env: is PowerShell's environment drive, not a .env file.
   [`$env:TYPESAFE_API_KEY | Out-Null; ${JEV} -Question 'x' -State 'y'`, true],
+  [`${JEV} -Question 'x' -State $env:AWS_SECRET_ACCESS_KEY`, false],
+  [`${JEV} -Question 'x' -State "$GITHUB_TOKEN"`, false],
+  [`${JEV} -Question 'x' -State \${env:AWS_SECRET_ACCESS_KEY}`, false],
 ]
 
 const SAFE_CWD = 'C:\\repos\\wiz-cloud-config-rules'
@@ -90,6 +93,13 @@ test('a Jev call is denied from a folder labelled CUI', async ($, on) => {
 test('a folder whose name only contains the letters runs', async ($, on) => {
   context(on, 'C:\\repos\\circuit-sim')
   expect(await run($, on, 'PowerShell', `${JEV} -Question 'x' -State 'y'`)).toBe(true)
+})
+
+test('a Jev call is denied when the active profile is set to GovCloud in the config file', async ($, on) => {
+  on('session.cwd', () => ({ value: SAFE_CWD }))
+  on('env.get', (_, e) => ({ value: { AWS_PROFILE: 'secure', AWS_CONFIG_FILE: '/aws/config' }[e.name] }))
+  on('fs.read', () => ({ value: '[default]\nregion = us-east-1\n[profile secure]\nregion = us-gov-west-1\n' }))
+  expect(await run($, on, 'PowerShell', `${JEV} -Question 'x' -State 'y'`)).toBe(false)
 })
 
 test('the same call runs in a commercial region', async ($, on) => {

@@ -67,6 +67,10 @@ const DENIED = [
   'git restore --staged -qW .',
   `psql -c "DELETE FROM users RETURNING *;"`,
   `psql -c "DELETE FROM ONLY users;"`,
+  // Each cd moves on from the last: two levels up from the project, app/cache is outside it.
+  'cd ..; cd ..; rm -rf app/cache',
+  // A subshell's cd does not carry on: the second cd .. leaves the project.
+  '(cd build); cd ..; rm -rf sibling',
 ] as const
 
 // Ordinary work: runs.

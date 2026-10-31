@@ -1,7 +1,7 @@
 import type { Register } from 'claude-code'
 
 // `commit` as the subcommand, after any global options (-c key="a b", -C dir).
-const COMMIT = /\bgit(?:\.exe)?((?:\s+(?:-[cC]\s+(?:"[^"]*"|'[^']*'|\S)+|--?[\w-]+(?:=\S+)?))*)\s+commit\b/
+const COMMIT = /\bgit(?:\.exe)?["']?((?:\s+(?:-[cC]\s+(?:"[^"]*"|'[^']*'|\S)+|--?[\w-]+(?:=\S+)?))*)\s+commit\b/
 const PR = /\bgh(?:\.exe)?\s+pr\s+(create|edit)\b/
 const TRAILER = /co-authored-by:[^\n]*(claude|anthropic)|generated with[^\n]*claude code/i
 // GitHub owner names: letters, digits and hyphens, so one is safe inside a pattern.

@@ -172,16 +172,29 @@ const loss = (command: string, places: Places): string | undefined => {
 const placesOf = (cwd: string, home: string, temps: readonly (string | undefined)[], command: string): Places => {
   const root = norm(cwd)
   const homeAt = norm(home)
-  // shortcut: a cd in the command moves the base of relative targets to each folder it names, in any order; upgrade if a script cds back and forth.
-  const cds = invocations(command, bin('cd|pushd|chdir|Set-Location|sl')).map(args => {
+  // shortcut: a relative cd is read both from the session's folder and from where the cd before it landed (a subshell's cd does not
+  // carry on), and every folder reached is a base of relative targets, in any order; upgrade if a script cds back and forth.
+  let at = cwd
+  const cds = invocations(command, bin('cd|pushd|chdir|Set-Location|sl')).flatMap(args => {
     // A bare cd goes home.
     const dir = words(args)[0] ?? '~'
+    const from = at
 
     if (HOME_VAR.test(dir)) {
-      return dir.replace(HOME_VAR, home)
+      at = dir.replace(HOME_VAR, home)
+
+      return [at]
     }
 
-    return /[$%]/.test(dir) ? UNKNOWN : isAbsolute(dir) ? dir : `${cwd}/${dir}`
+    if (/[$%]/.test(dir)) {
+      at = UNKNOWN
+
+      return [at]
+    }
+
+    at = isAbsolute(dir) ? dir : from === UNKNOWN ? UNKNOWN : `${from}/${dir}`
+
+    return isAbsolute(dir) ? [at] : [at, `${cwd}/${dir}`]
   })
 
   return {

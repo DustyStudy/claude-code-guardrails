@@ -8,10 +8,32 @@ const SECRET_FILE =
 // Secret values typed straight into -State.
 const SECRET_VALUE =
   /\b(AKIA|ASIA)[A-Z0-9]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bxox[abpr]-[\w-]{10,}/
+// A secret passed by its variable ($env:AWS_SECRET_ACCESS_KEY, $GITHUB_TOKEN); Jev's own key is read by the script, not sent as input.
+const SECRET_VAR = /\$\{?(env:|script:|global:)?\{?(?!TYPESAFE_API_KEY\b)\w*(SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|ACCESS_KEY|API_KEY|CREDENTIAL)\w*/i
 // A GovCloud or CUI context, by region, partition or the name of the folder the work is in.
 // CUI as its own label: CUI_project and cui-data count, circuit does not.
 const GOV = /us-gov-|aws-us-gov|govcloud|(^|[^a-z])cui([^a-z]|$)/i
 const SEEN = { plugin: 'aws-context', key: 'seen' } as const
+
+// The `region` of a profile's section in an AWS config file's text, or ''. Same as aws-context's regionIn.
+const regionIn = (config: string, profile: string) => {
+  const name = `["']?${profile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`
+  const header = new RegExp(String.raw`^\[\s*${profile === 'default' ? '(profile\\s+)?' : 'profile\\s+'}${name}\s*\]\s*([#;].*)?$`)
+  let isIn = false
+
+  for (const line of config.split(/\r?\n/).map(one => one.trim())) {
+    if (line.startsWith('[')) {
+      isIn = header.test(line)
+    } else if (isIn) {
+      const region = /^region\s*=\s*([a-z]{2}(?:-[a-z]+)+-\d)\s*$/.exec(line)?.[1]
+      if (region !== undefined) {
+        return region
+      }
+    }
+  }
+
+  return ''
+}
 
 // shortcut: reads the command line only, so a script that calls Jev itself, or files found at run time (gci -Recurse | jev), pass; upgrade to checking the resolved -Path files if that comes into use.
 const refusal = async ($: EngineInterface, command: string): Promise<string | undefined> => {
@@ -23,16 +45,25 @@ const refusal = async ($: EngineInterface, command: string): Promise<string | un
     return 'it names a secrets, tfvars or state file'
   }
 
-  if (SECRET_VALUE.test(command)) {
+  if (SECRET_VALUE.test(command) || SECRET_VAR.test(command)) {
     return 'it carries what looks like a key or token'
   }
 
-  // The last region aws-context saw used, then the session's own settings.
+  // The last region aws-context saw used, the session's own settings, then the active profile's region in the config file.
   const seen = await $.state.get(SEEN).then(
-    got => got.value?.region ?? '',
-    () => '',
+    got => got.value,
+    () => undefined,
   )
-  const regions = [seen, await $.env.get('AWS_REGION'), await $.env.get('AWS_DEFAULT_REGION')]
+  const profile = seen?.profile || (await $.env.get('AWS_PROFILE')) || 'default'
+  const config =
+    (await $.env.get('AWS_CONFIG_FILE')) ??
+    [(await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '', '.aws', 'config'].join('/')
+  const regions = [
+    seen?.region,
+    await $.env.get('AWS_REGION'),
+    await $.env.get('AWS_DEFAULT_REGION'),
+    regionIn(await $.fs.read(config).then(String, () => ''), profile),
+  ]
 
   if (GOV.test(command) || GOV.test(await $.session.cwd()) || regions.some(one => one?.startsWith('us-gov-'))) {
     return 'the work is in a GovCloud or CUI context'
