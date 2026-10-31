@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- gh-ci-status: also lists pull requests a workflow opened (release-please)
+  on repositories you own. When their workflow runs wait for approval, the row
+  says "workflows need approval" and an Approve button approves them in two
+  presses. Approving is a button only, so the model cannot do it.
+- taint-guard: a `gh api` GET to GitHub runs in a tainted session; a method,
+  field or input flag, `--hostname`, a full URL, or `GH_HOST` still deny it.
+- taint-guard: `TAINT_GUARD_READ_SERVERS` names MCP servers whose read tools
+  (`search`, `get`, `list`, `read`, `query`) still taint the session but stay
+  usable once it is tainted.
+- usage-band (new): Claude and Codex plan usage left, with reset times,
+  in a band above the prompt on Claude Code Desktop, which draws no mod
+  status lines. Codex's is there for work handed to Codex, which spends
+  its own plan.
+- README: a Works in column says which mods work in the CLI, in Desktop,
+  or both.
+
 ## 0.6.0 (2026-10-28)
 
 - taint-guard: `TAINT_GUARD_TRUSTED_HOSTS` names hosts (and their
