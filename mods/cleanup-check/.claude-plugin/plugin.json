@@ -6,5 +6,6 @@
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "types": "./types/index.d.ts"
 }
