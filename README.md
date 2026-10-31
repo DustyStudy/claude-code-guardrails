@@ -48,7 +48,7 @@ much of your Claude and Codex plans is left.
 | [output-trimmer](mods/output-trimmer) | Context | CLI and Desktop | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | CLI and Desktop | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
-| [cleanup-check](mods/cleanup-check) | Reminder | CLI only | A status line after each turn: a merged branch still checked out, merged branches to delete, saved plan files left behind. |
+| [cleanup-check](mods/cleanup-check) | Reminder | CLI and Desktop | A status line after each turn (in Desktop, a line above the prompt): a merged branch still checked out, merged branches to delete, saved plan files left behind. |
 | [clean-view](mods/clean-view) | Display | CLI and Desktop | Hides tool calls and shows the agent's plan as a checklist with progress; `/clean-view:clean-flow` runs a task through tiered Opus workers with a live agents pane (`/clean-agents`). |
 | [codex-meter](mods/codex-meter) | Display and reminder | CLI; in Desktop only its notice to the model and its notification | A status line with your Codex plan's 5-hour and weekly usage and when each resets, read from Codex's own session logs. Near a limit it marks the line, notifies you once, and tells the model after each Codex run. |
 | [usage-band](mods/usage-band) | Display | Desktop only | Your Claude plan's and Codex plan's 5-hour and weekly usage left above the prompt, each with when it resets: green with more than half left, orange at half or less, red at 20% or less, and LOW under 15%. Codex is there for sessions that hand work to it, such as reviews, second opinions and parallel tasks run through the Codex plugin, which spend the Codex plan rather than Claude's. Claude's figures are the ones the session reports; Codex's are read from its session logs as codex-meter reads them, and show once Codex has run in the last seven days. |
@@ -57,8 +57,8 @@ much of your Claude and Codex plans is left.
 calls, prompts and turns, or adds a tool, works the same in the CLI and in
 Claude Code Desktop. On screen the two differ: both draw the band above the
 prompt and the tool-call rows, but Desktop does not draw a mod's status
-line under the prompt, so tf-reminder, cleanup-check and codex-meter's line
-show only in the CLI. usage-band draws its band in Desktop alone, since in
+line under the prompt, so tf-reminder and codex-meter's line show only in
+the CLI; cleanup-check shows its line above the prompt there instead. usage-band draws its band in Desktop alone, since in
 the CLI the same figures belong in the status line (codex-meter's, and your
 own `statusLine` command for Claude's).
 

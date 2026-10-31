@@ -1,4 +1,14 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
+
+declare module 'claude-code' {
+  interface PluginState {
+    'cleanup-check': { left: string[] }
+  }
+}
+
+// Desktop draws no status line, so there the same items show above the prompt.
+const left = atom({ plugin: 'cleanup-check', key: 'left' } as const, [] as string[])
 
 // Saved Terraform plans: tfplan, gd.tfplan, prod-tfplan.out.
 const PLAN_FILE = /(^|\/)[^/]*tfplan[^/]*$/i
@@ -91,10 +101,30 @@ export const register: Register = on => {
     }
 
     const repo = await look($)
-    const left = repo === undefined ? [] : leftovers(repo)
+    const items = repo === undefined ? [] : leftovers(repo)
 
-    $.ui.status(left.length === 0 ? undefined : `Cleanup: ${left.join(' · ')}`)
+    $.ui.status(items.length === 0 ? undefined : `Cleanup: ${items.join(' · ')}`)
+    await update($, left, () => items)
 
     return next(e)
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const items = await read($, left)
+    if (e.surface !== 'desktop' || e.props.hasSurvey || items.length === 0) {
+      return next(e)
+    }
+
+    const { Box, Text } = $.ui.resolve(e)
+
+    return (
+      <Box flexDirection="column">
+        <Box columnGap={1} flexWrap="wrap">
+          <Text weight="semibold">Cleanup</Text>
+          <Text dimColor>{items.join(' · ')}</Text>
+        </Box>
+        {await next(e)}
+      </Box>
+    )
   })
 }

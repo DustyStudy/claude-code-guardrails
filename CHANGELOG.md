@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- cleanup-check: works in Desktop too, where what is left to clean up shows
+  in a line above the prompt, since Desktop draws no mod status lines.
 - taint-guard: `/taint-clear` continues the session where it stopped, so you
   no longer type "continue" after clearing the lock.
 - gh-ci-status: also lists pull requests a workflow opened (release-please)

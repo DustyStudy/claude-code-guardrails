@@ -115,6 +115,39 @@ test('a subagent ending its turn runs no git', async ($, on) => {
   expect(status).toEqual([])
 })
 
+const ABOVE = {
+  plugin: 'cleanup-check',
+  component: 'AbovePrompt',
+  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {} },
+} as const
+
+test('desktop shows what is left above the prompt, the terminal only in its status line', async ($, on) => {
+  repo(on, {
+    ...ROOT,
+    'git rev-parse --abbrev-ref HEAD': 'main\n',
+    'git symbolic-ref': 'origin/main\n',
+    'git branch --merged': 'main\n',
+    'git for-each-ref': 'main|refs/remotes/origin/main||\n',
+    'git ls-files -z --others --exclude-standard': '',
+    'git ls-files -z --others --ignored': 'gd.tfplan\0',
+  })
+  // Stands for the engine's own drawing beneath the mod.
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine</Text>
+  })
+  await $.turn.complete({ reason: 'answer', answer: '' } as never)
+
+  const desktop = await $.ui.mount({ ...ABOVE, surface: 'desktop' })
+  expect((await desktop.find({ type: 'Text', text: /saved plan/ }))?.text).toBe('1 saved plan: gd.tfplan')
+  await desktop.unmount()
+
+  const terminal = await $.ui.mount({ ...ABOVE, surface: 'terminal' })
+  expect(await terminal.find({ type: 'Text', text: 'Cleanup' })).toBeUndefined()
+  await terminal.unmount()
+})
+
 test('without origin/HEAD the base is main', async ($, on) => {
   const status = repo(on, {
     ...ROOT,
