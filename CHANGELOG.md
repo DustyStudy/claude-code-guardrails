@@ -11,6 +11,12 @@
 - taint-guard: `TAINT_GUARD_READ_SERVERS` names MCP servers whose read tools
   (`search`, `get`, `list`, `read`, `query`) still taint the session but stay
   usable once it is tainted.
+- usage-band (new): Claude and Codex plan usage left, with reset times,
+  in a band above the prompt on Claude Code Desktop, which draws no mod
+  status lines. Codex's is there for work handed to Codex, which spends
+  its own plan.
+- README: a Works in column says which mods work in the CLI, in Desktop,
+  or both.
 
 ## 0.6.0 (2026-10-28)
 
