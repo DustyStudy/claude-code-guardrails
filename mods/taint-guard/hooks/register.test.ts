@@ -255,26 +255,27 @@ test('the person clears the lock; the model cannot', async ($, on) => {
   expect(JSON.stringify(await $.command.run(CLEAR))).toContain('nothing to clear')
 })
 
-test('a clear by the person continues the session once its turn ends, once; nothing to clear does not', async ($, on) => {
+test('a clear by the person continues the session at once, with no turn between; nothing to clear does not', async ($, on) => {
   engine(on)
   const prompts: string[] = []
-  on('turn.complete', () => ({ text: '' }))
+  const timers: unknown[] = []
+  on('clock.after', (_, e) => {
+    timers.push(e)
+
+    return { value: undefined } as never
+  })
   on('prompt.submit', (_, e) => {
     prompts.push(e.text)
 
     return { text: e.text }
   })
-  const end = () => $.turn.complete({ reason: 'answer', answer: '' } as never)
 
   await $.command.run(CLEAR)
-  await end()
-  expect(prompts).toEqual([])
+  expect(timers).toEqual([])
 
   await $.tool.call(FETCHED as never)
   await $.command.run(CLEAR)
-  expect(prompts).toEqual([])
-
-  await end()
-  await end()
+  await $.command.run(CLEAR)
+  expect(timers.length).toBe(1)
   expect(prompts).toEqual(['Taint Guard is cleared. Continue where you left off.'])
 })

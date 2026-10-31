@@ -20,6 +20,8 @@ const BORDER = 'promptBorder'
 // Below these the band draws one line with no frame.
 const MIN_ROWS = 6
 const MIN_COLUMNS = 24
+// Calls of the main agent between two reminders to update the checklist.
+const IDLE_CALLS = 5
 
 const isOn = atom({ plugin: 'clean-view', key: 'isOn' } as const, true)
 const steps = atom({ plugin: 'clean-view', key: 'steps' } as const, [])
@@ -27,6 +29,8 @@ const steps = atom({ plugin: 'clean-view', key: 'steps' } as const, [])
 const title = atom({ plugin: 'clean-view', key: 'title' } as const, '')
 const phase = atom({ plugin: 'clean-view', key: 'phase' } as const, '')
 const agents = atom({ plugin: 'clean-view', key: 'agents' } as const, [])
+// Tool calls of the main agent since the checklist last changed.
+const idle = atom({ plugin: 'clean-view', key: 'idle' } as const, 0)
 // The clock the pane's elapsed times read; ticks only while an agent runs.
 const now = atom({ plugin: 'clean-view', key: 'now' } as const, 0)
 
@@ -163,6 +167,7 @@ export const register: Register = on => {
 
     const list = toSteps(e.steps)
     await update($, steps, () => list)
+    await update($, idle, () => 0)
     const name = typeof e.title === 'string' ? e.title.trim().slice(0, 60) : ''
 
     // A later call without a title keeps the first one's.
@@ -173,6 +178,27 @@ export const register: Register = on => {
     const done = list.filter(one => one.status === 'completed').length
 
     return { result: `Checklist shown: ${done} of ${list.length} done.` }
+  })
+
+  // The checklist freezes on the first step when the model forgets to call plan again: remind it every few calls while a step is open.
+  on('tool.call', async ($, e, next) => {
+    const done = await next(e)
+    const list = await read($, steps)
+
+    if (e.agentId || e.tool === PLAN_TOOL || e.tool === STEP_TOOL || list.length === 0 || list.every(one => one.status === 'completed') || !(await read($, isOn))) {
+      return done
+    }
+
+    const count = (await read($, idle)) + 1
+    await update($, idle, () => count)
+
+    if (count % IDLE_CALLS !== 0 || ('deny' in done && done.deny !== undefined)) {
+      return done
+    }
+
+    const note = `${$.plugin.name}: the checklist has not changed in ${count} tool calls. Call ${PLAN_TOOL} now with the whole list: mark finished steps completed and the one you are on in_progress. When the work is done, call it once more with every step completed.`
+
+    return { ...done, context: [...(done.context ?? []), note] }
   })
 
   // A worker's own progress: the call runs in the worker's loop, so agentId names its row.

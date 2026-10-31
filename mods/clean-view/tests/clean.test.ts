@@ -55,6 +55,22 @@ test('the plan shows as a checklist and tool rows are hidden', async ($, on) => 
   }
 })
 
+test('a checklist that has not moved in five calls is reminded, once a round; a plan call resets it', async ($, on) => {
+  on('tool.call', () => ({ result: 'ok' }))
+  const call = (tool = 'Read') => $.tool.call({ tool, tool_use_id: 't', file_path: 'a' } as never)
+  const plan = (status: string) =>
+    $.tool.call({ tool: 'mcp__clean-view__plan', tool_use_id: 'p', steps: [{ title: 'a', status }, { title: 'b', status: 'pending' }] } as never)
+
+  await plan('in_progress')
+  for (let i = 0; i < 4; i++) expect(JSON.stringify(await call())).not.toContain('has not changed')
+  expect(JSON.stringify(await call())).toContain('has not changed in 5 tool calls')
+  expect(JSON.stringify(await call())).not.toContain('has not changed')
+
+  await plan('in_progress')
+  for (let i = 0; i < 4; i++) await call()
+  expect(JSON.stringify(await call())).toContain('has not changed in 5 tool calls')
+})
+
 test('a failed, interrupted or expanded tool row still shows', async ($, on) => {
   on('ui.render', ($$, e) => {
     const { Box, Text } = $$.ui.resolve(e)

@@ -32,6 +32,7 @@ declare module 'claude-code' {
       phase: Phase | ''
       agents: AgentRun[]
       now: number
+      idle: number
     }
   }
 }
