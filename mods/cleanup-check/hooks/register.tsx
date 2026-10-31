@@ -1,12 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-declare module 'claude-code' {
-  interface PluginState {
-    'cleanup-check': { left: string[] }
-  }
-}
-
 // Desktop draws no status line, so there the same items show above the prompt.
 const left = atom({ plugin: 'cleanup-check', key: 'left' } as const, [] as string[])
 
