@@ -156,6 +156,33 @@ test('while gh merges, the row says merging and has no button', async ($, on) =>
   expect(seen[1]).toBe('no button')
 })
 
+test('merging a second pull request while the first merges keeps both rows merging', async ($, on) => {
+  const clock = mock.clock(on)
+  const second = 'merge-https://github.com/o/r/pull/2'
+  let seen = ''
+  let calls = 0
+  let look = async () => {}
+  const merges = gh(on, { nodes: [node(1, 'SUCCESS'), node(2, 'SUCCESS')] }, () => look())
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(30_000)
+
+  const ui = await $.ui.mount(BAND)
+  look = async () => {
+    // The first merge is in flight: press the second one twice; while it merges, read both rows.
+    if (++calls === 1) {
+      await ui.press({ key: second })
+      await ui.press({ key: second })
+    } else {
+      seen = (await ui.findAll({ type: 'Text' })).map(one => one.text).join('|')
+    }
+  }
+  await ui.press({ key: 'merge-https://github.com/o/r/pull/1' })
+  await ui.press({ key: 'merge-https://github.com/o/r/pull/1' })
+
+  expect(merges.length).toBe(2)
+  expect(seen.match(/◆ merging/g)).toHaveLength(2)
+})
+
 test('after a merge the row leaves, though search still lists it as open', async ($, on) => {
   const clock = mock.clock(on)
   const key = 'merge-https://github.com/o/r/pull/1'
