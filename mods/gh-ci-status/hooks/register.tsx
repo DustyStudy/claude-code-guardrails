@@ -30,10 +30,10 @@ const FAILED = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED',
 const prs = atom({ plugin: 'gh-ci-status', key: 'prs' } as const, [])
 // The pull request and head commit whose Merge button was pressed once; the second press merges.
 const armed = atom({ plugin: 'gh-ci-status', key: 'armed' } as const, '')
-// The url of the pull request being merged right now.
-const merging = atom({ plugin: 'gh-ci-status', key: 'merging' } as const, '')
-// The url of the pull request being rebased right now.
-const rebasing = atom({ plugin: 'gh-ci-status', key: 'rebasing' } as const, '')
+// The urls of the pull requests being merged right now: several can be in flight at once.
+const merging = atom({ plugin: 'gh-ci-status', key: 'merging' } as const, [])
+// The urls of the pull requests being rebased right now.
+const rebasing = atom({ plugin: 'gh-ci-status', key: 'rebasing' } as const, [])
 // Urls this session merged: search still lists a pull request as open for a while after its merge.
 const merged = atom({ plugin: 'gh-ci-status', key: 'merged' } as const, [])
 
@@ -206,7 +206,7 @@ const press = async ($: EngineInterface, pr: Pr) => {
 
   await update($, armed, () => '')
   // The row says so from here until it leaves: the button does not come back in between.
-  await update($, merging, () => pr.url)
+  await update($, merging, urls => [...urls, pr.url])
 
   try {
     // The band can be 30 s old: look again before merging.
@@ -242,13 +242,13 @@ const press = async ($: EngineInterface, pr: Pr) => {
     $.ui.toast(`${pr.repo} #${pr.number}: gh did not answer, check the pull request`)
   } finally {
     await refresh($)
-    await update($, merging, () => '')
+    await update($, merging, urls => urls.filter(url => url !== pr.url))
   }
 }
 
 // One press, like GitHub's own Update branch: the rebase only moves the branch, nothing merges.
 const rebase = async ($: EngineInterface, pr: Pr) => {
-  await update($, rebasing, () => pr.url)
+  await update($, rebasing, urls => [...urls, pr.url])
 
   try {
     const done = await $.process.run(['gh', 'pr', 'update-branch', pr.url, '--rebase'], {
@@ -263,7 +263,7 @@ const rebase = async ($: EngineInterface, pr: Pr) => {
     $.ui.toast(`${pr.repo} #${pr.number}: gh did not answer, check the pull request`)
   } finally {
     await refresh($)
-    await update($, rebasing, () => '')
+    await update($, rebasing, urls => urls.filter(url => url !== pr.url))
   }
 }
 
@@ -325,8 +325,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // State outlives a reload: a press from before it must not count.
     void update($, armed, () => '')
-    void update($, merging, () => '')
-    void update($, rebasing, () => '')
+    void update($, merging, () => [])
+    void update($, rebasing, () => [])
     void refresh($)
     $.clock.every(POLL_MS, () => {
       void update($, armed, () => '')
@@ -413,8 +413,8 @@ export const register: Register = on => {
             <Text dimColor>{`· ${list.length} open`}</Text>
           </Box>
           {shown.map(pr => {
-            const isMerging = inFlight === pr.url
-            const isRebasing = moving === pr.url
+            const isMerging = inFlight.includes(pr.url)
+            const isRebasing = moving.includes(pr.url)
             const isBusy = isMerging || isRebasing
             const isConfirming = waiting === idOf(pr)
             const status = statusOf(pr)
