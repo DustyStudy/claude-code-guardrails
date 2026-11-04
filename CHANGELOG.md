@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- self-guard: new mod. Denies edits, shell writes and `claude plugin`/`mcp`/`config`
+  changes to Claude Code's own config and code (`~/.claude`, `~/.claude.json`,
+  the mod folders, project `.claude` settings), so an agent cannot switch off
+  its own guardrails or plant a hook. Add it to `CLAUDE_CODE_PLUGIN_DIRS`.
 - Removed clean-view, tf-reminder and codex-meter, which duplicated what
   Claude Code Desktop already shows or drew only in the CLI. Desktop has its
   own task list and hides tool calls; tf-reminder's status line never showed
