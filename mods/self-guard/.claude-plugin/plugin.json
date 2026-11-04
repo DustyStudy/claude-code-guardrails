@@ -1,0 +1,10 @@
+{
+  "name": "self-guard",
+  "version": "0.1.0",
+  "description": "Denies changes to what Claude Code loads as its own config or code: ~/.claude, ~/.claude.json, the mod folders and a project's .claude settings, by file tool, shell or the claude CLI",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT"
+}

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Fourteen mods that stop risky commands
+when it works on AWS and Terraform. Fifteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -22,7 +22,7 @@ much of your Claude and Codex plans is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 892 tests across the fourteen mods, run in CI against a pinned
+- **Result:** 1010 tests across the fifteen mods, run in CI against a pinned
   Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -39,6 +39,7 @@ much of your Claude and Codex plans is left.
 | [terraform-guard](mods/terraform-guard) | Guard | CLI and Desktop | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, and hands the command to the user to run. |
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
+| [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, a search, an MCP result, a `curl`), denies what could send data out or publish: network tools, `git push`, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable. You lift the lock with `/taint-clear`, and the session continues where it stopped. |
 | [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token. Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
@@ -126,7 +127,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, destructive-guard, taint-guard and model-guard each carry the same
+terraform-guard, aws-guard, destructive-guard, taint-guard, model-guard and self-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
