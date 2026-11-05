@@ -46,6 +46,23 @@ const DENIED = [
   'Remove-Item -Recurse .claude',
   'rm -rf ~/.claude/..',
   'rm -rf C:/repos/guards-live',
+  // A plugin script run excuses only its own path.
+  'node ~/.claude/plugins/cache/codex/x.mjs ~/.claude/settings.json',
+  'cp evil.mjs ~/.claude/plugins/cache/codex/x.mjs && node ~/.claude/plugins/cache/codex/x.mjs',
+  'node -e "require(\'fs\').rmSync(process.argv[1])" ~/.claude/plugins/cache/codex/x.mjs',
+  'node ~/.claude/plugins/cache/../settings.json',
+  // Found in Codex review.
+  "echo '$(node ~/.claude/plugins/cache/codex/x.mjs)' > ~/.claude/plugins/cache/codex/x.mjs",
+  "echo '`node ~/.claude/plugins/cache/codex/x.mjs`' > ~/.claude/plugins/cache/codex/x.mjs",
+  "echo '$(node ~/.claude/plugins/cache/codex/x.mjs)'; rm ~/.claude/plugins/cache/codex/x.mjs",
+  "echo '$(node ~/.claude/plugins/cache/codex/x.mjs)'; mv ~/.claude/plugins/cache/codex/x.mjs /tmp/stolen.mjs",
+  "bash -c 'node ~/.claude/plugins/cache/codex/x.mjs' > ~/.claude/plugins/cache/codex/x.mjs",
+  "Set-Content ~/.claude/plugins/cache/codex/x.mjs '$(node ~/.claude/plugins/cache/codex/x.mjs)'",
+  "NODE_OPTIONS='--import=data:text/javascript,x' node ~/.claude/plugins/cache/codex/x.mjs",
+  "$env:NODE_OPTIONS='--require=evil.js'; node ~/.claude/plugins/cache/codex/x.mjs",
+  'node ~/.claude/plugins/cache/ponytail/ponytail/5.3.3/scripts/uninstall.js',
+  'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs setup --disable-review-gate',
+  'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/../../../ponytail/ponytail/5.3.3/scripts/codex-companion.mjs',
 ] as const
 
 // Ordinary work: runs.
@@ -68,6 +85,10 @@ const ALLOWED = [
   'cat ~/.claude/settings.json | grep "a>b"',
   'rm -rf .claude-cache',
   'claude -p "plugin install tips"',
+  'node "C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs" setup --json',
+  'cat <<\'EOF\' | node "C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs" task --model gpt-6-astra\nreview it\nEOF',
+  'grep -n deny ~/.claude/settings.json | cut -c1-80',
+  'which codex',
 ] as const
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
