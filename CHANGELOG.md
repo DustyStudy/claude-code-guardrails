@@ -6,6 +6,11 @@
   changes to Claude Code's own config and code (`~/.claude`, `~/.claude.json`,
   the mod folders, project `.claude` settings), so an agent cannot switch off
   its own guardrails or plant a hook. Add it to `CLAUDE_CODE_PLUGIN_DIRS`.
+- self-guard: `node <codex-companion.mjs>` from the Codex plugin counts as a
+  reader, so `/codex:setup` and Codex tasks run from the main session, unless
+  another argument names a guarded path, it toggles the review gate, or the
+  command mentions `NODE_OPTIONS`. Other plugin scripts are still denied.
+  `cut` and `which` count as readers.
 - Removed clean-view, tf-reminder and codex-meter, which duplicated what
   Claude Code Desktop already shows or drew only in the CLI. Desktop has its
   own task list and hides tool calls; tf-reminder's status line never showed

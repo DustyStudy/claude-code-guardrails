@@ -81,7 +81,7 @@ const removesAbove = (command: string, cwd: string, home: string, guarded: Guard
 
 // Programs that only read or move around; anything else that touches a guarded path is a change.
 const READER = bin(
-  'cat|type|gc|Get-Content|ls|dir|gci|Get-ChildItem|Get-Item|gi|Test-Path|Resolve-Path|head|tail|less|more|grep|egrep|rg|Select-String|sls|wc|stat|diff|jq|echo|Write-Output|cd|pushd|popd|chdir|Set-Location|sl|pwd|Get-Location|Select-Object|Where-Object|Measure-Object|ConvertFrom-Json|Format-List|Out-String|realpath|dirname|basename',
+  'cat|cut|which|type|gc|Get-Content|ls|dir|gci|Get-ChildItem|Get-Item|gi|Test-Path|Resolve-Path|head|tail|less|more|grep|egrep|rg|Select-String|sls|wc|stat|diff|jq|echo|Write-Output|cd|pushd|popd|chdir|Set-Location|sl|pwd|Get-Location|Select-Object|Where-Object|Measure-Object|ConvertFrom-Json|Format-List|Out-String|realpath|dirname|basename',
 )
 const GIT = bin('git')
 const GIT_VALUE = /^(-C|-c|--git-dir|--work-tree|--namespace)$/
@@ -95,10 +95,30 @@ const isGitRead = (args: readonly string[]) =>
 const writesFile = (command: string) =>
   /\d*>>?(?!&)/.test(command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""').replace(/\d*>>?\s*(\/dev\/null|\$null|nul)\b|\d*>&\d/gi, ''))
 
-const isReadOnly = (command: string) =>
+const NODE = bin('node')
+// The Codex companion runs Codex and keeps its jobs outside the guarded dirs; other plugin scripts can install or uninstall.
+const CODEX_COMPANION = /^\/\.claude\/plugins\/cache\/openai-codex\/codex\/[^/]+\/scripts\/codex-companion\.mjs$/
+// node <companion> runs it without changing it: it must be node's first word (an option before it, such as -e or --import, runs
+// other code), no other argument may name a guarded path, and the review gate it can toggle is a hook in every later session.
+const isCodexRun = (args: readonly string[], cwd: string, home: string, guarded: Guarded) => {
+  const script = resolve(args[0] ?? '', cwd, home)
+
+  return (
+    script.startsWith(`${norm(home)}/`) &&
+    CODEX_COMPANION.test(script.slice(norm(home).length)) &&
+    !args.some(arg => /review-gate/.test(arg)) &&
+    !paths(args.slice(1).join(' '), cwd, home).some(path => isGuarded(path, guarded))
+  )
+}
+
+const isReadOnly = (command: string, cwd: string, home: string, guarded: Guarded) =>
   !writesFile(command) &&
   // Every call is a reader: a wrapper (bash -c, xargs, env) counts as a call of its own and is not one.
-  invocations(command, /./).length === invocations(command, READER).length + invocations(command, GIT).filter(isGitRead).length
+  invocations(command, /./).length ===
+    invocations(command, READER).length +
+      invocations(command, GIT).filter(isGitRead).length +
+      // NODE_OPTIONS anywhere can preload other code into the script.
+      (/NODE_OPTIONS/i.test(command) ? 0 : invocations(command, NODE).filter(args => isCodexRun(args, cwd, home, guarded)).length)
 
 // The claude CLI changes plugins, MCP servers and config without naming a path.
 const CLAUDE = bin('claude')
@@ -134,7 +154,7 @@ export const register: Register = on => {
       return { deny: `${$.plugin.name}: this changes Claude Code's plugins, MCP servers or config, ${DENY}` }
     }
 
-    return (mentions(e.command, cwd, home, guarded) && !isReadOnly(e.command)) || removesAbove(e.command, cwd, home, guarded)
+    return (mentions(e.command, cwd, home, guarded) && !isReadOnly(e.command, cwd, home, guarded)) || removesAbove(e.command, cwd, home, guarded)
       ? { deny: `${$.plugin.name}: this command changes files under ~/.claude, a mod folder or a project's .claude settings, ${DENY}` }
       : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))
