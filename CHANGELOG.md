@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- model-guard: `codex queue`, `resume` and `fork` count as CLI runs, since
+  each runs a model; before, only `exec`, `e` and `review` did.
 - shell.ts (all six guards): the rest of a heredoc's opening line is read as
   a command again. `cat <<EOF | terraform apply -auto-approve` got past
   terraform-guard, and the same held for every guard that shares the parser.

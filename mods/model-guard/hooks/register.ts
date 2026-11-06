@@ -8,7 +8,8 @@ const CODEX = /^(.*[\\/])?codex(\.exe|\.cmd|\.ps1)?$/i
 const COMPANION_RUN = /^(task|review|adversarial-review)$/
 // The companion's reviews take --model but no --effort (review rejects it, adversarial-review reads it as focus text), so Codex's configured effort applies.
 const COMPANION_REVIEW = /^(review|adversarial-review)$/
-const CLI_RUN = /^(exec|e|review)$/
+// queue sends a message to a saved session, and resume or fork with a prompt runs one: each on a model it may not name.
+const CLI_RUN = /^(exec|e|review|queue|resume|fork)$/
 
 // The flags and values a setting asks for, each flag with the value after it, if any: --model x --effort high.
 const required = (setting: string) => {
