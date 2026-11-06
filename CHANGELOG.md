@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- model-guard: `node -e`, `-p` or `-` (stdin) given the companion's path as
+  an argument is no longer taken for a Codex run. Found in a Codex review.
 - model-guard: the Codex companion's `review` and `adversarial-review` need
   only the flags other than `--effort`, which they do not take. Before,
   `/codex:review` could not run at all and `adversarial-review` read
