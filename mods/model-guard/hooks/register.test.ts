@@ -38,6 +38,11 @@ const CASES: readonly (readonly [string, string, boolean])[] = [
   ['a login check', 'codex login status', true],
   ['prose naming a run', 'echo "codex exec is how it runs"', true],
   ['an unrelated node script', 'node scripts/test-all.mjs', true],
+  // Found in Codex review: after -e, -p or -, a companion path is only an argument to the code.
+  ['eval code given the companion path as an argument', 'node -e "console.log(process.argv)" codex-companion.mjs task', true],
+  ['print code given the companion path as an argument', 'node --print=1 C:/x/codex-companion.mjs task', true],
+  ['stdin code given the companion path as an argument', 'node - C:/x/codex-companion.mjs task < x.js', true],
+  ['a task whose own prompt holds -e', `${COMPANION} task --model gpt-6.1-sol -e x`, false],
 ]
 
 const host = (on: On, env: Record<string, string>) => {

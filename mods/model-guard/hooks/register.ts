@@ -51,7 +51,9 @@ const codexRuns = (command: string) => [
   ...invocations(command, NODE).flatMap(all => {
     // Node's own flags come before the script, some with a value (--require node:fs), so the script is found by name.
     const at = all.findIndex(arg => /codex-companion\.mjs$/i.test(arg))
-    const args = at < 0 ? [] : all.slice(at)
+    // Code given with -e, -p or - (stdin) runs instead of a script, so a companion path after it is only an argument.
+    const isCode = all.slice(0, Math.max(at, 0)).some(arg => /^(-e|--eval|-p|--print|-pe|-)(=|$)/.test(arg))
+    const args = at < 0 || isCode ? [] : all.slice(at)
 
     return COMPANION_RUN.test(args[1] ?? '')
       ? [{ args: args.slice(2), takesEffort: !COMPANION_REVIEW.test(args[1] ?? '') }]
