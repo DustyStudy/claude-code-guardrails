@@ -31,6 +31,11 @@ const CASES: readonly (readonly [string, string, boolean])[] = [
   // Found in Codex review.
   ['the CLI exec that switches effort with -c=', 'codex exec -m gpt-6-astra -c model_reasoning_effort=high -c=model_reasoning_effort=low x', false],
   ['the CLI exec whose prompt is help', 'codex exec -m gpt-6.1-sol -- help', false],
+  ['the CLI queue to a saved session', 'codex queue --thread abc --message "go on"', false],
+  ['the CLI resume with a prompt', 'codex resume --last "go on"', false],
+  ['the CLI fork with a prompt', 'codex fork --last "go on"', false],
+  ['the CLI resume on the model', 'codex resume --last -m gpt-6-astra -c model_reasoning_effort=high "go on"', true],
+  ['the CLI cloud task list', 'codex cloud list', true],
   ['the CLI exec with an unrelated -c', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high -c sandbox_mode=read-only "x"', true],
   // Found in Codex review: the companion reads -m, -model and --m as the model, and the last one wins.
   ['a review that switches model with -m', `${COMPANION} review --model gpt-6-astra -m gpt-6.1-sol`, false],
