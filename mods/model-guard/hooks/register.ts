@@ -26,8 +26,9 @@ const spellings = (flag: string) => {
   return (name === 'model' ? [name, 'm'] : [name]).flatMap(one => [`-${one}`, `--${one}`])
 }
 
-// A flag with its value as one word (--model=x) or two (--model x). The last one given wins, and words after -- are the prompt.
-const has = (all: readonly string[], { flag, value }: { flag: string; value?: string }) => {
+// A flag with its value as one word (--model=x) or two (--model x). The last one given wins, or with every, each one must match; words
+// after -- are the prompt.
+const has = (all: readonly string[], { flag, value }: { flag: string; value?: string }, every = false) => {
   const args = all.includes('--') ? all.slice(0, all.indexOf('--')) : all
   const names = spellings(flag)
 
@@ -42,7 +43,47 @@ const has = (all: readonly string[], { flag, value }: { flag: string; value?: st
     return names.includes(arg) ? [args[i + 1]] : inline ? [arg.slice(inline.length + 1)] : []
   })
 
-  return given.at(-1) === value
+  return every ? given.length > 0 && given.every(one => one === value) : given.at(-1) === value
+}
+
+// The CLI picks a model and effort in more ways than the companion: -c model=x, -c model_reasoning_effort=x, -mx and -m=x; and a
+// profile, --oss or another provider picks a model of its own. Each becomes the --model or --effort it amounts to.
+const cliArgs = (args: readonly string[]) => {
+  const out: string[] = []
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? ''
+
+    if (arg === '--') {
+      out.push(...args.slice(i))
+      break
+    }
+
+    const config = /^(-c|--config)$/.test(arg) ? args[++i] : /^(--config=|-c=?).+=/.test(arg) ? arg.replace(/^(--config=|-c=?)/, '') : undefined
+
+    if (config !== undefined) {
+      const [key = '', ...rest] = config.split('=')
+      const value = rest.join('=')
+
+      if (key === 'model') {
+        out.push('--model', value)
+      } else if (key === 'model_reasoning_effort') {
+        out.push('--effort', value)
+      } else {
+        out.push(...(/^(model_provider|profile)$/.test(key) ? ['--model', config] : ['-c', config]))
+      }
+    } else if (/^(-p|--profile|--local-provider)$/.test(arg)) {
+      out.push('--model', `${arg} ${args[++i] ?? ''}`)
+    } else if (/^(--profile=|--local-provider=|--oss$)/.test(arg)) {
+      out.push('--model', arg)
+    } else if (/^-m./.test(arg)) {
+      out.push('--model', arg.slice(arg[2] === '=' ? 3 : 2))
+    } else {
+      out.push(arg)
+    }
+  }
+
+  return out
 }
 
 // The argument lists of the Codex runs in a command: the ones that spend the plan, not --version, --help or login.
@@ -56,12 +97,18 @@ const codexRuns = (command: string) => [
     const args = at < 0 || isCode ? [] : all.slice(at)
 
     return COMPANION_RUN.test(args[1] ?? '')
-      ? [{ args: args.slice(2), takesEffort: !COMPANION_REVIEW.test(args[1] ?? '') }]
+      ? [{ args: args.slice(2), takesEffort: !COMPANION_REVIEW.test(args[1] ?? ''), every: false }]
       : []
   }),
+  // Which of --model and -c model= the CLI lets win is not ours to guess, so every model it is given must match.
   ...invocations(command, CODEX)
-    .filter(args => args.some(arg => CLI_RUN.test(arg)) && !args.some(arg => /^(-h|--help|help)$/.test(arg)))
-    .map(args => ({ args, takesEffort: true })),
+    // Help is -h or --help before any --, or help as the first word (codex help exec); a prompt of help is still a run.
+    .filter(args => {
+      const options = args.includes('--') ? args.slice(0, args.indexOf('--')) : args
+
+      return args.some(arg => CLI_RUN.test(arg)) && args[0] !== 'help' && !options.some(arg => /^(-h|--help)$/.test(arg))
+    })
+    .map(args => ({ args: cliArgs(args), takesEffort: true, every: true })),
 ]
 
 export const register: Register = on => {
@@ -76,8 +123,8 @@ export const register: Register = on => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const setting = (await $.env.get('MODEL_GUARD_CODEX_ARGS'))?.trim() ?? ''
     const wanted = required(setting)
-    const missing = codexRuns(e.command).flatMap(({ args, takesEffort }) =>
-      wanted.filter(one => (takesEffort || one.flag !== '--effort') && !has(args, one)),
+    const missing = codexRuns(e.command).flatMap(({ args, takesEffort, every }) =>
+      wanted.filter(one => (takesEffort || one.flag !== '--effort') && !has(args, one, every)),
     )
 
     if (missing.length > 0) {

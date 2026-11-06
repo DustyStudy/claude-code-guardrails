@@ -61,6 +61,25 @@ const DENIED = [
   "NODE_OPTIONS='--import=data:text/javascript,x' node ~/.claude/plugins/cache/codex/x.mjs",
   "$env:NODE_OPTIONS='--require=evil.js'; node ~/.claude/plugins/cache/codex/x.mjs",
   'node ~/.claude/plugins/cache/ponytail/ponytail/5.3.3/scripts/uninstall.js',
+  // A heredoc a program can run is still searched; so is the line that opens it.
+  'bash <<EOF\nrm ~/.claude/settings.json\nEOF',
+  'cat <<EOF | sh\nrm ~/.claude/settings.json\nEOF',
+  'cat <<EOF | xargs rm\n~/.claude/settings.json\nEOF',
+  'cat <<EOF | pwsh.exe\nRemove-Item ~/.claude/settings.json\nEOF',
+  'node <<EOF\nrequire("fs").rmSync("C:/Users/me/.claude/settings.json")\nEOF',
+  'git apply <<EOF\n--- a/C:/Users/me/.claude/settings.json\nEOF',
+  'cat <<EOF > ~/.claude/settings.json\n{}\nEOF',
+  // Found in Codex review.
+  "cat <<EOF\n$(printf '{}' > ~/.claude/settings.json)\nEOF",
+  "cat > /tmp/guard-script <<'EOF'\nprintf '{}' > ~/.claude/settings.json\nEOF\nsh /tmp/guard-script",
+  "cat <<'EOF' |\nprintf '{}' > ~/.claude/settings.json\nEOF\nsh",
+  "cat <<<EOF\nprintf '{}' > ~/.claude/settings.json\nEOF",
+  "git -c core.editor=s'h' commit --allow-empty -t /dev/stdin <<'EOF'\nprintf '{}' > ~/.claude/settings.json\nEOF",
+  "git commit -F - -e <<'EOF'\nnote ~/.claude/settings.json\nEOF",
+  // Found in the Codex confirmation pass.
+  "cat <<'EOF' | # comment\nprintf '{}' > ~/.claude/settings.json\nEOF\nsh",
+  "git commit --allow-empty -F - -ae <<'EOF'\nprintf '{}' > ~/.claude/settings.json\nEOF",
+  "cat <<'EOF' |\nprintf '{}' > ~/.claude/settings.json\nEOF\nenv sh",
   'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs setup --disable-review-gate',
   'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/../../../ponytail/ponytail/5.3.3/scripts/codex-companion.mjs',
 ] as const
@@ -88,6 +107,9 @@ const ALLOWED = [
   'node "C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs" setup --json',
   'cat <<\'EOF\' | node "C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs" task --model gpt-6-astra\nreview it\nEOF',
   'grep -n deny ~/.claude/settings.json | cut -c1-80',
+  // A heredoc read as data names no path to change.
+  "git commit -F - <<'EOF'\ndocs: note that ~/.claude/settings.json is guarded\nEOF",
+  "cat <<'EOF' | node \"C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs\" task --model gpt-6-astra\nreview what writes ~/.claude/settings.json\nEOF",
   'which codex',
 ] as const
 
@@ -110,6 +132,16 @@ for (const tool of ['Bash', 'PowerShell'] as const) {
     })
   }
 }
+
+test('NODE_OPTIONS in the session environment stops the Codex companion counting as a reader', async ($, on) => {
+  mock.env(on, { ...ENV, NODE_OPTIONS: '--require=evil.js' })
+  on('session.cwd', () => ({ value: 'C:\\repos\\app' }))
+  on('tool.call', { tool: ['Bash'] }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+
+  const command = 'node "C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs" setup --json'
+
+  expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command }))).toContain('self-guard')
+})
 
 test('a writing command run from inside ~/.claude is denied', async ($, on) => {
   world(on, 'C:\\Users\\me\\.claude')

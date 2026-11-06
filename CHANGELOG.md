@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- shell.ts (all six guards): the rest of a heredoc's opening line is read as
+  a command again. `cat <<EOF | terraform apply -auto-approve` got past
+  terraform-guard, and the same held for every guard that shares the parser.
+  Also: `<<<` is a here-string, not a heredoc that hid the lines after it; an
+  unquoted heredoc's `$( )` and backticks count as calls; and a heredoc piped
+  to a shell after its end (`cat <<EOF |` ... `EOF` `sh`) is read as its script.
+- self-guard: a heredoc fed only to a reader, `git commit`/`tag` or the Codex
+  companion is data, so a commit message or Codex brief that names
+  `~/.claude` runs. One fed to a shell, `node` or any other program is still
+  searched. `NODE_OPTIONS` in the session's environment, not only in the
+  command, stops the companion counting as a reader.
+- model-guard: the `codex` CLI has no `--effort`, so no CLI run could pass the
+  guard and start. It now takes `-c model_reasoning_effort=x` as the effort,
+  reads `-c model=x`, `-mx` and `-m=x` as the model (each must match), and
+  denies a profile, `--oss` or another provider.
 - model-guard: `node -e`, `-p` or `-` (stdin) given the companion's path as
   an argument is no longer taken for a Codex run. Found in a Codex review.
 - model-guard: the Codex companion's `review` and `adversarial-review` need
