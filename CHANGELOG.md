@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- model-guard: the Codex companion's `review` and `adversarial-review` need
+  only the flags other than `--effort`, which they do not take. Before,
+  `/codex:review` could not run at all and `adversarial-review` read
+  `--effort medium` as its focus text.
+- model-guard: a later `-m`, `-model` or `--m=` that switches the model, or
+  `-effort` the effort, now counts, as the companion reads them; and a Node
+  option with a value before the script (`--require node:fs`) no longer hides
+  a companion run. Found in a Codex review.
 - self-guard: new mod. Denies edits, shell writes and `claude plugin`/`mcp`/`config`
   changes to Claude Code's own config and code (`~/.claude`, `~/.claude.json`,
   the mod folders, project `.claude` settings), so an agent cannot switch off
