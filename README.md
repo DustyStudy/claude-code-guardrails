@@ -163,8 +163,10 @@ when it would be worth lifting.
   skips a log over 4 MiB. A Codex run is recognized by its command line.
 - **model-guard** checks Codex runs made through the Codex plugin's
   companion script or the `codex` CLI by name, and reads the flags as
-  written: `-m` does not stand in for `--model`, and a flag set only in
-  Codex's config does not count.
+  written: `-m`, `-model` and `--model=` all count as `--model` and the last
+  one wins, and a flag set only in Codex's config does not count. The companion's `review` and
+  `adversarial-review` take no `--effort`, so they need only the other flags
+  and run at the effort in Codex's config.
 - **destructive-guard** reads a delete's targets as written: a path built
   at run time, `find -delete`, a script file, or SQL in a file given with
   `-f` is not read. The project is the session's folder unless that is home
