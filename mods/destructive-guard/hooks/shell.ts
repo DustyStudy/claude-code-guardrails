@@ -6,8 +6,11 @@ const WRAPPER =
 // What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
 const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
 const OPERATOR = /^[;|&(){}`\n]$/
-const HEREDOC = /<<-?\s*["']?(\w+)["']?([\s\S]*?)\n\s*\1\b/g
-// A shell named on a heredoc's opening line reads the body as its script: bash <<EOF, cat <<EOF | sh.
+// A heredoc: its quote (a quoted tag keeps $( ) in the body unexpanded), tag, and the rest of the opening line with the body.
+// <<< is a here-string, not one.
+export const HEREDOC = /(?<!<)<<(?!<)-?\s*(["']?)(\w+)\1([\s\S]*?)\n\s*\2\b/g
+// A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
+// cat <<EOF | sh, and cat <<EOF | ... EOF sh.
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 const SUBSTITUTION = /\$\(([^()]*)\)|`([^`\n]*)`/
 // A word (quoted runs and ${VAR} kept whole), or one operator that ends a command. A brace is one: a group, or a PowerShell script block.
@@ -21,7 +24,8 @@ const withoutRedirections = (words: readonly string[]) =>
     (word, i) => !/^\d*[<>]/.test(word) && !/^\d*[<>]+&?$/.test(words[i - 1] ?? ''),
   )
 
-// shortcut: no variable or alias expansion, and heredoc bodies are skipped unless a shell on the opening line reads them; it errs toward finding a call, so `echo '$(prog …)'` and `bash -c echo prog …` count as calls; cost grows with the square of the number of substitutions. Upgrade to a real shell parser if any of these bites.
+// shortcut: no variable or alias expansion, and a heredoc body is read only for its substitutions, unless a shell on its opening line or
+// piped to after its end reads it all; a body saved to a file and run later is not followed; it errs toward finding a call, so `echo '$(prog …)'` and `bash -c echo prog …` count as calls; cost grows with the square of the number of substitutions. Upgrade to a real shell parser if any of these bites.
 /** The argument list of every call to `binary` in `source`, wrappers, subshells and substitutions included. */
 export const invocations = (source: string, binary: RegExp, depth = 0): string[][] => {
   const found: string[][] = []
@@ -34,15 +38,27 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
   let text = source
     .replace(/\\\r?\n/g, '')
     .replace(/`\r?\n/g, ' ')
-    .replace(HEREDOC, (_, _tag: string, rest: string, at: number, whole: string) => {
+    .replace(HEREDOC, (match: string, quote: string, _tag: string, rest: string, at: number, whole: string) => {
       // A comment on the opening line (cat > x.sh <<EOF # bash script) names no shell.
       const opening = `${whole.slice(whole.lastIndexOf('\n', at) + 1, at)} ${rest.split('\n')[0]}`.replace(/(^|\s)#.*$/, '')
+      // The whole line after the end, so a wrapped shell (env sh) counts too.
+      const pipedTo = /\|\s*$/.test(opening) ? (whole.slice(at + match.length).trim().split('\n')[0] ?? '') : ''
+      const body = rest.includes('\n') ? rest.slice(rest.indexOf('\n') + 1) : ''
 
-      if (SHELL.test(opening)) {
-        found.push(...invocations(rest.slice(rest.indexOf('\n') + 1), binary, depth + 1))
+      if (SHELL.test(opening) || SHELL.test(pipedTo)) {
+        found.push(...invocations(body, binary, depth + 1))
+      } else if (!quote) {
+        // An unquoted body runs its substitutions wherever it goes, innermost first as below: cat <<EOF $(terraform apply) EOF.
+        let left = body
+
+        for (let one = SUBSTITUTION.exec(left); one !== null; one = SUBSTITUTION.exec(left)) {
+          found.push(...invocations(one[1] ?? one[2] ?? '', binary, depth + 1))
+          left = left.replace(one[0], ' ')
+        }
       }
 
-      return ''
+      // The body goes, but the rest of the opening line stays: cat <<EOF | terraform apply runs terraform.
+      return rest.split('\n')[0] ?? ''
     })
 
   // A substitution runs its body wherever it sits, inside double quotes too.

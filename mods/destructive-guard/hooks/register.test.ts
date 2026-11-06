@@ -44,6 +44,7 @@ const DENIED = [
   `sqlite3 app.db "DELETE FROM sessions;"`,
   "mysql -e 'DROP DATABASE prod'",
   "psql <<'SQL'\nDROP SCHEMA public CASCADE;\nSQL",
+  'cat <<EOF | rm -rf ~\nx\nEOF',
   'redis-cli FLUSHALL',
   `mongosh --eval "db.dropDatabase()"`,
   'mkfs.ext4 /dev/sdb1',

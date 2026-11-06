@@ -16,6 +16,22 @@ const CASES: readonly (readonly [string, string, boolean])[] = [
   ['a companion review with no model', `${COMPANION} review`, false],
   ['an adversarial review on another model', `${COMPANION} adversarial-review --model gpt-6.1-sol`, false],
   ['the CLI review still needs the effort', `codex review --model gpt-6-astra`, false],
+  // The CLI has no --effort: it takes the effort, and can take the model, through -c.
+  ['the CLI exec with the effort through -c', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high "x"', true],
+  ['the CLI exec with both through -c', 'codex exec -c model=gpt-6-astra --config=model_reasoning_effort=high "x"', true],
+  ['the CLI exec with the model as -mx', 'codex exec -mgpt-6-astra -c model_reasoning_effort=high "x"', true],
+  ['the CLI exec that switches model with -c', 'codex exec --model gpt-6-astra -c model=gpt-6.1-sol -c model_reasoning_effort=high "x"', false],
+  ['the CLI exec that switches model before --model', 'codex -c model=gpt-6.1-sol exec --model gpt-6-astra -c model_reasoning_effort=high "x"', false],
+  ['the CLI exec that switches model with -m=', 'codex exec --model gpt-6-astra -m=gpt-6.1-sol -c model_reasoning_effort=high "x"', false],
+  ['the CLI exec that switches model with -mx', 'codex exec --model gpt-6-astra -mgpt-6.1-sol -c model_reasoning_effort=high "x"', false],
+  ['the CLI exec that switches effort with -c', `codex exec ${ARGS} -c model_reasoning_effort=low "x"`, false],
+  ['the CLI exec on a profile', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high -p fast "x"', false],
+  ['the CLI exec on a local model', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high --oss "x"', false],
+  ['the CLI exec on another provider', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high -c model_provider=other "x"', false],
+  // Found in Codex review.
+  ['the CLI exec that switches effort with -c=', 'codex exec -m gpt-6-astra -c model_reasoning_effort=high -c=model_reasoning_effort=low x', false],
+  ['the CLI exec whose prompt is help', 'codex exec -m gpt-6.1-sol -- help', false],
+  ['the CLI exec with an unrelated -c', 'codex exec --model gpt-6-astra -c model_reasoning_effort=high -c sandbox_mode=read-only "x"', true],
   // Found in Codex review: the companion reads -m, -model and --m as the model, and the last one wins.
   ['a review that switches model with -m', `${COMPANION} review --model gpt-6-astra -m gpt-6.1-sol`, false],
   ['a task that switches model with -model', `${COMPANION} task ${ARGS} -model gpt-6.1-sol`, false],

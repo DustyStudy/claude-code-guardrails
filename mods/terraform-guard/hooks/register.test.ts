@@ -3,6 +3,15 @@ import { expect, test } from 'claude-code/testing'
 const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform apply -auto-approve', false],
   ['terraform destroy -auto-approve', false],
+  // The rest of a heredoc's opening line is a command too.
+  ['cat <<EOF | terraform apply -auto-approve\nyes\nEOF', false],
+  // A here-string is no heredoc; an unquoted heredoc runs its substitutions; one piped to a later shell is its script.
+  ['cat <<<EOF\nterraform apply -auto-approve\nEOF', false],
+  ['cat <<EOF\n$(terraform apply -auto-approve)\nEOF', false],
+  ["cat <<'EOF' |\nterraform apply -auto-approve\nEOF\nsh", false],
+  ["cat <<'EOF'\n$(terraform apply -auto-approve)\nEOF", true],
+  ["cat <<EOF\n$(terraform apply $(printf -- '-auto-approve'))\nEOF", false],
+  ["cat <<'EOF' |\nterraform apply -auto-approve\nEOF\nenv sh", false],
   ['cd infra && terraform -chdir=stack apply --auto-approve tfplan', false],
   ['AWS_PROFILE=security terraform apply', false],
   ['terraform apply -var-file prod.tfvars', false],

@@ -166,7 +166,10 @@ when it would be worth lifting.
   written: `-m`, `-model` and `--model=` all count as `--model` and the last
   one wins, and a flag set only in Codex's config does not count. The companion's `review` and
   `adversarial-review` take no `--effort`, so they need only the other flags
-  and run at the effort in Codex's config.
+  and run at the effort in Codex's config. The CLI has no `--effort` either:
+  it takes `-c model_reasoning_effort=x`, and `-c model=x`, `-mx` and `-m=x`
+  count as the model, every one of which must match; a profile, `--oss` or
+  another provider is denied.
 - **destructive-guard** reads a delete's targets as written: a path built
   at run time, `find -delete`, a script file, or SQL in a file given with
   `-f` is not read. The project is the session's folder unless that is home
