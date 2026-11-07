@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- secret-allow-guard (new): at session start, warns when a Claude settings
+  file holds a permission rule with a literal secret, and when the project's
+  `.claude/settings.local.json` is tracked by git or not git-ignored.
 - model-guard: `codex queue`, `resume` and `fork` count as CLI runs, since
   each runs a model; before, only `exec`, `e` and `review` did.
 - shell.ts (all six guards): the rest of a heredoc's opening line is read as

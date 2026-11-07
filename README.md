@@ -45,6 +45,7 @@ much of your Claude and Codex plans is left.
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
+| [secret-allow-guard](mods/secret-allow-guard) | Reminder | CLI and Desktop | At session start, warns when a permission rule in the project's or your own `.claude/settings*.json` holds a literal secret ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | CLI and Desktop | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | CLI and Desktop | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
@@ -150,6 +151,13 @@ when it would be worth lifting.
 - **commit-identity-guard** reads a message file given with `-F`, `--file` or
   `--body-file`, but not a message piped in with `-F -`. It identifies a repo
   by its `origin` remote.
+- **secret-allow-guard** checks at session start, so a rule approved during
+  a session is caught by the next one. It matches known key formats and
+  secrets typed after a flag or variable name, so a bare password with no
+  marker next to it is missed; a value written as `$VAR` passes. Ignore the
+  file in every repo on the machine, including ones cloned later, with
+  `git config --global core.excludesfile ~/.gitignore_global` and
+  `.claude/settings.local.json` as a line in that file.
 - **aws-context** takes a profile's region from the command, then the
   environment, then the profile's section of `~/.aws/config` (or
   `AWS_CONFIG_FILE`), which it rereads at most every 30 seconds. It does not
