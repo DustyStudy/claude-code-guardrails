@@ -7,6 +7,13 @@ const left = atom({ plugin: 'cleanup-check', key: 'left' } as const, [] as strin
 // Saved Terraform plans: tfplan, gd.tfplan, prod-tfplan.out.
 const PLAN_FILE = /(^|\/)[^/]*tfplan[^/]*$/i
 
+// Keys, certificates, keystores, SSH keys, .env files, Terraform state and cloud credential files, by file name.
+// shortcut: an ignored folder (secrets/) comes from git as one entry, so files inside it go unseen; list ignored files one by one if that matters.
+const SECRET_FILE =
+  /(^|\/)([^/]+\.(pem|key|p12|pfx|jks|keystore|crt|cer|ppk|kdbx)|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|\.env(\.[^/]+)?|[^/]*\.tfstate(\.[^/]+)?|(application_default_)?credentials(\.json)?)$/i
+// Templates with no real values: .env.example, .env.example.local.
+const SECRET_TEMPLATE = /\.(example|sample|template|dist)(\.[^/]*)?$/i
+
 export type Repo = {
   // Empty on a detached HEAD.
   current: string
@@ -32,6 +39,7 @@ export const leftovers = ({ current, base, merged, gone, pushed, elsewhere, untr
   const done = merged.filter(one => isOther(one) && isMerged(one))
   const orphans = gone.filter(one => isOther(one) && isGone(one))
   const plans = untracked.filter(one => PLAN_FILE.test(one))
+  const secrets = untracked.filter(one => SECRET_FILE.test(one) && !SECRET_TEMPLATE.test(one))
   const isCurrent = current !== '' && current !== base
 
   return [
@@ -42,6 +50,9 @@ export const leftovers = ({ current, base, merged, gone, pushed, elsewhere, untr
       ? [`${orphans.length} branch${orphans.length > 1 ? 'es' : ''} whose remote is gone, delete if merged: ${orphans.join(', ')}`]
       : []),
     ...(plans.length > 0 ? [`${plans.length} saved plan${plans.length > 1 ? 's' : ''}: ${plans.join(', ')}`] : []),
+    ...(secrets.length > 0
+      ? [`${secrets.length} key, cert or secret file${secrets.length > 1 ? 's' : ''} to delete or move out: ${secrets.join(', ')}`]
+      : []),
   ]
 }
 
