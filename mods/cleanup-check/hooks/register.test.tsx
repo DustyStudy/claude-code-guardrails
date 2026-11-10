@@ -42,6 +42,33 @@ test('other finished branches and saved plans are listed, not ones in another wo
   ])
 })
 
+test('keys, certs, .env files and state left in the tree are listed; templates and look-alikes are not', () => {
+  expect(
+    leftovers({
+      ...CLEAN,
+      untracked: [
+        'certs/server.pem',
+        'tls.KEY',
+        'id_ed25519',
+        '.env',
+        'app/.env.local',
+        '.env.example',
+        '.env.example.local',
+        'terraform.tfstate.backup',
+        '.aws/credentials',
+        'id_ed25519_sk',
+        'gcloud/application_default_credentials.json',
+        'keyboard.md',
+        'monkey.ts',
+        'certs/',
+        'environment.tf',
+      ],
+    }),
+  ).toEqual([
+    '9 key, cert or secret files to delete or move out: certs/server.pem, tls.KEY, id_ed25519, .env, app/.env.local, terraform.tfstate.backup, .aws/credentials, id_ed25519_sk, gcloud/application_default_credentials.json',
+  ])
+})
+
 // Answers git beneath the mod from a table of argv prefixes, and records the status line.
 const repo = (on: On, answers: Record<string, string | null>) => {
   const status: (string | undefined)[] = []
