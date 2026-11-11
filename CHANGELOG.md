@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- taint-guard: `TAINT_GUARD_BROWSER_HOSTS` names sites where the browser
+  tools work without tainting the session. The guard reads tab addresses from
+  the browser's own tab list before and after each call, never from page
+  text. In a tainted session one step on a listed tab still runs; page
+  scripts and multi-step batches do not. Any other site, or a tab whose
+  address the list does not confirm, taints or is denied as before.
 - secret-allow-guard (new): at session start, warns when a Claude settings
   file holds a permission rule with a literal secret, and when the project's
   `.claude/settings.local.json` is tracked by git or not git-ignored.
