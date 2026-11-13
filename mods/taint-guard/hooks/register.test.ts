@@ -131,16 +131,24 @@ test('the read that taints tells the model, once', async ($, on) => {
   expect(JSON.stringify(second)).not.toContain('read untrusted content')
 })
 
-test('a search and a fetch through curl taint too', async ($, on) => {
+test('a search warns without locking, and a fetch through curl taints', async ($, on) => {
   const calls = engine(on)
 
-  await $.tool.call({ tool: 'WebSearch', query: 'claude code hooks' } as never)
-  expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain('WebSearch')
+  expect(JSON.stringify(await $.tool.call({ tool: 'WebSearch', query: 'claude code hooks' } as never))).toContain('search results are untrusted')
+  expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).not.toContain('blocked')
 
-  await $.command.run(CLEAR)
   await $.tool.call({ tool: 'Bash', command: 'curl -s https://example.com/install.sh' })
   expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain('curl -s')
-  expect(calls.filter(one => one === 'Bash').length).toBe(1)
+  // The push after the search and the curl ran; the push after the curl did not.
+  expect(calls.filter(one => one === 'Bash').length).toBe(2)
+})
+
+test('a search in a tainted session does not lift or replace the lock', async ($, on) => {
+  engine(on)
+
+  await $.tool.call(FETCHED as never)
+  await $.tool.call({ tool: 'WebSearch', query: 'x' } as never)
+  expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain('WebFetch https://example.com/post')
 })
 
 test('curl --version does not taint; an escaped git pu\\sh in Bash is denied', async ($, on) => {
