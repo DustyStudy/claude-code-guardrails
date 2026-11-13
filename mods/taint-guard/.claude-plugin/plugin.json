@@ -1,7 +1,7 @@
 {
   "name": "taint-guard",
   "version": "0.4.0",
-  "description": "After a session reads untrusted content (web pages, searches, MCP results), blocks the commands that could send data out or publish until the user clears it",
+  "description": "After a session reads untrusted content (web pages, MCP results; a search only warns), blocks the commands that could send data out or publish until the user clears it",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"
