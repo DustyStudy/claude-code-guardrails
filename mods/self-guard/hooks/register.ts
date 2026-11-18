@@ -57,6 +57,31 @@ const resolve = (path: string, cwd: string, home: string) => {
   return norm(isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`)
 }
 
+// A path built through a variable ($d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md") names no guarded path until the variable is filled in.
+// This fills in simple assignments (PowerShell $x = v, $env:X = v, bash x=v, export x=v) and Join-Path, up to three levels deep,
+// so the command can be read a second time as it will run. The guard then checks both spellings.
+// shortcut: only literal assignments and Join-Path are followed; Set-Variable, a value from a command or another file, and 8.3 names
+// are not. For those, make the dirs read-only to Claude's account.
+const ASSIGNMENT = /((?:^|[;&|\n({])\s*)(?:(?:export|local|declare|set)\s+)?\$?(?:env:)?(\w+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s;|&(){}]+)/g
+const JOIN_PATH = /Join-Path\s+(?:-Path\s+)?("(?:\\.|[^"\\])*"|'[^']*'|[^\s;|&()]+)\s+(?:-ChildPath\s+)?("(?:\\.|[^"\\])*"|'[^']*'|[^\s;|&()]+)/gi
+const unquoted = (word: string) => word.replace(/^["']|["']$/g, '')
+const use = (name: string) => new RegExp(String.raw`\$(?:env:)?(?:${name}(?!\w)|\{${name}\})`, 'gi')
+
+const expandVariables = (command: string) => {
+  const joined = command.replace(JOIN_PATH, (_, base: string, child: string) => `${unquoted(base)}/${unquoted(child)}`)
+  const values = new Map([...joined.matchAll(ASSIGNMENT)].map(([, , name, value]) => [name ?? '', unquoted(value ?? '')] as const))
+
+  // A value can name an earlier variable: $c="$d\.claude".
+  for (let round = 0; round < 3; round++) {
+    for (const [name, value] of values) {
+      values.set(name, [...values].reduce((all, [other, text]) => (other === name ? all : all.replace(use(other), () => text)), value))
+    }
+  }
+
+  // The assignments themselves go, so only where a variable is used shows.
+  return [...values].reduce((all, [name, value]) => all.replace(use(name), () => value), joined.replace(ASSIGNMENT, (_, lead: string) => lead))
+}
+
 // A command line's words, quoted runs kept whole (a path can hold spaces), as paths: -Path:x and of=x name x, and a,b is two.
 const paths = (command: string, cwd: string, home: string) =>
   (command.match(/(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;|&()<>`])+/g) ?? [])
@@ -202,8 +227,14 @@ export const register: Register = on => {
       return { deny: `${$.plugin.name}: this changes Claude Code's plugins, MCP servers or config, ${DENY}` }
     }
 
-    return (mentions(command, cwd, home, guarded, preloads) && !isReadOnly(command, cwd, home, guarded, preloads)) ||
-      removesAbove(command, cwd, home, guarded)
+    // The command as written, and with its variables filled in: a path split across them is guarded either way.
+    const changes = [command, expandVariables(command)].some(
+      view =>
+        (mentions(view, cwd, home, guarded, preloads) && !isReadOnly(view, cwd, home, guarded, preloads)) ||
+        removesAbove(view, cwd, home, guarded),
+    )
+
+    return changes
       ? { deny: `${$.plugin.name}: this command changes files under ~/.claude, a mod folder or a project's .claude settings, ${DENY}` }
       : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))

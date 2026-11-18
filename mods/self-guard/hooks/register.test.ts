@@ -37,6 +37,16 @@ const DENIED = [
   'claude plugin marketplace add evil/repo',
   'claude mcp add evil -- npx evil',
   'claude config set -g autoUpdates false',
+  // A path built through a variable is filled in before it is read.
+  '$d="$HOME\\.claude"; Copy-Item x.md "$d\\CLAUDE.md" -Force',
+  '$d = "$env:USERPROFILE\\.claude"; Set-Content $d\\settings.json "{}"',
+  '$d="$HOME"; $c="$d\\.claude"; Remove-Item $c\\CLAUDE.md',
+  'd=~/.claude; rm $d/settings.json',
+  '$h=$HOME; $c=".claude"; Set-Content "$h\\$c\\settings.json" "{}"',
+  'h=~; c=.claude; echo {} > $h/$c/settings.json',
+  'export D="${HOME}/.claude" && echo x > "$D/CLAUDE.md"',
+  'Copy-Item x.md (Join-Path $HOME ".claude\\CLAUDE.md")',
+  '$d=Join-Path $HOME ".claude"; Set-Content "$d\\settings.json" "{}"',
   // Found in review.
   'claude plugins disable self-guard',
   'claude --model sonnet plugin disable self-guard',
@@ -86,6 +96,10 @@ const DENIED = [
 
 // Ordinary work: runs.
 const ALLOWED = [
+  '$d="$HOME\\.claude"; Get-Content "$d\\CLAUDE.md"',
+  'd=~/.claude; cat $d/settings.json',
+  '$dir="C:\\repos\\app"; Copy-Item x.md "$dir\\notes.md"',
+  '$d="C:\\repos\\app"; $dd="$HOME\\.claude"; Set-Content $d\\a.txt x',
   'cat ~/.claude/settings.json',
   'Get-Content C:\\Users\\me\\.claude\\CLAUDE.md',
   'ls -la ~/.claude',
