@@ -23,7 +23,13 @@ jobs:
       - name: Harden runner
         uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
         with:
-          egress-policy: audit
+          # Only GitHub (checkout) and the npm registry (the pinned Claude Code and its
+          # platform binary) are reached; Node comes from the runner's tool cache.
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            registry.npmjs.org:443
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,3 +48,5 @@ jobs:
 
       - name: Test every mod
         run: npm test
+        env:
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
