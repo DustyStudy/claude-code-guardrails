@@ -68,7 +68,7 @@ const RULES: readonly (readonly [string, boolean])[] = [
   [`Bash(curl -H "${AUTH} ${'s1'.repeat(4)}" https://api.example.com)`, true],
   [`Bash(SUPABASE_SECRET_KEY=sb_secret_${'q'.repeat(24)} node app.js)`, true],
   // Found in red-team review.
-  ['Bash(curl -u admin:hunter2 https://api.example.com)', true],
+  [`Bash(curl -u admin:${'hunter'}2 https://api.example.com)`, true],
   [`Bash(curl -H "${AUTH.replace('Bearer', 'Basic')} ${'dXNlcjpw'.repeat(2)}==" https://api.example.com)`, true],
   ['Bash(docker login -u me -p hunter2 registry.example.com)', true],
   ['Bash(redis-cli -a hunter2 ping)', true],
