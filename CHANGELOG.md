@@ -35,6 +35,69 @@
   it is known to stand alone, so `terragrunt run-all apply
   --terragrunt-working-dir live`, `tofu apply -exclude x` and `terragrunt
   --working-dir modules apply -auto-approve` are denied.
+- destructive-guard 0.6.1: closes spellings found in a red-team pass. git's
+  shortened long options (`reset --har`, `push --mirr`, `clean --forc`,
+  `switch --discard`), `git --config-env k=V reset --hard`, `git -c
+  clean.requireForce=false clean`, and `restore ./*` or `restore ..` are
+  denied like the plain forms. So are `rm --r --f`, `rm -rf ~name`,
+  `rd /s/q`, and a relative delete after `Push-Location`. SQL is also read
+  without its comments (`DROP/**/TABLE`, `DELETE FROM t -- WHERE`), and
+  `DROP MATERIALIZED VIEW`, `OWNED`, `KEYSPACE` and `PARTITION`,
+  `deleteMany({})`, `dropdb`, and the `pgcli`, `mycli`, `litecli`, `usql`
+  and `cqlsh` clients count. Disk formats add `format D:`, `mke2fs`,
+  `mkswap`, `wipefs`, `dd of=\\.\PhysicalDrive0` and a redirection into
+  `/dev/sd*`; `dd of=/dev/stdout` now runs.
+- self-guard 0.3.1: closes spellings found in a red-team pass. A guarded
+  path is now found inside a quoted command line or code (`bash -c "..."`,
+  `python -c "open('...')"`), after an option's `=` (`--output=path`),
+  through `$USERPROFILE` or `%HOMEDRIVE%%HOMEPATH%`, a wildcard
+  (`~/.claud*/CLAUDE.md`, `.claude/settings*.json`), braces
+  (`settings{,.local}.json`), a backslash bash drops (`~/.cl\aude`), and as
+  a relative path after a `cd` (`cd ~ && rm .claude.json`). `>& file`, a
+  redirection behind an escaped quote, `git -c key=program status`, and
+  `cp -r other/.claude ~` are changes. Write and Edit resolve `\Users\me`
+  and `C:..\x` as Windows does. A commit or PR message (`-m`, `--body`,
+  `--title`) may still name a guarded path. Reading next to `true`, `test`,
+  `[ ... ]`, `printf` or PowerShell's `select` and `where` is no longer
+  taken for a change (`cat .claude/settings.local.json 2>/dev/null || true`).
+
+- secret-allow-guard 0.2.0: also flags `curl -u user:pass`, an
+  `Authorization` header of any scheme (`Basic`, `token`), `docker login -p`,
+  `redis-cli -a`, `mysqladmin -p` and the other `mysql*` and `mariadb*`
+  clients, a value after `--token` or `--api-key` and a space, `aws configure
+  set aws_secret_access_key`, `DB_PASS=` and `passphrase=`, a password with a
+  `$` inside it, a Stripe live key, a Google API key and a JWT. It reads the
+  user settings in `CLAUDE_CONFIG_DIR` too.
+- tf-lint 0.5.0: the secret deny also matches the AWS secret key under the
+  provider's `secret_key` and the API's `SecretAccessKey`. The Terraform
+  checks now read a rule resource that holds a nested block (an
+  `aws_security_group_rule` with `lifecycle` was skipped), blocks with
+  unquoted labels (`resource aws_kms_key logs {`, `provider aws {`),
+  `*.tofu` files and ARNs in any `aws-*` partition, and ignore a setting
+  inside a `/* */` comment that starts its line.
+- jev-guard 0.3.0: also checks the script run without its extension
+  (`tools\jev`) and a direct call to `api.typesafe.ai` (`curl`,
+  `Invoke-RestMethod`). A name split by quotes or a PowerShell backtick
+  (`prod.tf''vars`) is read whole. More secret files count (`prod.env`,
+  `.envrc`, `cat <.env`, anything under `.aws`, `.ssh`, `.kube`, `.docker`,
+  `.azure` or `gcloud`, `.git-credentials`, `.pypirc`, `*.ppk`, `*.jks`),
+  as do the key formats tf-lint denies (GitLab, fine-grained GitHub, npm,
+  Anthropic, OpenAI, Stripe live, Google, Supabase), a secret read by
+  `env:NAME`, `GetEnvironmentVariable` or `printenv NAME`, the whole
+  environment piped on, and the output of `gh auth token`, `aws
+  secretsmanager get-secret-value`, `aws configure get`, `terraform output`,
+  `show` and `state pull`. A profile named for GovCloud counts as GovCloud.
+- model-guard 0.3.0: more Codex runs are checked: the interactive CLI given a
+  prompt (`codex "fix it"`), the CLI started by a package runner (`npx
+  @openai/codex exec`, `npm exec`, `pnpm dlx`, `bunx`), and the companion run
+  by `bun` or `deno`. `-c review_model=x` and a padded `-c " model = x"` count
+  as the model, and a `--model` that the companion reads as the value of
+  `--cwd`, `--prompt-file`, `--base` or `--scope` no longer counts as the
+  flag. With `MODEL_GUARD_SUBAGENT_MODEL` set, a `claude` run from the shell
+  that names another model (`--model`, or a model in its `--agents` or
+  `--settings` JSON) is denied, and a session started with
+  `mcp__ccd_session__start_session` inherits this session's model whatever
+  model the call names.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME

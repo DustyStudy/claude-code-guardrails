@@ -1,6 +1,6 @@
 {
   "name": "jev-guard",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Denies Jev calls that would send secrets, tfvars, state files or GovCloud/CUI work to the TypeSafe API",
   "author": {
     "name": "Dustin Arrington",

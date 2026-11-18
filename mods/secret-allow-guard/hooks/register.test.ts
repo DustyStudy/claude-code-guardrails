@@ -11,8 +11,14 @@ const settings = (...allow: string[]) => JSON.stringify({ permissions: { allow }
 
 // The session's folder and the user's home, both with settings files from `files`; git answers each subcommand with `git`'s exit code.
 // `git` 'missing' makes every git run reject, as when git is not installed.
-const start = async ($: EngineInterface, on: On, files: Record<string, string>, git: Record<string, number> | 'missing' = {}) => {
-  mock.env(on, { USERPROFILE: '/home/me' })
+const start = async (
+  $: EngineInterface,
+  on: On,
+  files: Record<string, string>,
+  git: Record<string, number> | 'missing' = {},
+  env: Record<string, string> = {},
+) => {
+  mock.env(on, { USERPROFILE: '/home/me', ...env })
   const toasts: string[] = []
   // The host resolves a path its own way on each platform, so a file is matched by its ending.
   const find = (path: string) => Object.keys(files).find(one => path.replace(/\\/g, '/').endsWith(one))
@@ -61,6 +67,31 @@ const RULES: readonly (readonly [string, boolean])[] = [
   ['Bash(sshpass -v -p hunter2 ssh user@203.0.113.7)', true],
   [`Bash(curl -H "${AUTH} ${'s1'.repeat(4)}" https://api.example.com)`, true],
   [`Bash(SUPABASE_SECRET_KEY=sb_secret_${'q'.repeat(24)} node app.js)`, true],
+  // Found in red-team review.
+  [`Bash(curl -u admin:${'hunter'}2 https://api.example.com)`, true],
+  [`Bash(curl -H "${AUTH.replace('Bearer', 'Basic')} ${'dXNlcjpw'.repeat(2)}==" https://api.example.com)`, true],
+  ['Bash(docker login -u me -p hunter2 registry.example.com)', true],
+  ['Bash(redis-cli -a hunter2 ping)', true],
+  ['Bash(mysqladmin -u root -pS3cretpw status)', true],
+  [`Bash(aws configure set aws_secret_access_key ${'wJalrXUtnF'.repeat(4)})`, true],
+  ['Bash(./deploy --api-key abcdef123456)', true],
+  ['Bash(./deploy --token abcdef123456)', true],
+  ['Bash(DB_PASS=hunter2pw ./migrate)', true],
+  ['Bash(DB_PASSWORD=pa$$word1 ./migrate)', true],
+  [`Bash(curl -H "X-Session: ${'eyJ'}${'hbGciOiJIUzI1NiJ9'}.${'eyJ'}${'zdWIiOiIxIn0abc'}.${'c2ln'.repeat(6)}" https://api.example.com)`, true],
+  [`Bash(echo ${'sk_live'}_${'aB3d'.repeat(6)})`, true],
+  ['Bash(curl -u $API_USER:$API_PASS https://api.example.com)', false],
+  ['Bash(curl -u admin https://api.example.com)', false],
+  ['Bash(curl -u admin:*)', false],
+  ['Bash(docker login -u me -p $REGISTRY_PASS)', false],
+  ['Bash(docker login --password-stdin registry.example.com)', false],
+  ['Bash(docker run -p 8080:80 nginx)', false],
+  ['Bash(redis-cli -a $REDIS_PASS ping)', false],
+  ['Bash(./deploy --token $DEPLOY_TOKEN)', false],
+  ['Bash(gh auth login --with-token)', false],
+  ['Bash(aws sts get-session-token --serial-number arn:aws:iam::123456789012:mfa/me)', false],
+  ['Bash(PGPASSFILE=/home/me/.pgpass psql -h db.example.com)', false],
+  ['Bash(./run --bypass=enabled)', false],
   ['Bash(PGPASSWORD=$DB_PASS psql -h db.example.com)', false],
   ['Bash(mysql -p)', false],
   ['Bash(mysql -p:*)', false],
@@ -94,6 +125,11 @@ test('scans the shared and user settings too', async ($, on) => {
   })
   expect(toast.includes('/repo/.claude/settings.json: 1 permission rule')).toBe(true)
   expect(toast.includes('/home/me/.claude/settings.json: 2 permission rules')).toBe(true)
+})
+
+test('scans the user settings in CLAUDE_CONFIG_DIR', async ($, on) => {
+  const toast = await start($, on, { '/cfg/settings.json': settings(`Bash(echo ${AWS})`) }, {}, { CLAUDE_CONFIG_DIR: '/cfg' })
+  expect(toast.includes('/cfg/settings.json: 1 permission rule')).toBe(true)
 })
 
 test('scans a file that does not parse, whole', async ($, on) => {
