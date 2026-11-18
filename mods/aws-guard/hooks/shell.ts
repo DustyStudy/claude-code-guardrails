@@ -1,8 +1,8 @@
-// Finds where a command line really runs a given program. The same file sits in terraform-guard, aws-guard, model-guard, taint-guard and destructive-guard: keep the copies identical.
+// Finds where a command line really runs a given program. The same file sits in terraform-guard, aws-guard, model-guard, self-guard, taint-guard and destructive-guard: keep the copies identical.
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
-  /^(bash|sh|zsh|eval|env|xargs|find|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm)(\.exe)?$/i
+  /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm)(\.exe)?$/i
 // What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
 const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
 const OPERATOR = /^[;|&(){}`\n]$/
@@ -11,12 +11,17 @@ const OPERATOR = /^[;|&(){}`\n]$/
 export const HEREDOC = /(?<!<)<<(?!<)-?\s*(["']?)(\w+)\1([\s\S]*?)\n\s*\2\b/g
 // A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
-const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
+const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 const SUBSTITUTION = /\$\(([^()]*)\)|`([^`\n]*)`/
 // A word (quoted runs and ${VAR} kept whole), or one operator that ends a command. A brace is one: a group, or a PowerShell script block.
 const TOKEN = /(?:"(?:\\.|[^"\\])*"|'[^']*'|>&|\$\{[^}]*\}|[^\s"';|&(){}`])+|[;|&(){}`\n]/g
 
-const unquote = (word: string) => word.replace(/["']/g, '')
+// PowerShell drops a backtick inside a word (terraf`orm is terraform) where bash would start a substitution.
+const ESCAPE = /(?<=\w)`(?=[a-z])/gi
+
+// bash's $'...' and $"..." quote too: $'terraform' is terraform.
+// shortcut: escapes inside $'...' ($'\x74erraform') are not decoded; decode them if one is seen in use.
+const unquote = (word: string) => word.replace(/\$(?=["'])/g, '').replace(/["']/g, '')
 
 // Redirections (2>&1, >file, > file) are not arguments of the program.
 const withoutRedirections = (words: readonly string[]) =>
@@ -32,6 +37,13 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
 
   if (depth > 4) {
     return found
+  }
+
+  // Read it both ways, so either shell's call is found.
+  const plain = source.replace(ESCAPE, '')
+
+  if (plain !== source) {
+    found.push(...invocations(plain, binary, depth + 1))
   }
 
   // Line continuations join (bash's \ leaves nothing behind, so a split word is whole again); heredoc bodies are data unless a shell runs them.
