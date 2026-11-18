@@ -2,7 +2,7 @@
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
-  /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm|coproc|trap|su|runuser|pkexec|runas|sg|unshare|nsenter|taskset|chrt|numactl|strace|ltrace|torsocks|proxychains4?|caffeinate|xvfb-run|dbus-run-session|ssh-agent|fakeroot|ssh|tmux|screen|aws-vault|op|doppler|direnv|mise|asdf|dotenv|envchain|nix-shell)(\.exe)?$/i
+  /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm|coproc|trap|su|runuser|pkexec|runas|sg|unshare|nsenter|taskset|chrt|numactl|strace|ltrace|torsocks|proxychains4?|caffeinate|xvfb-run|dbus-run-session|ssh-agent|fakeroot|tmux|screen|aws-vault|op|doppler|direnv|mise|asdf|dotenv|envchain|nix-shell)(\.exe)?$/i
 // What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
 const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
 const OPERATOR = /^[;|&(){}`\n]$/
@@ -25,6 +25,9 @@ const unquote = (word: string) => word.replace(/\$(?=["'])/g, '').replace(/["']/
 
 // bash drops a backslash in a program's name (\terraform, terr\aform); only the name, as a C:\ path or a pattern argument keeps its own.
 const isNamed = (word: string, binary: RegExp) => binary.test(word) || binary.test(word.replace(/\\(?=[\w-])/g, ''))
+
+// A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
+const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
 
 // Redirections (2>&1, >file, > file) are not arguments of the program.
 const withoutRedirections = (words: readonly string[]) =>
@@ -63,8 +66,9 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
     .replace(HEREDOC, (match: string, quote: string, _tag: string, rest: string, at: number, whole: string) => {
       const before = whole.slice(whole.lastIndexOf('\n', at) + 1, at)
 
-      // A << inside quotes or a comment (echo '<<EOF', # <<EOF) starts no heredoc: the lines after it run.
-      if ((before.match(/'/g) ?? []).length % 2 === 1 || (before.match(/"/g) ?? []).length % 2 === 1 || /(^|\s)#/.test(before)) {
+      // A << inside quotes, a comment or arithmetic (echo '<<EOF', ;# <<EOF, $((1<<2))) starts no heredoc: the lines after it run.
+      // shortcut: a quote opened on an earlier line is not seen; track quotes across lines if one is used that way.
+      if ((before.match(/'/g) ?? []).length % 2 === 1 || (before.match(/"/g) ?? []).length % 2 === 1 || /(^|[\s;|&(])#|\(\([^)]*$/.test(before)) {
         return match
       }
 
@@ -128,11 +132,10 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
 
     const words = withoutRedirections(raw.slice(from)).map(unquote)
 
-    // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
-    if (WRAPPER.test((words[0] ?? '').replace(/^.*[\\/]/, ''))) {
-      // A quoted argument of a wrapper is a command line of its own.
+    if (isNamed(words[0] ?? '', WRAPPER_NAME)) {
+      // A quoted argument of a wrapper is a command line of its own, an option's attached one too (su --command="...").
       for (const word of words.slice(1).filter(one => /\s/.test(one))) {
-        found.push(...invocations(word, binary, depth + 1))
+        found.push(...invocations(word.replace(/^--?[\w-]+=/, ''), binary, depth + 1))
       }
 
       const at = words.findIndex((word, i) => i > 0 && isNamed(word, binary))
