@@ -1,6 +1,6 @@
 {
   "name": "secret-read-guard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Denies reading credential files (.env, AWS, SSH and cloud CLI credentials, private keys, Terraform state and tfvars) into the conversation by Read, Grep or shell, and commands that dump the environment or print a stored credential",
   "author": {
     "name": "Dustin Arrington",

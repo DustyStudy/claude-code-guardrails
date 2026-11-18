@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- secret-read-guard 0.2.0: closes ways around it found in a red-team pass.
+  `Monitor` and the desktop terminal tool are now read like Bash. grep
+  flags that let the file pass for the pattern are fixed (`grep -a KEY
+  .env`, `grep KEY -E .env`, `grep -eKEY .env`, `grep -f pats .env`, `rg -rl
+  KEY .env`, `jq -c . terraform.tfstate`, `sed -nep .env`). Also denied:
+  `cat 0< .env` and `cat <>.env`; `cat $(ls .env)` and `gc (ls *.tfvars)`;
+  `cat .e\nv` and `ca\t .env` in Bash; `cp terraform.tfstate{,.json}`,
+  `install`, `rsync`, `scp` and `xcopy` out of a credential file; `rev`,
+  `paste`, `fold`, `column`, `iconv`, `zcat`, `perl -pe` and `ruby -pe`;
+  `OpenRead`, `StreamReader`, `createReadStream` and `File.read`; the whole
+  environment from an interpreter (`python -c "print(os.environ)"`, `node
+  -p process.env`, `jq -n env`, awk `ENVIRON`, ruby `ENV`, perl `%ENV`) and
+  `/proc/<pid>/environ`; `gh auth git-credential`, `aws sts
+  get-session-token` and `assume-role`, `docker-credential-* get`, `gpg
+  --export-secret-keys`. New guarded names: `.envrc`, `*.env`,
+  `.env-<name>`, any file in `~/.ssh` but `config`, `known_hosts`,
+  `authorized_keys` and `*.pub`, `~/.terraform.d/credentials.tfrc.json`,
+  `.terraformrc` and `.vault-token`. One variable by name still runs.
 - taint-guard 0.7.0: closes ways around the lock found in a red-team pass.
   Once tainted it now also denies: sends that are no program's argument
   (bash `/dev/tcp`, .NET `Net.WebClient`/`Sockets`/`Dns`, a

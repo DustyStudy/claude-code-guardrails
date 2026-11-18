@@ -136,6 +136,74 @@ const DENIED = [
   'tofu state pull',
   'gcloud auth print-access-token',
   'az account get-access-token',
+  // Found in red-team: more readers and file names.
+  'rev .env',
+  'paste .env',
+  'fold .env',
+  'column -t .env',
+  'iconv -f utf8 .env',
+  'zcat -f .env',
+  'perl -pe 1 .env',
+  'perl -ne print .env',
+  'ruby -pe "" .env',
+  'cat .envrc',
+  'cat prod.env',
+  'cat config/secrets.env',
+  'cat .env-production',
+  'cat /proc/self/environ',
+  'strings /proc/1234/environ',
+  'cat ~/.ssh/github_key',
+  'cat ~/.terraform.d/credentials.tfrc.json',
+  'cat ~/.terraformrc',
+  'cat ~/.vault-token',
+  // A flag read as taking a value, or a glued or filed pattern, let the file pass for the pattern.
+  'grep -a PASSWORD .env',
+  'grep -b PASSWORD .env',
+  'grep -T PASSWORD .env',
+  'grep PASSWORD -E .env',
+  'grep -ePASSWORD .env',
+  'grep -ec .env',
+  'grep -f pats.txt .env',
+  'grep --file=pats.txt .env',
+  'grep -f /dev/null -v .env',
+  'rg -a KEY .env',
+  'rg -rl KEY .env',
+  'sed -nep .env',
+  'awk -f print.awk .env',
+  'jq -f f.jq terraform.tfstate',
+  'jq -c . terraform.tfstate',
+  // Redirections with a descriptor or opened read-write.
+  'cat 0< .env',
+  'cat <>.env',
+  'exec 3<.env; cat <&3',
+  // A lister in a substitution, and a brace pair handed to a copy.
+  'cat $(ls .env)',
+  'cat $(find . -name .env)',
+  'cat `echo .env`',
+  'Get-Content (Get-Item .env)',
+  'gc (ls *.tfvars)',
+  'cp terraform.tfstate{,.json}',
+  'install .env /tmp/x',
+  'rsync .env /tmp/x',
+  "[IO.File]::OpenRead('.env')",
+  "[IO.StreamReader]::new('.env').ReadLine()",
+  "node -e \"require('fs').createReadStream('.env').pipe(process.stdout)\"",
+  "ruby -e 'puts File.read(\".env\")'",
+  // The whole environment from an interpreter.
+  'python -c "import os;print(os.environ)"',
+  'python -c "import os;print(dict(os.environ))"',
+  'node -p process.env',
+  'node -e "console.log(process.env)"',
+  "ruby -e 'p ENV.to_h'",
+  "perl -e 'print %ENV'",
+  "awk 'BEGIN{for(k in ENVIRON)print k,ENVIRON[k]}'",
+  'jq -n env',
+  "jq -n '$ENV'",
+  'gh auth git-credential get',
+  'aws sts get-session-token',
+  'aws sts assume-role --role-arn x --role-session-name y',
+  'docker-credential-desktop get',
+  'gpg --export-secret-keys -a',
 ] as const
 
 // Ordinary work: runs.
@@ -227,6 +295,34 @@ const ALLOWED = [
   "git commit -F - <<'EOF'\ndocs: never cat .env\nEOF",
   'python -m venv env',
   'npm test',
+  // The neighbours of the red-team denies.
+  'cat src/environment.ts',
+  'cat ~/.ssh/known_hosts',
+  'cat ~/.ssh/authorized_keys',
+  'grep -rl TODO src',
+  'grep -E "a|b" README.md',
+  'grep -F ".env" README.md',
+  'grep -i -e ".env" README.md',
+  'rg -e "\\.tfvars" docs',
+  'grep "\\.env" README.md',
+  'Select-String -CaseSensitive -Pattern "\\.pem" README.md',
+  'jq -c .scripts package.json',
+  "awk -F= '{print $1}' config.ini",
+  'perl -pe "s/a/b/" notes.txt',
+  "python -c \"import os; print(os.environ['PATH'])\"",
+  "python -c \"import os; print(os.environ.get('HOME'))\"",
+  'node -p process.env.PATH',
+  'jq -n env.HOME',
+  'grep -rn "process.env" src',
+  'rg "os.environ" .',
+  'cat $(ls *.md)',
+  'echo "$(ls ~/.ssh)"',
+  'cp src/{a,b}.ts dst',
+  'cp .env{,.bak}',
+  'rsync -a src/ dst/',
+  'npm install',
+  'aws sts get-caller-identity',
+  'gpg --list-keys',
 ] as const
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
@@ -248,6 +344,43 @@ for (const tool of ['Bash', 'PowerShell'] as const) {
     })
   }
 }
+
+// Found in red-team: Monitor and the desktop terminal tool ran unread.
+for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal'] as const) {
+  test(`${tool} is read like Bash`, async ($, on) => {
+    world(on)
+    const ran: string[] = []
+
+    on('tool.call', (_, e) => {
+      ran.push(String((e as { command?: unknown }).command))
+
+      return { result: {} as never }
+    })
+
+    await $.tool.call({ tool, command: 'cat .env' } as never)
+    await $.tool.call({ tool, command: 'cat README.md' } as never)
+
+    expect(ran).toEqual(['cat README.md'])
+  })
+}
+
+test('a backslash Bash drops does not hide a file or a reader; PowerShell keeps it', async ($, on) => {
+  world(on)
+  const ran: string[] = []
+
+  on('tool.call', (_, e) => {
+    ran.push(`${e.tool} ${String((e as { command?: unknown }).command)}`)
+
+    return { result: {} as never }
+  })
+
+  for (const command of ['cat .e\\nv', 'ca\\t .env', 'cat docs\\notes.md']) {
+    await $.tool.call({ tool: 'Bash', command })
+    await $.tool.call({ tool: 'PowerShell', command })
+  }
+
+  expect(ran).toEqual(['PowerShell cat .e\\nv', 'PowerShell ca\\t .env', 'Bash cat docs\\notes.md', 'PowerShell cat docs\\notes.md'])
+})
 
 const FILES = [
   ['C:\\repos\\app\\.env', false],
@@ -283,6 +416,15 @@ const FILES = [
   ['\\\\?\\C:\\repos\\app\\.env', false],
   ['C:/repos/app/.ENV', false],
   ['C:/repos/app/.env::$DATA', false],
+  ['.envrc', false],
+  ['config/prod.env', false],
+  ['.env-production', false],
+  ['/proc/self/environ', false],
+  ['C:\\Users\\me\\.ssh\\github_key', false],
+  ['C:\\Users\\me\\.terraform.d\\credentials.tfrc.json', false],
+  ['C:\\Users\\me\\.vault-token', false],
+  ['C:\\Users\\me\\.ssh\\authorized_keys', true],
+  ['src/environment.ts', true],
   // The ordinary neighbours.
   ['.env.example', true],
   ['.env.sample', true],
