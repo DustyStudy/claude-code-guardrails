@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- secret-allow-guard 0.2.0: also flags `curl -u user:pass`, an
+  `Authorization` header of any scheme (`Basic`, `token`), `docker login -p`,
+  `redis-cli -a`, `mysqladmin -p` and the other `mysql*` and `mariadb*`
+  clients, a value after `--token` or `--api-key` and a space, `aws configure
+  set aws_secret_access_key`, `DB_PASS=` and `passphrase=`, a password with a
+  `$` inside it, a Stripe live key, a Google API key and a JWT. It reads the
+  user settings in `CLAUDE_CONFIG_DIR` too.
 - tf-lint 0.5.0: the secret deny also matches the AWS secret key under the
   provider's `secret_key` and the API's `SecretAccessKey`. The Terraform
   checks now read a rule resource that holds a nested block (an

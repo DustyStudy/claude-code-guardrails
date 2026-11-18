@@ -6,9 +6,19 @@ const SECRET = [
   /\b(?:PGPASSWORD|MYSQL_PWD|REDISCLI_AUTH)=["']?(?!\$)[^\s"';]/,
   // A value stops at `)` and `:`, which close a rule (`Bash(mysql -p)`, `Bash(mysql -p:*)`).
   /\bsshpass\b[^;&|]*\s-p\s*["']?(?!\$)[^\s"'):]/,
-  /\bmysql(?:dump)?\b[^;&|]*\s-p["']?(?!\$)[^\s"'):]/,
+  /\b(?:mysql|mariadb)\w*\b[^;&|]*\s-p["']?(?!\$)[^\s"'):]/,
+  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]*\blogin\b[^;&|]*\s-p\s*["']?(?!\$)[^\s"'):]/,
+  /\bredis-cli\b[^;&|]*\s-a\s*["']?(?!\$)[^\s"'):]/,
+  // -u user:password; `:*` ends a rule (`Bash(curl -u admin:*)`).
+  /\b(?:curl|wget)\b[^;&|]*\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
   /--password[= ]["']?(?!\$)[^\s"'):-]/i,
+  // --token x and --api-key x, the value after a space; --with-token and --token-file name no value.
+  /--[\w-]*(?:token|api[_-]?key|access[_-]?key|secret[_-]?key)\s+["']?(?![$*-])[^\s"'):]{6,}/i,
+  /secret_access_key\s+["']?(?!\$)[A-Za-z0-9/+]{40}\b/i,
   /\bbearer\s+(?!\$)[A-Za-z0-9._~+/-]{8,}/i,
+  // Any other scheme: Basic, token.
+  /\bauthorization:\s*\w+\s+(?!\$)[^\s"']{8,}/i,
+  /\b(?:[sr]k_live_[A-Za-z0-9]{20,}|AIza[\w-]{35}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.)/,
   /\bsb_secret_[A-Za-z0-9_-]{20,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
   /\bsk-[A-Za-z0-9_-]{20,}/,
@@ -19,8 +29,8 @@ const SECRET = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   // user:password@host in a connection string or URL.
   /[a-z][a-z0-9+.-]*:\/\/[^\s:/@"']+:(?!\$)[^\s@"'/]+@/i,
-  // No leading \b, so a compound name like SUPABASE_SECRET_KEY= counts.
-  /(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]+)*\s*[=:]\s*["']?(?!\$)[^\s"'$,;)]{6,}/i,
+  // No leading \b, so a compound name like SUPABASE_SECRET_KEY= counts; a bare pass needs one (DB_PASS=, not bypass=).
+  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]+)*\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
 ]
 
 type Settings = { permissions?: Partial<Record<'allow' | 'ask' | 'deny', unknown>> }
@@ -46,11 +56,12 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     const home = (await $.env.get('USERPROFILE').catch(() => undefined)) ?? (await $.env.get('HOME').catch(() => undefined))
-    const files = [
-      `${e.cwd}/.claude/settings.local.json`,
-      `${e.cwd}/.claude/settings.json`,
-      ...(home === undefined ? [] : [`${home}/.claude/settings.local.json`, `${home}/.claude/settings.json`]),
-    ]
+    // CLAUDE_CONFIG_DIR moves the user's settings out of ~/.claude.
+    const config = await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)
+    const files = [`${e.cwd}/.claude`, ...(home === undefined ? [] : [`${home}/.claude`]), ...(config ? [config] : [])].flatMap(dir => [
+      `${dir}/settings.local.json`,
+      `${dir}/settings.json`,
+    ])
     const warnings: string[] = []
 
     for (const file of new Set(files)) {
