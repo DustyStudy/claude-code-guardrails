@@ -173,6 +173,10 @@ const isConfigChange = (args: readonly string[]) => {
 
 const DENY = 'which Claude Code loads as its own config or code in every later session. If the user wants this, give them the exact edit or command to make themselves.'
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
@@ -185,19 +189,21 @@ export const register: Register = on => {
       : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))
 
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~'
     const guarded = guardedOf(home, (await $.env.get('CLAUDE_CODE_PLUGIN_DIRS')) ?? '')
     const cwd = await $.session.cwd()
     // shortcut: NODE_OPTIONS set in a shell profile the tool sources is not seen; check the profile if that matters.
-    const preloads = /NODE_OPTIONS/i.test(e.command) || Boolean((await $.env.get('NODE_OPTIONS'))?.trim())
+    const preloads = /NODE_OPTIONS/i.test(command) || Boolean((await $.env.get('NODE_OPTIONS'))?.trim())
 
-    if (invocations(e.command, CLAUDE).some(isConfigChange)) {
+    if (invocations(command, CLAUDE).some(isConfigChange)) {
       return { deny: `${$.plugin.name}: this changes Claude Code's plugins, MCP servers or config, ${DENY}` }
     }
 
-    return (mentions(e.command, cwd, home, guarded, preloads) && !isReadOnly(e.command, cwd, home, guarded, preloads)) ||
-      removesAbove(e.command, cwd, home, guarded)
+    return (mentions(command, cwd, home, guarded, preloads) && !isReadOnly(command, cwd, home, guarded, preloads)) ||
+      removesAbove(command, cwd, home, guarded)
       ? { deny: `${$.plugin.name}: this command changes files under ~/.claude, a mod folder or a project's .claude settings, ${DENY}` }
       : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))

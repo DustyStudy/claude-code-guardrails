@@ -205,20 +205,27 @@ const placesOf = (cwd: string, home: string, temps: readonly (string | undefined
   }
 }
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~'
     const temps = [await $.env.get('TEMP'), await $.env.get('TMP'), await $.env.get('TMPDIR')]
     const cwd = await $.session.cwd()
     const check = (command: string) => loss(command, placesOf(cwd, home, temps, command))
     // Bash expands rm -rf {dist,../x} to both words before rm sees them; the parser would read the braces as a group.
-    const expanded = e.command.replace(/(\S*)\{([^{}\s]*,[^{}\s]*)\}(\S*)/g, (_, pre: string, alternatives: string, post: string) =>
+    const expanded = command.replace(/(\S*)\{([^{}\s]*,[^{}\s]*)\}(\S*)/g, (_, pre: string, alternatives: string, post: string) =>
       alternatives.split(',').map(one => `${pre}${one}${post}`).join(' '),
     )
     // Bash drops a backslash before a letter (git re\set is git reset), so the line is read with and without them; a C:\ path keeps its own.
-    const unescaped = e.command.replace(/\S+/g, word => (/^[a-z]:/i.test(word) ? word : word.replace(/\\(?=[A-Za-z])/g, '')))
-    const found = check(e.command) ?? (e.tool === 'Bash' ? (check(expanded) ?? check(unescaped)) : undefined)
+    const unescaped = command.replace(/\S+/g, word => (/^[a-z]:/i.test(word) ? word : word.replace(/\\(?=[A-Za-z])/g, '')))
+    // Only PowerShell is known not to: Monitor runs Bash, and the terminal tool's shell can be either.
+    const found = check(command) ?? (e.tool === 'PowerShell' ? undefined : (check(expanded) ?? check(unescaped)))
 
     return found === undefined
       ? next(e)
