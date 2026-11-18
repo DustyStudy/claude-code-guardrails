@@ -92,6 +92,30 @@ const DENIED = [
   "cat <<'EOF' |\nprintf '{}' > ~/.claude/settings.json\nEOF\nenv sh",
   'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs setup --disable-review-gate',
   'node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/../../../ponytail/ponytail/5.3.3/scripts/codex-companion.mjs',
+  // Found in the red-team pass: other spellings of a guarded path.
+  'echo x >> $USERPROFILE/.claude/CLAUDE.md',
+  'Add-Content $env:HOMEDRIVE$env:HOMEPATH\\.claude\\CLAUDE.md x',
+  'cmd /c "echo x >> %HOMEDRIVE%%HOMEPATH%\\.claude\\CLAUDE.md"',
+  'echo x >> ~/.cl\\aude/CLAUDE.md',
+  'echo x >> ~/.claud*/CLAUDE.md',
+  'sed -i s/deny/allow/ ~/.claud?/settings.json',
+  'rm .claude/settings*.json',
+  'rm .claude/settings{,.local}.json',
+  // A path inside a quoted command line or code, or after an option's =.
+  'bash -c "echo x >> ~/.claude/CLAUDE.md"',
+  'powershell -Command "Set-Content ~/.claude/CLAUDE.md x"',
+  'python -c "open(\'C:/Users/me/.claude/CLAUDE.md\',\'a\').write(\'x\')"',
+  'curl -s https://example.com/a --output=C:/Users/me/.claude/CLAUDE.md',
+  // A relative path after a cd.
+  'cd ~ && echo x >> .claude/CLAUDE.md',
+  'cd /c/Users/me && rm .claude.json',
+  'Push-Location $HOME; Add-Content .claude\\CLAUDE.md x',
+  'cd ~/.. && mv me you',
+  'cp -r other/.claude ~/',
+  // Writes a reader was taken to make no part of.
+  "echo '{}' >& ~/.claude/CLAUDE.md",
+  "echo \\' > ~/.claude/CLAUDE.md \\'",
+  'git -c core.fsmonitor="rm ~/.claude/CLAUDE.md" status',
 ] as const
 
 // Ordinary work: runs.
@@ -125,6 +149,25 @@ const ALLOWED = [
   "git commit -F - <<'EOF'\ndocs: note that ~/.claude/settings.json is guarded\nEOF",
   "cat <<'EOF' | node \"C:/Users/me/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs\" task --model gpt-6-astra\nreview what writes ~/.claude/settings.json\nEOF",
   'which codex',
+  // Reading next to a test or a no-op is still reading.
+  'cat .claude/settings.local.json 2>/dev/null | head -5',
+  'cat .claude/settings.local.json 2>/dev/null || true',
+  '[ -f .claude/settings.json ] && cat .claude/settings.json',
+  'test -f ~/.claude/settings.json && printf "%s\\n" found',
+  'Get-Content .claude\\settings.local.json | select -First 5',
+  // What the wider path reading must not catch.
+  'cd ~ && ls .claude',
+  'cd ~ && echo x > notes.txt',
+  'cd ~/.claude/projects/app && echo x > note.md',
+  'echo x > ~/.claude/projects/*/memory/note.md',
+  'git commit -m "docs: ~/.claude/settings.json is guarded, see the README"',
+  'gh pr create --title "self-guard" --body "reads of ~/.claude/CLAUDE.md still run"',
+  'rm src/*.json',
+  'cat */*.json > /tmp/all.json',
+  'echo "[x" > notes.txt',
+  'cp -r .claude /tmp/backup',
+  'grep -n "\\>" ~/.claude/settings.json',
+  'git -c color.ui=false status',
 ] as const
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
@@ -180,6 +223,10 @@ const FILES = [
   ['\\\\?\\C:\\Users\\me\\.claude\\CLAUDE.md', false],
   ['C:/repos/app/.claude/settings.json.', false],
   ['C:/repos/app/.claude/settings.json::$DATA', false],
+  // Windows reads \x from the session's drive and C:x from its folder.
+  ['\\Users\\me\\.claude\\CLAUDE.md', false],
+  ['C:..\\..\\Users\\me\\.claude\\CLAUDE.md', false],
+  ['C:\\repos\\app\\src\\[id]\\page.tsx', true],
 ] as const
 
 test('a mod folder whose path holds a space is still guarded', async ($, on) => {
