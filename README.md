@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Sixteen mods that stop risky commands
+when it works on AWS and Terraform. Seventeen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -22,7 +22,7 @@ much of your Claude and Codex plans is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** over a thousand tests across the sixteen mods, run in CI
+- **Result:** over a thousand tests across the seventeen mods, run in CI
   against a pinned Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -41,7 +41,8 @@ much of your Claude and Codex plans is left.
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
-| [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token. Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
+| [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out: `.env` files, AWS, SSH, cloud CLI, npm, Docker, kube, GitHub CLI, Codex and Claude credentials, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`) and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws configure export-credentials`, `gh auth token`, `git credential fill`, `terraform state pull`). `.env.example`, `*.pub`, existence checks and programs that use a file without printing it (`terraform -var-file`, `ssh -i`) still run. |
+| [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
@@ -247,7 +248,7 @@ read `tier prepend`.
 
 ### Settings
 
-Four mods read a setting from the same `env` block. Each is optional.
+Five mods read a setting from the same `env` block. Each is optional.
 commit-identity-guard, aws-context and model-guard do nothing extra until
 theirs is set.
 
@@ -257,6 +258,7 @@ theirs is set.
 | `AWS_CONTEXT_HIGHLIGHT` | aws-context | Comma-separated text that marks a sensitive profile name, such as `security,111122223333`. |
 | `MODEL_GUARD_SUBAGENT_MODEL` | model-guard | The model every subagent starts on, such as `opus`. A fork always runs on the session's own model. |
 | `MODEL_GUARD_CODEX_ARGS` | model-guard | The flags every Codex run must pass, written as you pass them, such as `--model gpt-6-astra --effort high`. |
+| `SECRET_READ_ALLOW` | secret-read-guard | Comma-separated globs of files the guard leaves readable, such as `*.pem,test/fixtures/*.key,.npmrc`. A glob with no folder matches the file name anywhere; one with folders matches the end of the path; `~` is your home folder. Use it for public certificates and fixtures, not to open `.env` everywhere. |
 | `TAINT_GUARD_TRUSTED` | taint-guard | Comma-separated MCP tool name prefixes whose results are trusted and which stay usable in a tainted session, such as `mcp__plugin_context7_,mcp__plugin_semgrep_guardian__`. tf-plan-summary's tool is always trusted; gh-ci-status's is not, since an Actions log carries a pull request's text. |
 | `TAINT_GUARD_TRUSTED_HOSTS` | taint-guard | Comma-separated hosts whose pages a WebFetch reads without tainting the session, such as `docs.aws.amazon.com,learn.microsoft.com`. A host also covers its subdomains. Name the bare domain, not a `www.` host: WebFetch follows a redirect between the two, so a `www.` host alone is never trusted. Name only sites whose pages no outsider writes: not `github.com` or a forum. `curl` still taints; WebSearch only warns. |
 | `TAINT_GUARD_READ_SERVERS` | taint-guard | Comma-separated MCP tool name prefixes, one per server, whose read tools (named `search`, `get`, `list`, `read` or `query`) stay usable in a tainted session. Their results still taint it, and the server's other tools are still denied. A read's arguments reach that server, so name only servers no outsider runs: first-party connectors such as Gmail, and the desktop app's own `mcp__ccd_session_mgmt__,mcp__ccd_settings__`. |
@@ -278,7 +280,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, destructive-guard, taint-guard, model-guard and self-guard each carry the same
+terraform-guard, aws-guard, destructive-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
@@ -315,6 +317,17 @@ when it would be worth lifting.
 - **Command-line guards** (terraform-guard, aws-guard, commit-identity-guard)
   read the command as written. They do not expand shell variables or
   aliases, and a script file that runs the command itself is not read.
+- **Every command guard** checks the four tools that hand a command line
+  to a shell: `Bash`, `PowerShell`, `Monitor` and the desktop app's
+  `mcp__terminal__run_in_terminal`. Calls made inside subagents and
+  workflow agents are checked the same way. A command run by any other MCP
+  tool (a server with a `command` or `script` argument) is not read: block
+  such a tool by name in managed settings with
+  `"permissions": { "deny": ["mcp__<server>__<tool>"] }`, or allow only the
+  MCP servers you have reviewed with `allowedMcpServers`. Scheduled and
+  remote runs (`CronCreate`, `RemoteTrigger`, scheduled tasks) take a
+  prompt, not a command; what they run is checked wherever the mods are
+  installed, which a cloud run is not unless its environment installs them.
 - **aws-guard** covers the AWS CLI and AWS Tools for PowerShell cmdlets called
   by name. SDK scripts, and a cmdlet called through a variable, are not
   checked. It denies a list of known calls, not everything but reads, so a
@@ -325,6 +338,27 @@ when it would be worth lifting.
 - **tf-lint** reads only the text being written, block by block. A rule split
   across edits or built from variables is missed; run Checkov on the whole
   file for that.
+- **secret-read-guard** keeps a secret from being read by accident; it does
+  not hold against an agent set on reading one. It finds a path as written
+  (whole, with `~` or a home variable, or as a `*` wildcard), so a path
+  built from pieces, a symlink, a renamed copy made earlier, or a script
+  file that opens the credential itself slips past. It follows the usual
+  readers and the common file-reading calls handed to an interpreter
+  (`open(`, `readFileSync`, `ReadAllText`), not every program that can
+  print a file (`openssl`, `tar`, `git show`, `docker compose config`, `terraform show` and
+  `output`, `aws secretsmanager get-secret-value`). A recursive search of
+  a project folder (`grep -r x .`, the Grep tool with no path) still reads
+  a `.env` there unless `.gitignore` hides it, and one variable printed by
+  name (`echo $GITHUB_TOKEN`) runs. MCP file tools are not covered. It
+  goes by name, so a public `*.pem` certificate or a project `.npmrc`
+  with no token is denied until `SECRET_READ_ALLOW` names it. Since Edit
+  needs a Read first, a guarded file can be rewritten whole but not
+  edited in place. For secrets that must stay out of reach, keep them out
+  of the account Claude runs as.
+- **tf-lint**'s secret deny matches key formats with a fixed shape. It
+  leaves out JWTs, bearer values, `password=` and `user:pass@host`, which
+  in source files are mostly fixtures and local defaults; run gitleaks or
+  trufflehog in CI for those.
 - **commit-identity-guard** reads a message file given with `-F`, `--file` or
   `--body-file`, but not a message piped in with `-F -`. It identifies a repo
   by its `origin` remote.

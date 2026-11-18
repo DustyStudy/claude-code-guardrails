@@ -47,6 +47,10 @@
       "source": "./mods/secret-allow-guard"
     },
     {
+      "name": "secret-read-guard",
+      "source": "./mods/secret-read-guard"
+    },
+    {
       "name": "self-guard",
       "source": "./mods/self-guard"
     },

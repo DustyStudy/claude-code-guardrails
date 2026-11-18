@@ -229,3 +229,28 @@ test('a message piped in is not read', async ($, on) => {
   expect(hasRun).toBe(true)
   expect(read).toEqual([])
 })
+
+// Monitor and the desktop app's terminal tool hand a command line to a shell too: they are checked like Bash.
+for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal']) {
+  test(`${tool} is denied what Bash is, and runs the rest`, async ($, on) => {
+    mock.env(on, { COMMIT_GUARD_OWNERS: 'example-org' })
+    const ran: string[] = []
+
+    on('process.run', (_, e) => ({
+      value: { exitCode: 0, stdout: e.argv.includes('remote') ? `${COVERED}\n` : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }))
+    on('tool.call', { tool: [tool] }, (_, e) => {
+      ran.push(String(e.command))
+
+      return { result: { stdout: '', stderr: '', interrupted: false } }
+    })
+
+    const denied = JSON.stringify(await $.tool.call({ tool, command: `git commit -m "x\n\n${TRAILER}"` } as never))
+    await $.tool.call({ tool, command: 'git status' } as never)
+    // A Monitor that opens a WebSocket has no command.
+    await $.tool.call({ tool, ws: { url: 'wss://example.com/events' } } as never)
+
+    expect(ran).toEqual(['git status', 'undefined'])
+    expect(TRAILERS.test(denied)).toBe(true)
+  })
+}

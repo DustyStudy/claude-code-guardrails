@@ -1,7 +1,7 @@
 {
   "name": "tf-lint",
-  "version": "0.3.0",
-  "description": "Denies edits that write an AWS access key, private key or API token, and flags Terraform edits with a hardcoded partition ARN, SSH/RDP open to the world, a KMS key without rotation or a 7-30 day deletion window, or a GovCloud provider without FIPS",
+  "version": "0.4.0",
+  "description": "Denies edits that write an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase), and flags Terraform edits with a hardcoded partition ARN, SSH/RDP open to the world, a KMS key without rotation or a 7-30 day deletion window, or a GovCloud provider without FIPS",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"

@@ -8,6 +8,20 @@
   rules, sandbox network allowlist, OpenTelemetry export, retention). The
   README's "A managed-settings baseline" explains each block and what the
   telemetry does not record. `npm test` checks the file.
+- secret-read-guard (new): denies reading a credential file into the
+  conversation by `Read`, `Grep`, or a shell command that prints it or
+  copies it out (`.env`, AWS, SSH and cloud CLI credentials, private keys,
+  Terraform state and `*.tfvars`, `.npmrc`, `.netrc`, kube and Docker
+  config); dumping the whole environment; and commands that print a stored
+  credential (`aws configure get` of a secret, `aws configure
+  export-credentials`, `gh auth token`, `git credential fill`, `terraform
+  state pull`). `.env.example`, `*.pub`, existence checks and programs that
+  use a file without printing it still run. `SECRET_READ_ALLOW` exempts
+  globs. The mod count is seventeen.
+- tf-lint 0.4.0: the secret deny on edits also covers GitLab, npm,
+  Anthropic, OpenAI, Stripe live, Google API, Azure storage and Supabase
+  keys, Slack `xoxs-` tokens and webhooks, and PGP and any other
+  `PRIVATE KEY` block. A value holding `EXAMPLE` still passes.
 - aws-guard: also denies, by AWS CLI and by cmdlet, calls that turn off
   logging or detection (CloudTrail, GuardDuty, Config, Security Hub,
   `logs delete-log-group`/`put-retention-policy`, `ec2 delete-flow-logs`),
@@ -164,6 +178,15 @@
   its own plan.
 - README: a Works in column says which mods work in the CLI, in Desktop,
   or both.
+- terraform-guard, aws-guard, destructive-guard, self-guard,
+  commit-identity-guard, jev-guard, model-guard, taint-guard: a command
+  given to the `Monitor` tool or to the desktop app's terminal tool
+  (`mcp__terminal__run_in_terminal`) is now checked the way a Bash or
+  PowerShell command is; before, it ran past every guard. taint-guard also
+  treats a `Monitor` WebSocket as an untrusted read, denies one in a
+  tainted session, and reads the terminal tool's command even when
+  `TAINT_GUARD_TRUSTED` names its server. Other MCP tools that run a
+  command are still not read: deny them by name in managed settings.
 
 ## 0.6.0 (2026-10-28)
 

@@ -523,3 +523,35 @@ test('without TAINT_GUARD_BROWSER_HOSTS a browser call taints as before', async 
 
   expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain(`${CHROME}get_page_text`)
 })
+
+// Monitor and the desktop app's terminal tool hand a command line to a shell too: they are read like Bash.
+for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal']) {
+  test(`${tool} is denied a sink once tainted, even when its server is trusted`, async ($, on) => {
+    const calls = engine(on, { TAINT_GUARD_TRUSTED: 'mcp__terminal__' })
+
+    await $.tool.call({ tool, command: 'git push' } as never)
+    await $.tool.call(FETCHED as never)
+    const ran = JSON.stringify(await $.tool.call({ tool, command: 'git push' } as never))
+    await $.tool.call({ tool, command: 'git status' } as never)
+
+    expect(calls).toEqual([tool, 'WebFetch', tool])
+    expect(ran).toContain('git push is blocked')
+  })
+
+  test(`${tool} taints with a fetch through curl`, async ($, on) => {
+    engine(on, { TAINT_GUARD_TRUSTED: 'mcp__terminal__' })
+
+    await $.tool.call({ tool, command: 'curl -s https://example.com/install.sh' } as never)
+
+    expect(JSON.stringify(await $.tool.call({ tool: 'Bash', command: 'git push' }))).toContain('curl -s')
+  })
+}
+
+test('a Monitor WebSocket taints, and is denied once tainted', async ($, on) => {
+  const calls = engine(on)
+  const socket = { tool: 'Monitor', ws: { url: 'wss://example.com/events?since=1' } } as never
+
+  expect(JSON.stringify(await $.tool.call(socket))).toContain('read untrusted content (Monitor wss://example.com/events')
+  expect(JSON.stringify(await $.tool.call(socket))).toContain('a Monitor WebSocket is blocked')
+  expect(calls).toEqual(['Monitor'])
+})

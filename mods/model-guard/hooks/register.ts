@@ -112,6 +112,10 @@ const codexRuns = (command: string) => [
     .map(args => ({ args: cliArgs(args), takesEffort: true, every: true })),
 ]
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
   // Rewrites rather than denies: the subagent starts on the right model, with no retry.
   on('agent.spawn', async ($, e, next) => {
@@ -121,10 +125,12 @@ export const register: Register = on => {
     return next(model && e.subagentType !== 'fork' && e.model !== model ? { ...e, model } : e)
   })
 
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
     const setting = (await $.env.get('MODEL_GUARD_CODEX_ARGS'))?.trim() ?? ''
     const wanted = required(setting)
-    const missing = codexRuns(e.command).flatMap(({ args, takesEffort, every }) =>
+    const missing = codexRuns(command).flatMap(({ args, takesEffort, every }) =>
       wanted.filter(one => (takesEffort || one.flag !== '--effort') && !has(args, one, every)),
     )
 
