@@ -4,9 +4,31 @@ const TERRAFORM = /\.(tf|tfvars|hcl)(\.json)?$/i
 // AWS's documented sample keys (…EXAMPLE) pass, so docs and tests can quote them.
 const SECRET =
   /\b(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}\b|secret_access_key["']?\s*[=:]\s*["']?(?![^"'\s]*EXAMPLE)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/i
-// The other secrets the rule names: private keys and API tokens (GitHub, Slack).
-const TOKEN =
-  /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{60,}|\bxox[abpr]-[A-Za-z0-9-]{10,}/
+// The other secrets the rule names: private keys and the API tokens with a fixed shape. This is secret-allow-guard's list of
+// formats and more; mods load folder by folder, so each keeps its own. A value holding EXAMPLE passes, as AWS's samples do.
+// shortcut: no JWTs, bearer values, password= or user:pass@host: in source files those are mostly fixtures and local defaults,
+// so they would deny ordinary edits; run gitleaks or trufflehog in CI for those.
+const TOKENS = new RegExp(
+  [
+    String.raw`-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----`,
+    String.raw`\bgh[pousr]_[A-Za-z0-9]{36,}`,
+    String.raw`\bgithub_pat_[A-Za-z0-9_]{60,}`,
+    String.raw`\bglpat-[A-Za-z0-9_-]{20,}`,
+    String.raw`\bnpm_[A-Za-z0-9]{36}\b`,
+    String.raw`\bxox[abprs]-[A-Za-z0-9-]{10,}`,
+    String.raw`hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]{20,}`,
+    // Anthropic and OpenAI: sk-ant-..., sk-proj-..., and the older bare sk- with one long run (a CSS class sk-fade-in-... has none).
+    String.raw`\bsk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}`,
+    String.raw`\bsk-[A-Za-z0-9]{32,}`,
+    String.raw`\b[sr]k_live_[A-Za-z0-9]{20,}`,
+    String.raw`\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])`,
+    String.raw`AccountKey=[A-Za-z0-9+/]{86}==`,
+    String.raw`\bsbp_[a-f0-9]{40}\b`,
+    String.raw`\bsb_secret_[A-Za-z0-9_-]{20,}`,
+  ].join('|'),
+  'g',
+)
+const hasToken = (text: string) => (text.match(TOKENS) ?? []).some(found => !found.includes('EXAMPLE'))
 const WORLD = /0\.0\.0\.0\/0|::\/0/
 const MANAGEMENT_PORTS = [22, 3389]
 
@@ -108,7 +130,7 @@ export const register: Register = on => {
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
     const text = e.tool === 'Edit' ? e.new_string : e.tool === 'Write' ? e.content : e.new_source
     const file = e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path
-    const secret = SECRET.test(text) ? 'an AWS access key' : TOKEN.test(text) ? 'a private key or API token' : undefined
+    const secret = SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
 
     if (secret !== undefined) {
       return {
