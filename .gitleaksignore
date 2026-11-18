@@ -1,0 +1,2 @@
+# Test fixture, not a secret: a fake curl -u password in a commit since rewritten to build it at run time.
+80831ed678d59be8504c1de9eb557f44d85ee361:mods/secret-allow-guard/hooks/register.test.ts:curl-auth-user:71

@@ -3,13 +3,23 @@ import type { Register } from 'claude-code'
 import { invocations } from './shell'
 
 // Codex runs through the plugin's companion script (node codex-companion.mjs task) or the CLI itself.
-const NODE = /^(.*[\\/])?node(\.exe)?$/i
+const NODE = /^(.*[\\/])?(node|bun|deno)(\.exe)?$/i
 const CODEX = /^(.*[\\/])?codex(\.exe|\.cmd|\.ps1)?$/i
+// A package runner starts the CLI by its package name: npx @openai/codex exec, npm exec -- @openai/codex exec.
+const NPX = /^(.*[\\/])?(npx|bunx|pnpx)(\.exe|\.cmd|\.ps1)?$/i
+const NPM = /^(.*[\\/])?(npm|pnpm|yarn|bun)(\.exe|\.cmd|\.ps1)?$/i
+const PACKAGE = /^(@openai\/)?codex(@[\w.-]+)?$/
+const CLAUDE = /^(.*[\\/])?claude(\.exe|\.cmd|\.ps1)?$/i
 const COMPANION_RUN = /^(task|review|adversarial-review)$/
 // The companion's reviews take --model but no --effort (review rejects it, adversarial-review reads it as focus text), so Codex's configured effort applies.
 const COMPANION_REVIEW = /^(review|adversarial-review)$/
 // queue sends a message to a saved session, and resume or fork with a prompt runs one: each on a model it may not name.
 const CLI_RUN = /^(exec|e|review|queue|resume|fork)$/
+// With none of those, the first word is a subcommand that runs no model, or the call is the interactive CLI and its other words a prompt.
+const CLI_OTHER =
+  /^(agents|login|logout|mcp|mcp-server|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|migrate-rollouts|unarchive|cloud|exec-server|features|help)$/
+// The companion's options that take the next word as their value, whatever it is: --cwd --model reads --model as a folder.
+const COMPANION_VALUE = /^--?(cwd|C|prompt-file|base|scope)$/
 
 // The flags and values a setting asks for, each flag with the value after it, if any: --model x --effort high.
 const required = (setting: string) => {
@@ -63,10 +73,11 @@ const cliArgs = (args: readonly string[]) => {
     const config = /^(-c|--config)$/.test(arg) ? args[++i] : /^(--config=|-c=?).+=/.test(arg) ? arg.replace(/^(--config=|-c=?)/, '') : undefined
 
     if (config !== undefined) {
-      const [key = '', ...rest] = config.split('=')
+      // Codex trims both sides of the =.
+      const [key = '', ...rest] = config.split('=').map(one => one.trim())
       const value = rest.join('=')
 
-      if (key === 'model') {
+      if (key === 'model' || key === 'review_model') {
         out.push('--model', value)
       } else if (key === 'model_reasoning_effort') {
         out.push('--effort', value)
@@ -88,7 +99,8 @@ const cliArgs = (args: readonly string[]) => {
 }
 
 // The argument lists of the Codex runs in a command: the ones that spend the plan, not --version, --help or login.
-// shortcut: a CLI run is any call with an exec, e or review word, so a flag whose value is one of those counts too; parse the CLI's options if that bites.
+// shortcut: a CLI run is any call with an exec, e or review word, so a flag whose value is one of those counts too, as does any call with a plain word
+// whose first word is not a subcommand that runs no model (`find . -name codex -type f`); parse the CLI's options if that bites.
 const codexRuns = (command: string) => [
   ...invocations(command, NODE).flatMap(all => {
     // Node's own flags come before the script, some with a value (--require node:fs), so the script is found by name.
@@ -98,16 +110,25 @@ const codexRuns = (command: string) => [
     const args = at < 0 || isCode ? [] : all.slice(at)
 
     return COMPANION_RUN.test(args[1] ?? '')
-      ? [{ args: args.slice(2), takesEffort: !COMPANION_REVIEW.test(args[1] ?? ''), every: false }]
+      ? [{ args: args.slice(2).filter((_, i, rest) => !COMPANION_VALUE.test(rest[i - 1] ?? '')), takesEffort: !COMPANION_REVIEW.test(args[1] ?? ''), every: false }]
       : []
   }),
   // Which of --model and -c model= the CLI lets win is not ours to guess, so every model it is given must match.
-  ...invocations(command, CODEX)
+  ...[
+    ...invocations(command, CODEX),
+    ...[...invocations(command, NPX), ...invocations(command, NPM).filter(all => /^(exec|x|dlx)$/.test(all[0] ?? ''))].flatMap(all => {
+      const at = all.findIndex(arg => PACKAGE.test(arg))
+
+      return at < 0 ? [] : [all.slice(at + 1)]
+    }),
+  ]
     // Help is -h or --help before any --, or help as the first word (codex help exec); a prompt of help is still a run.
     .filter(args => {
       const options = args.includes('--') ? args.slice(0, args.indexOf('--')) : args
 
-      return args.some(arg => CLI_RUN.test(arg)) && args[0] !== 'help' && !options.some(arg => /^(-h|--help)$/.test(arg))
+      const isRun = args.some(arg => CLI_RUN.test(arg)) || (!CLI_OTHER.test(args[0] ?? '') && args.some(arg => !arg.startsWith('-')))
+
+      return isRun && args[0] !== 'help' && !options.some(arg => /^(-h|--help)$/.test(arg))
     })
     .map(args => ({ args: cliArgs(args), takesEffort: true, every: true })),
 ]
@@ -125,6 +146,11 @@ export const register: Register = on => {
     return next(model && e.subagentType !== 'fork' && e.model !== model ? { ...e, model } : e)
   })
 
+  // A session started from this one inherits its model unless the call names another: the name is dropped, as a fork's is ignored.
+  on('tool.call', { tool: ['mcp__ccd_session__start_session'] }, async ($, e, next) =>
+    next((await $.env.get('MODEL_GUARD_SUBAGENT_MODEL'))?.trim() ? ({ ...e, model: undefined } as typeof e) : e),
+  )
+
   on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
     // A Monitor that opens a WebSocket has no command.
     const command = String((e as { command?: unknown }).command ?? '')
@@ -133,6 +159,21 @@ export const register: Register = on => {
     const missing = codexRuns(command).flatMap(({ args, takesEffort, every }) =>
       wanted.filter(one => (takesEffort || one.flag !== '--effort') && !has(args, one, every)),
     )
+
+    // A second Claude started from the shell is a subagent by another door: its --model, and any model its --agents or --settings JSON
+    // names, must be the pinned one.
+    const model = (await $.env.get('MODEL_GUARD_SUBAGENT_MODEL'))?.trim()
+    const other = invocations(command, CLAUDE)
+      .flatMap(args => [
+        ...args.flatMap((arg, i) => (arg === '--model' ? [args[i + 1]] : arg.startsWith('--model=') ? [arg.slice(8)] : [])),
+        // Only in a JSON argument: a prompt may say "model: x".
+        ...[...args.filter(arg => arg.startsWith('{')).join(' ').matchAll(/\bmodel\\?["']?\s*:\s*\\?["']?([^\s"'\\,}]+)/g)].map(found => found[1]),
+      ])
+      .find(one => one !== model)
+
+    if (model && other !== undefined) {
+      return { deny: `${$.plugin.name}: a Claude run started here uses ${model}; this one names ${other}. Pass --model ${model} or leave the model out.` }
+    }
 
     if (missing.length > 0) {
       const names = [...new Set(missing.map(({ flag, value }) => (value === undefined ? flag : `${flag} ${value}`)))]

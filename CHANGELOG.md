@@ -45,6 +45,43 @@
   is the whole part. `aria2c`, `Start-BitsTransfer`, `certutil -urlcache`
   and .NET downloads taint like `curl`. `aws ... --engine` is no longer
   taken for `--endpoint-url`.
+- secret-allow-guard 0.2.0: also flags `curl -u user:pass`, an
+  `Authorization` header of any scheme (`Basic`, `token`), `docker login -p`,
+  `redis-cli -a`, `mysqladmin -p` and the other `mysql*` and `mariadb*`
+  clients, a value after `--token` or `--api-key` and a space, `aws configure
+  set aws_secret_access_key`, `DB_PASS=` and `passphrase=`, a password with a
+  `$` inside it, a Stripe live key, a Google API key and a JWT. It reads the
+  user settings in `CLAUDE_CONFIG_DIR` too.
+- tf-lint 0.5.0: the secret deny also matches the AWS secret key under the
+  provider's `secret_key` and the API's `SecretAccessKey`. The Terraform
+  checks now read a rule resource that holds a nested block (an
+  `aws_security_group_rule` with `lifecycle` was skipped), blocks with
+  unquoted labels (`resource aws_kms_key logs {`, `provider aws {`),
+  `*.tofu` files and ARNs in any `aws-*` partition, and ignore a setting
+  inside a `/* */` comment that starts its line.
+- jev-guard 0.3.0: also checks the script run without its extension
+  (`tools\jev`) and a direct call to `api.typesafe.ai` (`curl`,
+  `Invoke-RestMethod`). A name split by quotes or a PowerShell backtick
+  (`prod.tf''vars`) is read whole. More secret files count (`prod.env`,
+  `.envrc`, `cat <.env`, anything under `.aws`, `.ssh`, `.kube`, `.docker`,
+  `.azure` or `gcloud`, `.git-credentials`, `.pypirc`, `*.ppk`, `*.jks`),
+  as do the key formats tf-lint denies (GitLab, fine-grained GitHub, npm,
+  Anthropic, OpenAI, Stripe live, Google, Supabase), a secret read by
+  `env:NAME`, `GetEnvironmentVariable` or `printenv NAME`, the whole
+  environment piped on, and the output of `gh auth token`, `aws
+  secretsmanager get-secret-value`, `aws configure get`, `terraform output`,
+  `show` and `state pull`. A profile named for GovCloud counts as GovCloud.
+- model-guard 0.3.0: more Codex runs are checked: the interactive CLI given a
+  prompt (`codex "fix it"`), the CLI started by a package runner (`npx
+  @openai/codex exec`, `npm exec`, `pnpm dlx`, `bunx`), and the companion run
+  by `bun` or `deno`. `-c review_model=x` and a padded `-c " model = x"` count
+  as the model, and a `--model` that the companion reads as the value of
+  `--cwd`, `--prompt-file`, `--base` or `--scope` no longer counts as the
+  flag. With `MODEL_GUARD_SUBAGENT_MODEL` set, a `claude` run from the shell
+  that names another model (`--model`, or a model in its `--agents` or
+  `--settings` JSON) is denied, and a session started with
+  `mcp__ccd_session__start_session` inherits this session's model whatever
+  model the call names.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME

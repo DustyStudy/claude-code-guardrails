@@ -364,7 +364,7 @@ for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal'] as const) {
   })
 }
 
-test('a backslash Bash drops does not hide a file or a reader; PowerShell keeps it', async ($, on) => {
+test('a backslash Bash drops does not hide a file or a reader; PowerShell keeps it in a file name', async ($, on) => {
   world(on)
   const ran: string[] = []
 
@@ -379,7 +379,8 @@ test('a backslash Bash drops does not hide a file or a reader; PowerShell keeps 
     await $.tool.call({ tool: 'PowerShell', command })
   }
 
-  expect(ran).toEqual(['PowerShell cat .e\\nv', 'PowerShell ca\\t .env', 'Bash cat docs\\notes.md', 'PowerShell cat docs\\notes.md'])
+  // The shared parser drops a backslash in a program's name for every shell, erring toward a call: PowerShell's ca\t is denied too.
+  expect(ran).toEqual(['PowerShell cat .e\\nv', 'Bash cat docs\\notes.md', 'PowerShell cat docs\\notes.md'])
 })
 
 const FILES = [

@@ -97,6 +97,19 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['an ssh-ed25519 public line', 'id_ed25519.pub', 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 me@host', null],
   ['an unquoted secret key in a .env file', '.env', `AWS_SECRET_ACCESS_${'KEY'}=${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl`, undefined],
   ["AWS's sample secret key, unquoted", '.env', `AWS_SECRET_ACCESS_${'KEY'}=wJalrXUtnFEMI/K7MDENG/${'bPxRfiCY'}EXAMPLEKEY`, null],
+  // Found in red-team review.
+  ['a provider secret_key', 'providers.tf', `provider "aws" {\n  secret_${'key'} = "${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl"\n}`, undefined],
+  ['a secret key in STS JSON', 'creds.json', `{ "SecretAccess${'Key'}": "${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl" }`, undefined],
+  ['a provider secret_key from a variable', 'providers.tf', 'provider "aws" {\n  region = "us-east-1"\n  secret_key = var.secret_key\n}', null],
+  ['an SSH rule resource with a lifecycle block', 'sg.tf', 'resource "aws_security_group_rule" "ssh" {\n  type = "ingress"\n  from_port = 22\n  to_port = 22\n  cidr_blocks = ["0.0.0.0/0"]\n  lifecycle {\n    create_before_destroy = true\n  }\n}', /port 22 /],
+  ['an egress rule resource with a lifecycle block', 'sg.tf', 'resource "aws_security_group_rule" "out" {\n  type = "egress"\n  from_port = 0\n  to_port = 65535\n  cidr_blocks = ["0.0.0.0/0"]\n  lifecycle {\n    create_before_destroy = true\n  }\n}', null],
+  ['clean Terraform with a lifecycle block', 'sg.tf', CLEAN.replace('  egress {', '  lifecycle {\n    create_before_destroy = true\n  }\n  egress {'), null],
+  ['a KMS key with unquoted labels', 'kms.tf', 'resource aws_kms_key logs {\n  description = "logs"\n}', /enable_key_rotation = true; and .*7 to 30/],
+  ['a GovCloud provider with an unquoted label', 'providers.tf', 'provider aws {\n  region = "us-gov-west-1"\n}', /use_fips_endpoint = true/],
+  ['a KMS key whose rotation sits in a block comment', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  /* enable_key_rotation = true */\n  deletion_window_in_days = 30\n}', /enable_key_rotation/],
+  ['a wildcard ARN path before a cron step', 'iam.tf', 'locals {\n  path = "bucket/*"\n  from_port = 22\n  to_port = 22\n  cidr = "0.0.0.0/0"\n  cron = "cron(0 */2 * * ? *)"\n}', /port 22 /],
+  ['an ARN in an OpenTofu file', 'main.tofu', 'role = "arn:aws:iam::1:role/x"', /partition/],
+  ['an ARN in an isolated partition', 'main.tf', 'role = "arn:aws-iso-b:iam::1:role/x"', /partition/],
 ]
 
 test('a notebook cell with a token is denied', async ($, on) => {
