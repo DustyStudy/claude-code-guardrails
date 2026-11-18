@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- self-guard 0.3.0: a path built through a variable is now filled in before
+  the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
+  `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME
+  ".claude"` are denied like the literal path; reading through a variable
+  still runs. Set-Variable and values from other commands are still not
+  followed.
 - `examples/managed-settings.json`: a managed-settings baseline for a
   company rollout (mods locked on, marketplace pinned to a commit, bypass
   mode off, managed-only hooks and permission rules, credential-file deny
