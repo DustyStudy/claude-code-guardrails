@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- taint-guard: `gh pr merge` runs in a tainted session. A body, subject or
+  author flag, `--admin`, a URL off github.com, or `GH_HOST` still deny it.
 - taint-guard: `TAINT_GUARD_BROWSER_HOSTS` names sites where the browser
   tools work without tainting the session. The guard reads tab addresses from
   the browser's own tab list before and after each call, never from page

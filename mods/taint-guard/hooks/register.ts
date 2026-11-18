@@ -27,6 +27,9 @@ const AWS_READ = /^((get|list|describe|head|lookup|filter|batch-get)-[\w-]*|scan
 const GH_READ = /^(view|list|status|checks|diff)$/
 // A gh api call stays a GET to GitHub without these: a field, input or method in any short-flag cluster (-iXDELETE), another host, or a full URL.
 const GH_API_WRITE = /^(--method|--field|--raw-field|--input|--hostname)(=|$)|^-[^-]*[fFX]|:\/\//
+// A gh pr merge carries no text of the model's without these: a body, subject or author, in any short-flag cluster (-sb), or a URL off github.com.
+// --admin is refused too: it merges past branch protection.
+const GH_MERGE_UNSAFE = /^--(admin|body|body-file|subject|author-email)(=|$)|^-[^-]*[bFtA]|^(?!https:\/\/github\.com\/).*:\/\//
 // Settings that point gh at another host, wherever the line sets them (VAR=x prefix, env, $env:).
 const GH_OTHER_HOST = /GH_HOST|ENTERPRISE_TOKEN/i
 
@@ -60,7 +63,10 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], comma
 
       const isApiGet = group === 'api' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_API_WRITE.test(arg))
 
-      return !(group === 'status' || isApiGet || (group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
+      // shortcut: a merge changes the repo, so an injection can ask for one; it stays behind the repo's branch protection and required checks.
+      const isMerge = group === 'pr' && verb === 'merge' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_MERGE_UNSAFE.test(arg))
+
+      return !(group === 'status' || isApiGet || isMerge ||(group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
     },
   ],
   [
