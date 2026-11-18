@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Fifteen mods that stop risky commands
+when it works on AWS and Terraform. Sixteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -22,8 +22,8 @@ much of your Claude and Codex plans is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** 1010 tests across the fifteen mods, run in CI against a pinned
-  Claude Code release. Each guard's tests pin both what it denies and the
+- **Result:** over a thousand tests across the sixteen mods, run in CI
+  against a pinned Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
 > These are guardrails against an agent's mistakes, not a security boundary.
@@ -67,8 +67,9 @@ reaches you.
 
 ## Install
 
-Requires Claude Code 2.1.309 or later (the version CI tests against) and
-`git`. gh-ci-status needs the [GitHub CLI](https://cli.github.com/) signed
+Requires `git` and Claude Code at or above the release pinned in
+[package.json](package.json), which is the release CI tests against; older
+releases may lack mod APIs the mods use. gh-ci-status needs the [GitHub CLI](https://cli.github.com/) signed
 in; tf-plan-summary needs `terraform`.
 
 1. Clone the repository:
@@ -95,6 +96,54 @@ in; tf-plan-summary needs `terraform`.
    `git -C ../claude-code-guardrails-live pull` after each merge.
 
 3. Start a new Claude Code session. The mods load at startup.
+
+### Deploying across an organization
+
+The repository is also a plugin marketplace
+([`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)), so
+a company can install the mods from a release tag and lock them on with
+[managed settings](https://code.claude.com/docs/en/managed-settings.md),
+which outrank every user and project setting. In the managed settings file
+(`/Library/Application Support/ClaudeCode/managed-settings.json` on macOS,
+`/etc/claude-code/managed-settings.json` on Linux,
+`C:\Program Files\ClaudeCode\managed-settings.json` on Windows, or the
+same JSON through MDM or claude.ai's server-managed settings):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "claude-code-guardrails": {
+      "source": { "source": "github", "repo": "DustyStudy/claude-code-guardrails", "ref": "v0.7.0" }
+    }
+  },
+  "enabledPlugins": {
+    "terraform-guard@claude-code-guardrails": true,
+    "aws-guard@claude-code-guardrails": true,
+    "destructive-guard@claude-code-guardrails": true,
+    "self-guard@claude-code-guardrails": true,
+    "taint-guard@claude-code-guardrails": true,
+    "tf-lint@claude-code-guardrails": true
+  }
+}
+```
+
+- **Pin `ref`** to a release tag (the marketplace ships in releases after
+  v0.6.0), or to the tag's full commit SHA (Claude
+  Code 2.1.324 or later) so the marketplace cannot move off what you
+  reviewed. Upgrade by changing `ref` after reading the
+  [changelog](CHANGELOG.md).
+- **A plugin enabled in managed settings cannot be turned off** by a user:
+  disabling it at their own scope leaves it loading. Settings such as
+  `COMMIT_GUARD_OWNERS` go in the same file's `env` block, which also
+  overrides the user's.
+- **To stop users loading other plugins**, managed settings also take
+  `strictKnownMarketplaces` (an allowlist of marketplace sources) and
+  `disableSideloadFlags`. The second also makes Claude Code refuse to start
+  while `CLAUDE_CODE_PLUGIN_DIRS` names a plugin folder, so move users off
+  the clone install first, and do not list a mod both ways.
+- A single user can do the same without managed settings:
+  `/plugin marketplace add DustyStudy/claude-code-guardrails#v0.7.0`, then
+  enable the mods in `/plugin`.
 
 ### Settings
 
@@ -134,6 +183,29 @@ terraform-guard, aws-guard, destructive-guard, taint-guard, model-guard and self
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
 fails if the copies drift apart.
+
+### Versions and releases
+
+- **Each mod has its own version**, `version` in its
+  `.claude-plugin/plugin.json`, following semver. A pull request that
+  changes what a mod ships (anything in its folder but tests and README)
+  bumps that mod's version: patch for a fix that only lets through what
+  was wrongly denied or denies what was wrongly let through, minor for
+  anything else, including a new setting or a guard that now denies more.
+  While a mod is below 1.0, a change that needs users to act (a renamed
+  setting, a removed feature) is also a minor bump, called out in the
+  changelog. Claude Code compares this version to decide whether an
+  installed plugin needs updating, so a change without a bump does not
+  reach marketplace installs.
+- **Every pull request adds a line** under "Unreleased" in
+  [CHANGELOG.md](CHANGELOG.md), starting with the mod's name.
+- **The repository is released as a whole** with a `vX.Y.Z` tag: the
+  Unreleased section becomes that version's section, minor if any line
+  adds a mod or behaviour, patch if all are fixes. Repository and mod
+  versions move independently; a tag pins every mod at the version it
+  carries.
+- `npm test` fails if a mod's `plugin.json` lacks `name` (matching its
+  folder), an `x.y.z` `version`, `description`, `author` or `license`.
 
 ## Known limits
 

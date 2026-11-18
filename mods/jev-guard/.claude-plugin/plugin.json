@@ -1,1 +1,11 @@
-{ "name": "jev-guard", "version": "0.1.0", "description": "Denies Jev calls that would send secrets, tfvars, state files or GovCloud/CUI work to the TypeSafe API", "types": "./types/index.d.ts" }
+{
+  "name": "jev-guard",
+  "version": "0.1.0",
+  "description": "Denies Jev calls that would send secrets, tfvars, state files or GovCloud/CUI work to the TypeSafe API",
+  "author": {
+    "name": "Dustin Arrington",
+    "url": "https://github.com/DustyStudy"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

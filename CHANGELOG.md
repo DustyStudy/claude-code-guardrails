@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The repository is a plugin marketplace (`.claude-plugin/marketplace.json`),
+  so an organization can install the mods from a release tag and lock them
+  on through managed settings. The README's "Deploying across an
+  organization" shows how.
+- README: a versioning rule for mods and releases; the stated minimum Claude
+  Code release now follows the one pinned in `package.json`; the mod count
+  is sixteen.
+- jev-guard: its `plugin.json` carries author and license like the others.
+- CI: `npm test` fails when a mod's `plugin.json` lacks name, version,
+  description, author or license, or the marketplace does not list every
+  mod. The test job's runner blocks network egress except GitHub and the
+  npm registry.
 - cleanup-check: at session start, deletes plugin versions that updates left
   in `~/.claude/plugins/cache`, keeping each version `installed_plugins.json`
   lists and any plugin updated in the last day, and shows a toast with the
