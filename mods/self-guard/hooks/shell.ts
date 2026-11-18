@@ -2,13 +2,13 @@
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
-  /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm)(\.exe)?$/i
+  /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm|coproc|trap|su|runuser|pkexec|runas|sg|unshare|nsenter|taskset|chrt|numactl|strace|ltrace|torsocks|proxychains4?|caffeinate|xvfb-run|dbus-run-session|ssh-agent|fakeroot|ssh|tmux|screen|aws-vault|op|doppler|direnv|mise|asdf|dotenv|envchain|nix-shell)(\.exe)?$/i
 // What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
 const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
 const OPERATOR = /^[;|&(){}`\n]$/
 // A heredoc: its quote (a quoted tag keeps $( ) in the body unexpanded), tag, and the rest of the opening line with the body.
-// <<< is a here-string, not one.
-export const HEREDOC = /(?<!<)<<(?!<)-?\s*(["']?)(\w+)\1([\s\S]*?)\n\s*\2\b/g
+// <<< is a here-string, not one. A tag that goes on past its quote (<<"EO"F) ends at another line than \2 finds: not taken as one.
+export const HEREDOC = /(?<!<)<<(?!<)-?\s*(["']?)(\w+)\1(?![\w"'\\])([\s\S]*?)\n\s*\2\b/g
 // A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
@@ -22,6 +22,9 @@ const ESCAPE = /(?<=\w)`(?=[a-z])/gi
 // bash's $'...' and $"..." quote too: $'terraform' is terraform.
 // shortcut: escapes inside $'...' ($'\x74erraform') are not decoded; decode them if one is seen in use.
 const unquote = (word: string) => word.replace(/\$(?=["'])/g, '').replace(/["']/g, '')
+
+// bash drops a backslash in a program's name (\terraform, terr\aform); only the name, as a C:\ path or a pattern argument keeps its own.
+const isNamed = (word: string, binary: RegExp) => binary.test(word) || binary.test(word.replace(/\\(?=[\w-])/g, ''))
 
 // Redirections (2>&1, >file, > file) are not arguments of the program.
 const withoutRedirections = (words: readonly string[]) =>
@@ -39,11 +42,18 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
     return found
   }
 
-  // Read it both ways, so either shell's call is found.
-  const plain = source.replace(ESCAPE, '')
+  // Read it every way a shell could, so any shell's call is found: PowerShell drops a backtick in a word, bash expands a brace
+  // list where a command starts ({terraform,apply}), and a comment ends at its line even when a \ or ` ends it.
+  const variants = [
+    source.replace(ESCAPE, ''),
+    source.replace(/(^|[;|&(\n])(\s*)\{([^\s{}]*,[^\s{}]*)\}(?=[\s;|&)]|$)/g, (_, op: string, space: string, list: string) => `${op}${space}${list.replace(/,/g, ' ')}`),
+    source.replace(/[\\`]\r?\n/g, '\n'),
+  ]
 
-  if (plain !== source) {
-    found.push(...invocations(plain, binary, depth + 1))
+  for (const variant of new Set(variants)) {
+    if (variant !== source) {
+      found.push(...invocations(variant, binary, depth + 1))
+    }
   }
 
   // Line continuations join (bash's \ leaves nothing behind, so a split word is whole again); heredoc bodies are data unless a shell runs them.
@@ -51,8 +61,15 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
     .replace(/\\\r?\n/g, '')
     .replace(/`\r?\n/g, ' ')
     .replace(HEREDOC, (match: string, quote: string, _tag: string, rest: string, at: number, whole: string) => {
+      const before = whole.slice(whole.lastIndexOf('\n', at) + 1, at)
+
+      // A << inside quotes or a comment (echo '<<EOF', # <<EOF) starts no heredoc: the lines after it run.
+      if ((before.match(/'/g) ?? []).length % 2 === 1 || (before.match(/"/g) ?? []).length % 2 === 1 || /(^|\s)#/.test(before)) {
+        return match
+      }
+
       // A comment on the opening line (cat > x.sh <<EOF # bash script) names no shell.
-      const opening = `${whole.slice(whole.lastIndexOf('\n', at) + 1, at)} ${rest.split('\n')[0]}`.replace(/(^|\s)#.*$/, '')
+      const opening = `${before} ${rest.split('\n')[0]}`.replace(/(^|\s)#.*$/, '')
       // The whole line after the end, so a wrapped shell (env sh) counts too.
       const pipedTo = /\|\s*$/.test(opening) ? (whole.slice(at + match.length).trim().split('\n')[0] ?? '') : ''
       const body = rest.includes('\n') ? rest.slice(rest.indexOf('\n') + 1) : ''
@@ -118,12 +135,12 @@ export const invocations = (source: string, binary: RegExp, depth = 0): string[]
         found.push(...invocations(word, binary, depth + 1))
       }
 
-      const at = words.findIndex((word, i) => i > 0 && binary.test(word))
+      const at = words.findIndex((word, i) => i > 0 && isNamed(word, binary))
 
       if (at > 0) {
         found.push(words.slice(at + 1).flatMap(word => word.split(/[\s,]+/)).filter(Boolean))
       }
-    } else if (binary.test(words[0] ?? '')) {
+    } else if (isNamed(words[0] ?? '', binary)) {
       found.push(words.slice(1))
     }
   }
