@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- taint-guard: in a tainted session, denies git calls that name a URL or
+  `user@host:` (`clone`, `fetch`, `pull`, `ls-remote`, `remote`,
+  `submodule`, `config`, `archive`); installs from a URL or with the index,
+  registry or proxy pointed elsewhere (`pip`, `uv`, `npm`, `pnpm`, `yarn`,
+  `bun`, `npx`, `python`, `PIP_INDEX_URL`, `GOPROXY`); `docker`/`podman`
+  pulls and runs and `go get`/`install`/`run` of a host-qualified image or
+  module; and DNS and ping tools (`nslookup`, `dig`, `host`, `ping`,
+  `Resolve-DnsName`, `Test-NetConnection`, `tracert`, `traceroute`). Plain
+  `git fetch`/`pull` against configured remotes still run. `gh` views,
+  diffs, `gh run view --log` and `gh api` now taint the session like `curl`,
+  since they return text third parties write.
 - cleanup-check: at session start, deletes plugin versions that updates left
   in `~/.claude/plugins/cache`, keeping each version `installed_plugins.json`
   lists and any plugin updated in the last day, and shows a toast with the

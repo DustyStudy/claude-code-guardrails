@@ -40,7 +40,7 @@ much of your Claude and Codex plans is left.
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, and hands the command to the user to run. |
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
-| [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`), denies what could send data out or publish: network tools, `git push`, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
+| [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
 | [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token. Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
@@ -190,9 +190,16 @@ when it would be worth lifting.
 - **taint-guard** cuts the blast radius of a prompt injection; it does not
   detect one. It knows the sinks by program name, so a script that opens a
   socket itself (`python -c`, `node -e`) passes, as does a file read with
-  Read from a repo someone else wrote. A tainted WebFetch without a query
-  string still runs, so data in a URL path or subdomain gets out; deny
-  WebFetch or use `/sandbox` with a network allowlist for that. WebSearch
+  Read from a repo someone else wrote. A tainted WebFetch is judged by the
+  shape of its URL, so a query string, userinfo, or an encoded path segment
+  or host label is denied, but short or word-like data in a path or
+  subdomain still gets out; deny WebFetch or use `/sandbox` with a network
+  allowlist for that. Plain `git fetch`, `git pull` and `submodule update`
+  reach the remotes in the repo's config, so an edit to `.git/config` or
+  `.gitmodules` with the Edit tool can point them elsewhere; `npm install`
+  likewise follows an `.npmrc`. `gh pr list` and other listing calls do not
+  taint, though titles are third-party text. Any `gh api` call taints, even
+  one that returns only your own data. WebSearch
   stays usable and does not lock: its query goes to the search provider, not
   to a host the attacker reads, but its snippets can still carry an
   injection, which then meets no lock. It reads command lines with the shared parser, so a quoted
