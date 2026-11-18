@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- taint-guard 0.7.0: closes ways around the lock found in a red-team pass.
+  Once tainted it now also denies: sends that are no program's argument
+  (bash `/dev/tcp`, .NET `Net.WebClient`/`Sockets`/`Dns`, a
+  `\\host.example\share` or `//host.example/share` path, a `*_PROXY`
+  variable, a URL handed to `start`, `Start-Process`, `explorer` or
+  `xdg-open`); git made to run a program (`-c alias.x=!...`,
+  `core.sshCommand`, a pager or editor other than `cat`/`true`/`less`,
+  `GIT_SSH_COMMAND`, `--upload-pack`) or to push by another name
+  (`send-pack`, `subtree push`, `lfs push`); gh reads sent to another host
+  (`-R evil.example/o/r`, a URL off github.com, `GH_HOST` or `GH_REPO` on
+  any call); `AWS_ENDPOINT_URL` and `--endpoint-url` abbreviated to `--e`;
+  `terraform init -from-module` or with a remote address, `refresh`,
+  `workspace new|delete`, `terragrunt run-all apply`; `kubectl` and `helm`
+  writes; `npm pub` (npm takes a command by prefix), `python -m twine`,
+  `poetry publish`, `dotnet nuget push`, `docker buildx --output
+  type=registry`; a URL handed to `cargo`, `gem`, `deno`, `node`, `kubectl`
+  and other runners; `openssl s_client`, `aria2c`, `http`, `plink`/`pscp`,
+  `rclone`, `whois` and more network tools; `claude` and `codex` (a new
+  session is not tainted); `CronCreate` and `RemoteTrigger`; and MCP
+  resource reads (`ReadMcpResourceTool`), which are now judged as a call to
+  their server and taint like one. A WebFetch URL is denied when encoded
+  data sits anywhere in a path part (`TOKEN~`, `a;TOKEN`), not only when it
+  is the whole part. `aria2c`, `Start-BitsTransfer`, `certutil -urlcache`
+  and .NET downloads taint like `curl`. `aws ... --engine` is no longer
+  taken for `--endpoint-url`.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME
