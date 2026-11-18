@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- destructive-guard 0.6.1: closes spellings found in a red-team pass. git's
+  shortened long options (`reset --har`, `push --mirr`, `clean --forc`,
+  `switch --discard`), `git --config-env k=V reset --hard`, `git -c
+  clean.requireForce=false clean`, and `restore ./*` or `restore ..` are
+  denied like the plain forms. So are `rm --r --f`, `rm -rf ~name`,
+  `rd /s/q`, and a relative delete after `Push-Location`. SQL is also read
+  without its comments (`DROP/**/TABLE`, `DELETE FROM t -- WHERE`), and
+  `DROP MATERIALIZED VIEW`, `OWNED`, `KEYSPACE` and `PARTITION`,
+  `deleteMany({})`, `dropdb`, and the `pgcli`, `mycli`, `litecli`, `usql`
+  and `cqlsh` clients count. Disk formats add `format D:`, `mke2fs`,
+  `mkswap`, `wipefs`, `dd of=\\.\PhysicalDrive0` and a redirection into
+  `/dev/sd*`; `dd of=/dev/stdout` now runs.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME
