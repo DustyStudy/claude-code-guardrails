@@ -8,6 +8,18 @@
   rules, sandbox network allowlist, OpenTelemetry export, retention). The
   README's "A managed-settings baseline" explains each block and what the
   telemetry does not record. `npm test` checks the file.
+- aws-guard: also denies, by AWS CLI and by cmdlet, calls that turn off
+  logging or detection (CloudTrail, GuardDuty, Config, Security Hub,
+  `logs delete-log-group`/`put-retention-policy`, `ec2 delete-flow-logs`),
+  open S3 to the public (public access block, bucket policy, bucket ACL,
+  bucket encryption), change IAM access or identities (access keys, login
+  profiles, attach/detach/put policy, trust policy, policy versions, group
+  membership, MFA, password policy, SAML and OIDC providers, any `delete-*`),
+  weaken KMS keys (`disable-key`, `put-key-policy`, grants), or destroy data
+  (`s3 rb`, `s3 rm --recursive`, `s3api delete-bucket`, RDS, DynamoDB, EFS,
+  `ec2 terminate-instances`, `secretsmanager delete-secret` without a
+  recovery window, `backup delete-*`, `route53 delete-hosted-zone`).
+  `--dry-run` on EC2 and `--dryrun` on `s3` pass.
 - taint-guard: in a tainted session, denies git calls that name a URL or
   `user@host:` (`clone`, `fetch`, `pull`, `ls-remote`, `remote`,
   `submodule`, `config`, `archive`); installs from a URL or with the index,
