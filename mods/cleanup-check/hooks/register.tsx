@@ -66,7 +66,13 @@ export type Install = { installPath?: string; lastUpdated?: string }
 export type PluginCache = { dir: string; keep: readonly string[] }
 
 // One spelling per folder: C:\a\\b\ and c:/a/b match, so a doubled or trailing separator never makes a version in use look unused.
-const same = (path: string) => path.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+// Case folds only on a drive path: on Linux /m/P and /m/p are two folders, and a link from one to the other must not pass as itself.
+// shortcut: an 8.3 short name (DUSTIN~1) never equals its long name, so such a plugin is skipped, not pruned; expand names if that bites.
+export const same = (path: string) => {
+  const one = path.replace(/[\\/]+/g, '/').replace(/\/$/, '')
+
+  return /^[A-Za-z]:\//.test(one) ? one.toLowerCase() : one
+}
 
 /** Each plugin's cache folder whose old versions may go, with the versions in use to keep. */
 export const prunable = (cache: string, plugins: Readonly<Record<string, readonly Install[]>>, now: number): PluginCache[] =>
@@ -75,13 +81,15 @@ export const prunable = (cache: string, plugins: Readonly<Record<string, readonl
     const sep = cache.includes('\\') ? '\\' : '/'
     const dir = `${cache}${sep}${market}${sep}${name}`
     const keep = installs.map(one => one.installPath ?? '')
+    // A version in use is a folder right under the plugin's: a deeper path would leave its version folder looking unused.
+    const isVersion = (path: string) => same(path).startsWith(`${same(dir)}/`) && NAME.test(same(path).slice(same(dir).length + 1))
     const updated = installs.map(one => Date.parse(one.lastUpdated ?? ''))
     // Unsure what is in use, or a copy not under this folder (a local install): leave it all.
     const isKnown =
       rest.length === 0 &&
       [name, market].every(one => one !== undefined && NAME.test(one)) &&
       installs.length > 0 &&
-      keep.every(one => same(one).startsWith(`${same(dir)}/`)) &&
+      keep.every(isVersion) &&
       updated.every(one => !Number.isNaN(one) && now - one >= GRACE_MS)
 
     return isKnown ? [{ dir, keep }] : []
@@ -95,8 +103,9 @@ export const oldCopies = ({ dir, keep }: PluginCache, versions: readonly string[
   return versions.filter(one => NAME.test(one)).map(one => `${dir}${sep}${one}`).filter(one => !kept.includes(same(one)))
 }
 
+// Counts the old copies, and deletes them only when `remove` is set.
 // shortcut: no grace for a session left open over a day across an update; its skills from the old copy fail until it restarts.
-const pruneCache = async ($: EngineInterface) => {
+const pruneCache = async ($: EngineInterface, remove: boolean) => {
   // `||`, not `??`: an empty variable is unset, not the filesystem root.
   const raw =
     (await $.env.get('CLAUDE_CONFIG_DIR')) || (await $.env.get('USERPROFILE'))?.concat('\\.claude') || (await $.env.get('HOME'))?.concat('/.claude')
@@ -114,7 +123,7 @@ const pruneCache = async ($: EngineInterface) => {
     .read(`${home}${sep}plugins${sep}installed_plugins.json`)
     .then(text => JSON.parse(text) as { plugins?: Record<string, Install[]> })
     .catch(() => undefined)
-  let removed = 0
+  let count = 0
 
   for (const plugin of prunable(`${home}${sep}plugins${sep}cache`, installed?.plugins ?? {}, Date.now())) {
     // A link or junction anywhere on the way would send the deletes somewhere else: the folder must resolve to itself.
@@ -127,14 +136,18 @@ const pruneCache = async ($: EngineInterface) => {
     const versions = entries.filter(one => one.kind === 'dir' && !one.isLink).map(one => one.name)
 
     for (const path of oldCopies(plugin, versions)) {
+      if (!remove) {
+        count += 1
+        continue
+      }
       const argv = isWindows ? ['cmd', '/d', '/c', 'rd', '/s', '/q', path] : ['rm', '-rf', '--', path]
       const done = await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
 
-      removed += done?.exitCode === 0 ? 1 : 0
+      count += done?.exitCode === 0 ? 1 : 0
     }
   }
 
-  return removed
+  return count
 }
 
 const git = async ($: EngineInterface, cwd: string, args: readonly string[]) => {
@@ -187,12 +200,23 @@ const look = async ($: EngineInterface): Promise<Repo | undefined> => {
 }
 
 export const register: Register = on => {
-  // Plugin updates leave the old versions in the cache; clear them once a session, off the startup path.
+  // Plugin updates leave the old versions in the cache; count them once a session, off the startup path,
+  // and delete them only when the person opted in: a reminder mod does not delete on its own.
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    const remove = (await $.env.get('CLEANUP_CHECK_PRUNE_CACHE')) === '1'
+    const copies = (n: number) => `${n} old plugin cop${n > 1 ? 'ies' : 'y'}`
 
-    void pruneCache($)
-      .then(removed => removed > 0 && $.ui.toast(`Cleanup: removed ${removed} old plugin cop${removed > 1 ? 'ies' : 'y'}`))
+    void pruneCache($, remove)
+      .then(
+        n =>
+          n > 0 &&
+          $.ui.toast(
+            remove
+              ? `Cleanup: removed ${copies(n)}`
+              : `Cleanup: ${copies(n)} in the plugin cache; set CLEANUP_CHECK_PRUNE_CACHE=1 to remove them at session start`,
+          ),
+      )
       .catch(() => undefined)
 
     return started

@@ -1,7 +1,7 @@
 {
   "name": "cleanup-check",
-  "version": "0.1.0",
-  "description": "Status line after each turn listing what is left to clean up: a merged branch still checked out, merged branches to delete, saved Terraform plans, stray keys, certs and secret files; at session start, removes plugin versions left in the cache by updates",
+  "version": "0.2.0",
+  "description": "Status line after each turn listing what is left to clean up: a merged branch still checked out, merged branches to delete, saved Terraform plans, stray keys, certs and secret files; at session start, counts plugin versions left in the cache by updates and removes them when CLEANUP_CHECK_PRUNE_CACHE=1",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"
