@@ -199,6 +199,12 @@ const look = async ($: EngineInterface): Promise<Repo | undefined> => {
   }
 }
 
+// Deleting branches and secret files needs judgment: the button only drafts the ask, the person reads it and sends it.
+const cleanUp =($: EngineInterface, items: readonly string[]) =>
+  $.prompt.fill({
+    text: `Clean up what cleanup-check lists: ${items.join('; ')}. Delete merged branches with git branch -d, never -D. For a branch whose remote is gone, check it was merged first and ask me about any that was not. Ask me before deleting or moving any saved plan, key, cert or secret file. Then tell me what you removed.`,
+  })
+
 export const register: Register = on => {
   // Plugin updates leave the old versions in the cache; count them once a session, off the startup path,
   // and delete them only when the person opted in: a reminder mod does not delete on its own.
@@ -243,13 +249,14 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
 
     return (
       <Box flexDirection="column">
         <Box columnGap={1} flexWrap="wrap">
           <Text weight="semibold">Cleanup</Text>
           <Text dimColor>{items.join(' · ')}</Text>
+          <Button key="clean-up" label="Clean up" onPress={() => cleanUp($, items)} />
         </Box>
         {await next(e)}
       </Box>
