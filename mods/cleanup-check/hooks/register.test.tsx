@@ -1,7 +1,54 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { leftovers } from './register'
+import { leftovers, oldCopies, prunable } from './register'
+
+const CACHE = 'C:\\Users\\me\\.claude\\plugins\\cache'
+const DAY = 24 * 60 * 60 * 1000
+const NOW = Date.parse('2026-11-18T12:00:00Z')
+const OLD = '2026-11-01T00:00:00Z'
+
+test('a plugin updated over a day ago has its cache folder pruned, keeping each install in use', () => {
+  expect(
+    prunable(CACHE, {
+      'context7@official': [
+        { installPath: `${CACHE}\\official\\context7\\e614`, lastUpdated: OLD },
+        { installPath: `${CACHE}\\official\\context7\\0412`, lastUpdated: OLD },
+      ],
+    }, NOW),
+  ).toEqual([{ dir: `${CACHE}\\official\\context7`, keep: [`${CACHE}\\official\\context7\\e614`, `${CACHE}\\official\\context7\\0412`] }])
+})
+
+test('a plugin is left alone when just updated, unsure, or installed from outside its cache folder', () => {
+  const at = (installPath: string | undefined, lastUpdated: string | undefined) => [{ installPath, lastUpdated }]
+  const inCache = `${CACHE}\\m\\p\\1.0.0`
+
+  expect(
+    prunable(CACHE, {
+      'fresh@m': at(`${CACHE}\\m\\fresh\\1.0.0`, new Date(NOW - DAY / 2).toISOString()),
+      'nopath@m': at(undefined, OLD),
+      'nodate@m': at(`${CACHE}\\m\\nodate\\1.0.0`, undefined),
+      'local@m': at('C:\\src\\local', OLD),
+      '..@m': at(inCache, OLD),
+      'a/b@m': at(inCache, OLD),
+      'p@m@x': at(inCache, OLD),
+      'none@m': [],
+    }, NOW),
+  ).toEqual([])
+})
+
+test('old version folders go; the ones in use stay whatever their case or slashes', () => {
+  const dir = `${CACHE}\\official\\context7`
+
+  expect(oldCopies({ dir, keep: [`${dir.replace(/\\/g, '/').toUpperCase()}/E614/`] }, ['0412', 'e614', 'ff92', '..', 'a b'])).toEqual([
+    `${dir}\\0412`,
+    `${dir}\\ff92`,
+  ])
+  expect(oldCopies({ dir, keep: [`${CACHE}\\\\official\\context7\\\\e614\\`] }, ['e614', 'ff92'])).toEqual([`${dir}\\ff92`])
+  expect(oldCopies({ dir: '/home/me/.claude/plugins/cache/m/p', keep: ['/home/me/.claude/plugins/cache/m/p/2.0.0'] }, ['1.0.0', '2.0.0'])).toEqual([
+    '/home/me/.claude/plugins/cache/m/p/1.0.0',
+  ])
+})
 
 const CLEAN = { current: 'main', base: 'main', merged: ['main'], gone: [], pushed: ['main'], elsewhere: [], untracked: [] }
 
