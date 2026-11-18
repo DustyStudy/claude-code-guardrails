@@ -300,10 +300,21 @@ test('desktop shows what is left above the prompt, the terminal only in its stat
 
     return <Text>engine</Text>
   })
+  // Clean up only drafts the ask into the prompt box: it runs nothing itself.
+  const fills: string[] = []
+  on('prompt.fill', (_, e) => {
+    fills.push(e.text)
+
+    return { isFilled: true }
+  })
   await $.turn.complete({ reason: 'answer', answer: '' } as never)
 
   const desktop = await $.ui.mount({ ...ABOVE, surface: 'desktop' })
   expect((await desktop.find({ type: 'Text', text: /saved plan/ }))?.text).toBe('1 saved plan: gd.tfplan')
+  await desktop.press({ key: 'clean-up' })
+  expect(fills).toEqual([
+    'Clean up what cleanup-check lists: 1 saved plan: gd.tfplan. Delete merged branches with git branch -d, never -D. For a branch whose remote is gone, check it was merged first and ask me about any that was not. Ask me before deleting or moving any saved plan, key, cert or secret file. Then tell me what you removed.',
+  ])
   await desktop.unmount()
 
   const terminal = await $.ui.mount({ ...ABOVE, surface: 'terminal' })

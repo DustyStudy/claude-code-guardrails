@@ -32,6 +32,9 @@
   Plugins it cannot place are left alone, including an install path deeper
   than a version folder. Paths compare case-insensitively only on Windows
   drive paths.
+- cleanup-check: in Desktop, a Clean up button beside what is left drafts the
+  ask into the prompt box (merged branches with `git branch -d`, ask before
+  any unmerged branch or secret file); nothing runs until you send it.
 - taint-guard: `gh pr merge` runs in a tainted session. A body, subject or
   author flag, `--admin`, a URL off github.com, or `GH_HOST` still deny it.
 - taint-guard: `TAINT_GUARD_BROWSER_HOSTS` names sites where the browser
