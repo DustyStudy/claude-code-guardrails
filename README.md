@@ -146,6 +146,106 @@ same JSON through MDM or claude.ai's server-managed settings):
   `/plugin marketplace add DustyStudy/claude-code-guardrails#v0.7.0`, then
   enable the mods in `/plugin`.
 
+#### A managed-settings baseline
+
+The snippet above only switches the mods on. The mods catch an agent's
+mistakes; the controls a security team needs are Claude Code's own settings,
+and each is off until you set it.
+[`examples/managed-settings.json`](examples/managed-settings.json) sets them
+together. Replace `YOUR-GITHUB-ORG`, the commit SHA and the collector URL,
+then deploy it as the managed settings file at one of the three paths above.
+That folder, and every folder above it, must be writable only by
+administrators: anyone who can write there can rewrite the policy. Each
+block, in file order:
+
+- **`requiredMinimumVersion`** refuses to start a Claude Code older than
+  2.1.324. Earlier versions do not count a mod from a GitHub marketplace as
+  the organization's, so under the hooks lock below the mods would not load
+  and nothing would say so.
+- **`extraKnownMarketplaces`, `strictKnownMarketplaces`,
+  `disableSideloadFlags`** register this marketplace at one full commit SHA,
+  allow no other marketplace (the two source entries must match exactly,
+  `ref` included; add an entry for each other marketplace you approve), and
+  reject `--plugin-dir`, `--plugin-url`, `--agents`, `--mcp-config` and
+  `CLAUDE_CODE_PLUGIN_DIRS`. Point `repo` at a fork your organization
+  controls, or at `DustyStudy/claude-code-guardrails`.
+- **`enabledPlugins`, `prependPlugins`** lock on the mods that deny or flag
+  a mistake whoever is at the keyboard: terraform-guard, aws-guard,
+  destructive-guard, self-guard, taint-guard, tf-lint, secret-allow-guard
+  and commit-identity-guard (it reads `COMMIT_GUARD_OWNERS` from `env`). Add
+  secret-read-guard to both lists once a release ships it. `prependPlugins`
+  is what makes each one count as the organization's mod, and it must keep
+  `sec-default@builtin`, Claude Code's own guard, in the list.
+- **Left to each engineer**: jev-guard and model-guard enforce one person's
+  choice of tools and models, and usage-band, gh-ci-status, aws-context,
+  cleanup-check, output-trimmer and tf-plan-summary only display, remind or
+  add a tool. None is a control, so none is locked on.
+- **`allowManagedHooksOnly`** runs only the hooks and mods managed settings
+  deploy, so nobody adds a hook that approves what a guard denies. It also
+  stops every mod an engineer installs themselves, the personal ones above
+  included. To offer those, add them to `enabledPlugins` and
+  `prependPlugins` (on for everyone), or drop this key and accept user
+  hooks; deny rules still win over a user's mod on a managed machine.
+- **`allowManagedPermissionRulesOnly`,
+  `permissions.disableBypassPermissionsMode`** ignore allow rules from user
+  and project settings and from `--allowedTools`, and refuse
+  `--dangerously-skip-permissions`. Engineers can no longer save "don't ask
+  again", so put the allow rules your teams need in this file.
+- **`permissions.deny`** blocks Claude's file tools, and the `cat`, `head`
+  and redirections Claude Code recognizes in Bash, from `.env` files,
+  `~/.aws/credentials`, `~/.ssh`, Terraform state, `*.tfvars` and `*.pem`. A
+  Read deny also blocks Edit and Write (not NotebookEdit), so Claude cannot
+  write a `.tfvars` or `.env.example` either; drop a rule you cannot live
+  with. A script that
+  opens the file itself is not stopped except by the sandbox, and on Linux
+  the sandbox enforces only the two home-directory rules, not the `**`
+  ones. `mcp__terminal__run_in_terminal` is the desktop app's tool that runs
+  a command outside Bash, where no shell guard sees it; add a rule for every
+  MCP tool of yours that runs commands (`mcp__<server>__<tool>`), or allow
+  only named servers with `allowManagedMcpServersOnly`.
+- **`sandbox`** runs Bash commands in the OS sandbox with no unsandboxed
+  retry, and lets them reach only the listed hosts, which is the network
+  allowlist taint-guard's limit below asks for. `allowManagedReadPathsOnly`
+  stops an engineer re-opening a path the deny rules close. Trim the list: a broad host
+  such as `github.com` or `*.amazonaws.com` is itself a way out. With
+  `~/.ssh` denied, use HTTPS git remotes. The sandbox does not exist on
+  native Windows and does not cover the WebFetch tool. WebFetch prompts for
+  each new host, and nobody can save an allow rule for one; on Windows, or
+  to close it everywhere, add `"WebFetch"` to `permissions.deny` (not
+  `WebFetch(domain:*)`, which also empties the sandbox allowlist). On a
+  macOS and Linux fleet add `"failIfUnavailable": true`, which is left out
+  because it stops Claude Code starting on Windows.
+- **`env`, telemetry** sends OpenTelemetry metrics and events to your
+  collector, and managed settings pin the destination. `OTEL_LOG_TOOL_DETAILS`
+  adds each tool call's input to tool events, so treat the collector as
+  holding commands, file paths and fragments of file contents. For a
+  collector token, use `otelHeadersHelper` rather than a header in this
+  file. **A mod's deny is not in this telemetry.** Tested on Claude Code
+  2.1.317 with the console exporter, and not re-tested on 2.1.324: a command
+  destructive-guard denied produced no `tool_decision`, `tool_result` or
+  hook event, while an allowed command produced the first two. (A settings
+  `PreToolUse` hook's refusal is documented as a `tool_decision` with source
+  `hook`; a mod's is not that.) The audit trail shows which guards were
+  enabled (`plugin_loaded`, which does not prove their hooks loaded), every
+  call that ran, and every call Claude Code's own checks refused, though not
+  which rule refused it. A guard's denial is recorded only in the session
+  transcript on the engineer's machine.
+- **`cleanupPeriodDays`, `desktopSessionCleanupPeriodDays`** delete local
+  transcripts after 30 days, Desktop sessions included.
+- **`DISABLE_FEEDBACK_COMMAND`, `feedbackSurveyRate`, `feedbackDrafts`**
+  turn off `/feedback` (and `/bug`, `/share`), the session survey with its
+  offer to upload the transcript, and Claude-drafted feedback, the paths
+  that send a conversation with code to Anthropic. No setting governs
+  training: under Team, Enterprise and API terms Anthropic does not train on
+  Claude Code prompts or code unless the organization opts in. That holds
+  only for sessions signed in under the organization, which this file does
+  not force; `forceLoginOrgUUID` with `forceLoginMethod` does, and a
+  personal Pro or Max sign-in is under consumer terms.
+
+Check the result on one machine with `/status` and `claude doctor`, and
+with `claude --debug`, where each locked mod's `hooks module` line should
+read `tier prepend`.
+
 ### Settings
 
 Five mods read a setting from the same `env` block. Each is optional.

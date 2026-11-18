@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `examples/managed-settings.json`: a managed-settings baseline for a
+  company rollout (mods locked on, marketplace pinned to a commit, bypass
+  mode off, managed-only hooks and permission rules, credential-file deny
+  rules, sandbox network allowlist, OpenTelemetry export, retention). The
+  README's "A managed-settings baseline" explains each block and what the
+  telemetry does not record. `npm test` checks the file.
 - secret-read-guard (new): denies reading a credential file into the
   conversation by `Read`, `Grep`, or a shell command that prints it or
   copies it out (`.env`, AWS, SSH and cloud CLI credentials, private keys,
