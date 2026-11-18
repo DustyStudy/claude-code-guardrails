@@ -83,7 +83,8 @@ const cache = async ($: EngineInterface, on: On, prune: string | undefined) => {
   const runs: string[][] = []
   mock.env(on, { USERPROFILE: 'C:\\Users\\me', ...(prune === undefined ? {} : { CLEANUP_CHECK_PRUNE_CACHE: prune }) })
   on('fs.read', () => ({ value: JSON.stringify({ plugins: { 'context7@official': [{ installPath: `${dir}\\e614`, lastUpdated: OLD }] } }) }))
-  on('fs.stat', (_, e) => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: e.path } }))
+  // The plugin folder resolves to itself: no link on the way. Not e.path, which the host resolves its own way on each platform.
+  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: dir } }))
   on('fs.list', () => ({
     value: ['0412', 'e614', 'ff92'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })),
   }))
