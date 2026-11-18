@@ -64,6 +64,26 @@ const CASES: readonly (readonly [string, string, boolean])[] = [
   ['print code given the companion path as an argument', 'node --print=1 C:/x/codex-companion.mjs task', true],
   ['stdin code given the companion path as an argument', 'node - C:/x/codex-companion.mjs task < x.js', true],
   ['a task whose own prompt holds -e', `${COMPANION} task --model gpt-6.1-sol -e x`, false],
+  // Found in red-team review: a prompt with no subcommand runs the interactive CLI, and a package runner runs the CLI by its package name.
+  ['the interactive CLI with a prompt', 'codex "fix the bug"', false],
+  ['the interactive CLI on another model', 'codex -m gpt-6.1-sol "fix the bug"', false],
+  ['the interactive CLI with both', 'codex -m gpt-6-astra -c model_reasoning_effort=high "fix the bug"', true],
+  ['the CLI through npx', 'npx -y @openai/codex@latest exec "x"', false],
+  ['the CLI through npm exec', 'npm exec -- @openai/codex exec -m gpt-6.1-sol "x"', false],
+  ['the CLI through npx with both', 'npx @openai/codex exec -m gpt-6-astra -c model_reasoning_effort=high "x"', true],
+  ['a CLI review that switches model with -c review_model', 'codex review -m gpt-6-astra -c model_reasoning_effort=high -c review_model=gpt-6.1-sol', false],
+  ['the CLI exec that switches model with a padded -c key', 'codex exec -m gpt-6-astra -c model_reasoning_effort=high -c " model = gpt-6.1-sol" x', false],
+  // The companion takes the word after --cwd or --prompt-file as its value, so a --model there is no flag.
+  ['a task whose last --model is the value of --prompt-file', `${COMPANION} task --model gpt-6.1-sol --prompt-file --model gpt-6-astra --effort high`, false],
+  ['a task whose only --model is the value of --cwd', `${COMPANION} task --cwd --model gpt-6-astra --effort high`, false],
+  ['a task with a real --cwd', `${COMPANION} task --cwd repo ${ARGS}`, true],
+  ['a companion task run by bun', 'bun "C:/x/codex-companion.mjs" task', false],
+  ['a lookup of the CLI', 'command -v codex', true],
+  ['an install of the CLI', 'sudo npm install -g @openai/codex', true],
+  ['the bare interactive CLI', 'codex', true],
+  ['the CLI doctor', 'codex doctor', true],
+  ['the CLI MCP list', 'codex mcp list', true],
+  ['the CLI apply', 'codex apply abc123', true],
 ]
 
 const host = (on: On, env: Record<string, string>) => {
@@ -166,3 +186,42 @@ for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal']) {
     expect(denied).not.toContain('guard failed')
   })
 }
+
+// A second Claude started from the shell, or a session started from this one, is a way around the subagent pin.
+const CLAUDE_CASES: readonly (readonly [string, boolean])[] = [
+  ['claude -p --model sonnet "look"', false],
+  ['claude --model=haiku -p "look"', false],
+  [`claude -p "look" --agents '{"scout":{"description":"x","prompt":"y","model":"haiku"}}'`, false],
+  ['claude -p --model opus "look"', true],
+  ['claude -p "look"', true],
+  ['claude -p "which model: sonnet or haiku?"', true],
+  [`claude -p "look" --agents '{"scout":{"description":"x","prompt":"y","model":"opus"}}'`, true],
+  ['claude --version', true],
+  ['claude plugin test mods/model-guard', true],
+]
+
+for (const [command, isAllowed] of CLAUDE_CASES) {
+  test(`${isAllowed ? 'runs' : 'denies'} ${command}`, async ($, on) => {
+    const ran = host(on, { MODEL_GUARD_SUBAGENT_MODEL: 'opus' })
+    const done = await $.tool.call({ tool: 'Bash', command })
+
+    expect(ran()).toBe(isAllowed)
+    expect(done.deny === undefined).toBe(isAllowed)
+  })
+}
+
+test('a session started from this one inherits its model, whatever the call names', async ($, on) => {
+  mock.env(on, { MODEL_GUARD_SUBAGENT_MODEL: 'opus' })
+  const models: unknown[] = []
+
+  on('tool.call', { tool: ['mcp__ccd_session__start_session'] }, (_, e) => {
+    models.push((e as { model?: unknown }).model)
+
+    return { result: {} as never }
+  })
+
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'x', prompt: 'y', model: 'claude-haiku-4-5' } as never)
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'x', prompt: 'y' } as never)
+
+  expect(models).toEqual([undefined, undefined])
+})
