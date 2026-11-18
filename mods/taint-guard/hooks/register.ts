@@ -48,8 +48,9 @@ const isGhUntrusted = (args: readonly string[]) => {
   return group === 'api' || /^(view|diff)$/.test(verb ?? '')
 }
 
-// A URL, an scp-style host (git@host:path) or a remote helper (ext::): a host the call reaches, and data can ride in the address.
-const REMOTE = /:\/\/|::|^[^\s/\\:@]+@[^\s/\\:]+:/
+// A URL, an scp-style host (git@host:path, or host.example:path with no user) or a remote helper (ext::): a host the call reaches, and data can ride in the address.
+// The bare form needs a dot or localhost in the host, so a drive (C:\x) or a refspec (main:main) is not one.
+const REMOTE = /:\/\/|::|^[^\s/\\:@]+@[^\s/\\:]+:|^([^\s/\\:@]+\.[^\s/\\:@]+|localhost):/
 // An image or module named by its host (evil.example/x, localhost:5000/x): docker and go fetch from that host.
 const HOSTED = /^([\w-]+(\.[\w-]+)+|localhost)(:\d+)?\//
 // Settings that point an installer at another index, registry, proxy or daemon, wherever the line sets them.
