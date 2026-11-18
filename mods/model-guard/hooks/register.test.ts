@@ -143,3 +143,26 @@ test('a fork keeps its call as it was', async ($, on) => {
 
   expect(models).toEqual([undefined])
 })
+
+// Monitor and the desktop app's terminal tool hand a command line to a shell too: they are checked like Bash.
+for (const tool of ['Monitor', 'mcp__terminal__run_in_terminal']) {
+  test(`${tool} is denied what Bash is, and runs the rest`, async ($, on) => {
+    mock.env(on, { MODEL_GUARD_CODEX_ARGS: ARGS })
+    const ran: string[] = []
+
+    on('tool.call', { tool: [tool] }, (_, e) => {
+      ran.push(String(e.command))
+
+      return { result: { stdout: '', stderr: '', interrupted: false } }
+    })
+
+    const denied = JSON.stringify(await $.tool.call({ tool, command: `${COMPANION} task` } as never))
+    await $.tool.call({ tool, command: 'git status' } as never)
+    // A Monitor that opens a WebSocket has no command.
+    await $.tool.call({ tool, ws: { url: 'wss://example.com/events' } } as never)
+
+    expect(ran).toEqual(['git status', 'undefined'])
+    expect(denied).toContain('model-guard: ')
+    expect(denied).not.toContain('guard failed')
+  })
+}

@@ -215,6 +215,17 @@ when it would be worth lifting.
 - **Command-line guards** (terraform-guard, aws-guard, commit-identity-guard)
   read the command as written. They do not expand shell variables or
   aliases, and a script file that runs the command itself is not read.
+- **Every command guard** checks the four tools that hand a command line
+  to a shell: `Bash`, `PowerShell`, `Monitor` and the desktop app's
+  `mcp__terminal__run_in_terminal`. Calls made inside subagents and
+  workflow agents are checked the same way. A command run by any other MCP
+  tool (a server with a `command` or `script` argument) is not read: block
+  such a tool by name in managed settings with
+  `"permissions": { "deny": ["mcp__<server>__<tool>"] }`, or allow only the
+  MCP servers you have reviewed with `allowedMcpServers`. Scheduled and
+  remote runs (`CronCreate`, `RemoteTrigger`, scheduled tasks) take a
+  prompt, not a command; what they run is checked wherever the mods are
+  installed, which a cloud run is not unless its environment installs them.
 - **aws-guard** covers the AWS CLI and AWS Tools for PowerShell cmdlets called
   by name. SDK scripts, and a cmdlet called through a variable, are not
   checked. It denies a list of known calls, not everything but reads, so a

@@ -22,18 +22,24 @@ const ABSOLUTE = /^([a-zA-Z]:)?[\\/]/
 // After `commit`, -C or --reuse-message names a commit whose message and author are reused.
 const REUSE = /\s(?:-C|--reuse-message)(?:\s+|=)?(?:"([^"]+)"|'([^']+)'|([^\s;&|"']+))/
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
-    const commit = COMMIT.exec(e.command)
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
+    const commit = COMMIT.exec(command)
     const isCommit = commit !== null
 
-    if (!isCommit && !PR.test(e.command)) {
+    if (!isCommit && !PR.test(command)) {
       return next(e)
     }
 
     // The checks below read the first commit's repo and settings, so a second commit (another -C, cd or identity) would pass unread.
     // Counted with quoted text emptied, so a message that names `git commit` is not a second one.
-    const unquoted = e.command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""')
+    const unquoted = command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""')
 
     if ((unquoted.match(new RegExp(COMMIT.source, 'g')) ?? []).length > 1) {
       return { deny: `${$.plugin.name}: run one git commit per command, so each one's repo and identity are checked.` }
@@ -56,13 +62,13 @@ export const register: Register = on => {
     // -C counts only among git's global options: after `commit` it names a commit to reuse.
     // Git applies each -C on top of the last, so the cd and every -C go to it in order.
     const dirs = [
-      CD.exec(e.command)?.[1],
+      CD.exec(command)?.[1],
       ...[...(commit?.[1] ?? '').matchAll(GIT_DIR)].map(([, a, b, c]) => a ?? b ?? c),
     ].flatMap(dir => (dir === undefined ? [] : ['-C', dir.replace(/^\/([a-zA-Z])\//, '$1:/')]))
     const git = async (...args: string[]) =>
       (await $.process.run(['git', ...dirs, ...args])).stdout.trim()
 
-    const owner = ghRepo.exec(e.command)?.[1] ?? origin.exec(await git('remote', 'get-url', 'origin'))?.[1]
+    const owner = ghRepo.exec(command)?.[1] ?? origin.exec(await git('remote', 'get-url', 'origin'))?.[1]
 
     if (owner === undefined) {
       return next(e)
@@ -70,22 +76,22 @@ export const register: Register = on => {
 
     // A message file is read where git and gh look for it: the cd and each -C in turn, an absolute one resetting the path.
     const base = dirs.filter((_, i) => i % 2 === 1).reduce((path, dir) => (ABSOLUTE.test(dir) || path === '' ? dir : `${path}/${dir}`), '')
-    const files = [...e.command.matchAll(MESSAGE_FILE)]
+    const files = [...command.matchAll(MESSAGE_FILE)]
       .map(([, a, b, c]) => (a ?? b ?? c ?? '').replace(/^\/([a-zA-Z])\//, '$1:/'))
       .filter(file => file !== '' && file !== '-')
       .map(file => (ABSOLUTE.test(file) || base === '' ? file : `${base}/${file}`))
     // An unreadable file passes: git or gh will fail on it themselves.
     const messages = await Promise.all(files.map(file => $.fs.read(file).then(String, () => '')))
 
-    if (TRAILER.test(e.command) || messages.some(message => TRAILER.test(message))) {
+    if (TRAILER.test(command) || messages.some(message => TRAILER.test(message))) {
       return { deny: `${$.plugin.name}: no Claude trailers in ${owner} repos. Remove the Co-Authored-By / Generated with Claude Code line and retry.` }
     }
 
     if (isCommit) {
       // Settings count up to `commit` only: after it comes the message, which sets nothing.
-      const before = e.command.slice(0, commit?.index ?? 0)
+      const before = command.slice(0, commit?.index ?? 0)
       const inline = [
-        ...e.command.matchAll(AUTHOR),
+        ...command.matchAll(AUTHOR),
         ...`${before}${commit?.[0] ?? ''}`.matchAll(SET_EMAIL),
       ].map(([, email = '']) => email)
       // Git config still supplies an identity unless both are overridden: by `-c user.email=x` among git's own options, or by both variables set before the command.
@@ -96,7 +102,7 @@ export const register: Register = on => {
       const resolved = isOverridden
         ? []
         : await Promise.all(['GIT_AUTHOR_IDENT', 'GIT_COMMITTER_IDENT'].map(async ident => IDENT_EMAIL.exec(await git('var', ident))?.[1]))
-      const after = e.command.slice((commit?.index ?? 0) + (commit?.[0].length ?? 0))
+      const after = command.slice((commit?.index ?? 0) + (commit?.[0].length ?? 0))
       // An amend keeps the old author unless told otherwise, and with --no-edit the old message too.
       // -C <commit> (--reuse-message) takes another commit's author and message the same way, with no editor.
       const reused = REUSE.exec(after)
