@@ -139,9 +139,9 @@ const SINKS: readonly (readonly [string, RegExp, (args: readonly string[], comma
 // The first call in a command line that sends or publishes, by name.
 const sinkIn = (command: string) => SINKS.find(([, binary, isSink]) => invocations(command, binary).some(args => isSink(args, command)))?.[0]
 
-// Bash drops a backslash before a letter (git pu\sh is git push), so the line is read with and without them.
+// Bash drops a backslash before a letter (git pu\sh is git push), so the line is read with and without them; only PowerShell is known not to.
 const sink = (command: string, tool: string) =>
-  sinkIn(command) ?? (tool === 'Bash' ? sinkIn(command.replace(/\\(?=[A-Za-z])/g, '')) : undefined)
+  sinkIn(command) ?? (tool === 'PowerShell' ? undefined : sinkIn(command.replace(/\\(?=[A-Za-z])/g, '')))
 
 // A path part or host label that reads as encoded data (base64, hex, a token), not a word slug.
 const DATA = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9+/=_%]{24,}$/
@@ -265,24 +265,32 @@ const tabFor = (input: Record<string, unknown>, tabs: readonly Tab[] | undefined
   return input.tabId === undefined ? (active.length === 1 ? active[0] : undefined) : tabs?.find(tab => tab.id === String(input.tabId))
 }
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+// A Monitor that opens a WebSocket has no command.
+const commandOf = (e: { [key: string]: unknown }) => String(e.command ?? '')
+
 // What a tool call reads from outside, as the deny will name it; undefined when it reads nothing untrusted.
 const reads = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean): string | undefined => {
   if (e.tool === 'WebFetch' && !isTrusted) {
     return `WebFetch ${String(e.url)}`
   }
 
+  // Before the MCP check: the terminal tool's command is read even when its server is trusted.
+  if (
+    SHELL_TOOLS.includes(e.tool) &&
+    (invocations(commandOf(e), FETCH).some(args => !isAbout(args)) || invocations(commandOf(e), GH).some(isGhUntrusted))
+  ) {
+    return `${e.tool} ${commandOf(e).slice(0, 80)}`
+  }
+
   if (e.tool.startsWith('mcp__') && !isTrusted) {
     return e.tool
   }
 
-  if (
-    (e.tool === 'Bash' || e.tool === 'PowerShell') &&
-    (invocations(String(e.command), FETCH).some(args => !isAbout(args)) || invocations(String(e.command), GH).some(isGhUntrusted))
-  ) {
-    return `${e.tool} ${String(e.command).slice(0, 80)}`
-  }
-
-  return undefined
+  // A Monitor WebSocket streams what its server sends into the session.
+  return e.tool === 'Monitor' && e.ws !== undefined ? `Monitor ${String((e.ws as { url?: unknown }).url)}` : undefined
 }
 
 // What a tool call sends out or changes beyond this machine; undefined when it does neither.
@@ -292,11 +300,19 @@ const sends = (e: { tool: string; [key: string]: unknown }, isTrusted: boolean):
     return !isTrusted && carriesData(e.url) ? 'a WebFetch that carries data in its URL' : undefined
   }
 
+  // Before the MCP check: the terminal tool's command is read even when its server is trusted.
+  const out = SHELL_TOOLS.includes(e.tool) ? sink(commandOf(e), e.tool) : undefined
+
+  if (out !== undefined) {
+    return out
+  }
+
   if (e.tool.startsWith('mcp__')) {
     return isTrusted ? undefined : e.tool
   }
 
-  return e.tool === 'Bash' || e.tool === 'PowerShell' ? sink(String(e.command), e.tool) : undefined
+  // Its URL can carry data to any host, like a WebFetch's.
+  return e.tool === 'Monitor' && e.ws !== undefined ? 'a Monitor WebSocket' : undefined
 }
 
 export const register: Register = on => {

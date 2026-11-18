@@ -146,6 +146,15 @@
   its own plan.
 - README: a Works in column says which mods work in the CLI, in Desktop,
   or both.
+- terraform-guard, aws-guard, destructive-guard, self-guard,
+  commit-identity-guard, jev-guard, model-guard, taint-guard: a command
+  given to the `Monitor` tool or to the desktop app's terminal tool
+  (`mcp__terminal__run_in_terminal`) is now checked the way a Bash or
+  PowerShell command is; before, it ran past every guard. taint-guard also
+  treats a `Monitor` WebSocket as an untrusted read, denies one in a
+  tainted session, and reads the terminal tool's command even when
+  `TAINT_GUARD_TRUSTED` names its server. Other MCP tools that run a
+  command are still not read: deny them by name in managed settings.
 
 ## 0.6.0 (2026-10-28)
 

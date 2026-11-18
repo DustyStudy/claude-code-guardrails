@@ -48,9 +48,15 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
   return undefined
 }
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
-    const why = refusal(e.command, {
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
+    const why = refusal(command, {
       all: await $.env.get('TF_CLI_ARGS'),
       apply: await $.env.get('TF_CLI_ARGS_apply'),
       destroy: await $.env.get('TF_CLI_ARGS_destroy'),

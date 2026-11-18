@@ -1,6 +1,6 @@
 {
   "name": "aws-guard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Denies AWS CLI and AWS Tools for PowerShell calls that delete IAM roles or policies, change Organizations, or destroy KMS keys, so the user runs them",
   "author": {
     "name": "Dustin Arrington",
