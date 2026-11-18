@@ -14,6 +14,20 @@
   and `cqlsh` clients count. Disk formats add `format D:`, `mke2fs`,
   `mkswap`, `wipefs`, `dd of=\\.\PhysicalDrive0` and a redirection into
   `/dev/sd*`; `dd of=/dev/stdout` now runs.
+- self-guard 0.3.1: closes spellings found in a red-team pass. A guarded
+  path is now found inside a quoted command line or code (`bash -c "..."`,
+  `python -c "open('...')"`), after an option's `=` (`--output=path`),
+  through `$USERPROFILE` or `%HOMEDRIVE%%HOMEPATH%`, a wildcard
+  (`~/.claud*/CLAUDE.md`, `.claude/settings*.json`), braces
+  (`settings{,.local}.json`), a backslash bash drops (`~/.cl\aude`), and as
+  a relative path after a `cd` (`cd ~ && rm .claude.json`). `>& file`, a
+  redirection behind an escaped quote, `git -c key=program status`, and
+  `cp -r other/.claude ~` are changes. Write and Edit resolve `\Users\me`
+  and `C:..\x` as Windows does. A commit or PR message (`-m`, `--body`,
+  `--title`) may still name a guarded path. Reading next to `true`, `test`,
+  `[ ... ]`, `printf` or PowerShell's `select` and `where` is no longer
+  taken for a change (`cat .claude/settings.local.json 2>/dev/null || true`).
+
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME

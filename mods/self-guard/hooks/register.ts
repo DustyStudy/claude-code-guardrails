@@ -28,7 +28,9 @@ const norm = (path: string) => {
 const isAbsolute = (path: string) => /^([\\/]|[a-z]:([\\/]|$))/i.test(path)
 const isAt = (path: string, root: string) => path === root || path.startsWith(`${root.replace(/\/$/, '')}/`)
 
-const HOME_VAR = /^(~|\$HOME|\$\{HOME\}|\$env:(USERPROFILE|HOME)|\$\{env:(USERPROFILE|HOME)\}|%USERPROFILE%)(?=[\\/]|$)/i
+// Git Bash carries Windows' USERPROFILE too, and HOMEDRIVE with HOMEPATH spells the same folder.
+const HOME_VAR =
+  /^(~|\$\{?(HOME|USERPROFILE)\}?|\$env:(USERPROFILE|HOME)|\$\{env:(USERPROFILE|HOME)\}|\$env:HOMEDRIVE\$env:HOMEPATH|%USERPROFILE%|%HOMEDRIVE%%HOMEPATH%)(?=[\\/]|$)/i
 
 // What Claude Code loads as its own config or code: what a change there does to every later session.
 type Guarded = { roots: readonly string[]; open: readonly string[] }
@@ -48,11 +50,38 @@ const guardedOf = (home: string, pluginDirs: string): Guarded => {
 // A project's own settings can add hooks and permissions too.
 const PROJECT_SETTINGS = /(^|\/)\.claude\/settings(\.local)?\.json$/
 
-const isGuarded = (path: string, guarded: Guarded) =>
-  PROJECT_SETTINGS.test(path) || (guarded.roots.some(root => isAt(path, root)) && !guarded.open.some(root => isAt(path, root)))
+// A wildcard path's folders as a pattern: * and ? stay inside one name and, as in bash, match no leading dot; [..] is any one character.
+// shortcut: PowerShell's leading * does match a dot (~\*\CLAUDE.md); read the tool's shell if that is seen.
+const pattern = (parts: readonly string[]) =>
+  new RegExp(
+    `^${parts
+      .map(part => {
+        const name = part.replace(/\[[^\]]+\]/g, '?').replace(/[.+^$(){}|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')
+
+        return /^[*?]/.test(part) ? `(?!\\.)${name}` : name
+      })
+      .join('/')}$`,
+  )
+
+const isGuarded = (path: string, guarded: Guarded) => {
+  if (!/[*?[]/.test(path)) {
+    return PROJECT_SETTINGS.test(path) || (guarded.roots.some(root => isAt(path, root)) && !guarded.open.some(root => isAt(path, root)))
+  }
+
+  // A wildcard path is guarded when it can spell a guarded one: ~/.claud*/CLAUDE.md, .claude/settings*.json.
+  const parts = path.split('/')
+
+  return (
+    ['.claude/settings.json', '.claude/settings.local.json'].some(name => pattern(parts.slice(-2)).test(name)) ||
+    (guarded.roots.some(root => pattern(parts.slice(0, root.split('/').length)).test(root)) && !guarded.open.some(root => isAt(path, root)))
+  )
+}
 
 const resolve = (path: string, cwd: string, home: string) => {
-  const expanded = path.replace(HOME_VAR, home)
+  const drive = /^[a-z]:/i.exec(cwd)?.[0] ?? ''
+  // On Windows \Users\me sits on the session's drive, and C:x is x below the session's folder when that is on C:.
+  const rooted = path.replace(HOME_VAR, home).replace(/^[\\/](?=[^\\/]{2})/, `${drive}/`)
+  const expanded = drive !== '' && !isAbsolute(rooted) && rooted.toLowerCase().startsWith(drive.toLowerCase()) ? rooted.slice(2) : rooted
 
   return norm(isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`)
 }
@@ -85,6 +114,14 @@ const expandVariables = (command: string) => {
 // A command line's words, quoted runs kept whole (a path can hold spaces), as paths: -Path:x and of=x name x, and a,b is two.
 const paths = (command: string, cwd: string, home: string) =>
   (command.match(/(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;|&()<>`])+/g) ?? [])
+    // A word is read in pieces too: a quoted run can be a command line or code (bash -c "rm ~/x", python -c "open('x')"), and
+    // --output=x names x. A commit or PR message stays whole, so prose that names a guarded path is no change, and so does an
+    // assignment, which changes nothing until its variable is used.
+    .flatMap((word, i, all) =>
+      /^(-a?m|--message|--body|--title)$/.test(all[i - 1] ?? '') || /^(--(message|body|title)|\$?(env:)?\w+)=/.test(word)
+        ? [word]
+        : [word, ...word.split(/[\s"'()=;|&<>]+/)],
+    )
     .flatMap(word => word.replace(/["']/g, '').split(','))
     .map(word => word.replace(/^-\w+:(?![\\/])/, '').replace(/^\w+=/, '').replace(/^\{+/, ''))
     // A brace left at the end closes a block or group; ${HOME} was read before it goes.
@@ -125,22 +162,48 @@ const withoutDataHeredocs = (command: string, cwd: string, home: string, guarded
 
 // Deleting or moving a folder above a guarded one takes it along: rm -rf .claude, Remove-Item -Recurse ~/.claude/..
 const REMOVER = bin('rm|Remove-Item|ri|del|erase|rd|rmdir|mv|move|Move-Item|mi|ren|Rename-Item|rni')
+// A whole .claude folder copied into home or the session's folder lands on the one there: cp -r other/.claude ~. The last word is the target.
+const COPIER = bin('cp|copy|Copy-Item|cpi|xcopy|robocopy|rsync')
 const removesAbove = (command: string, cwd: string, home: string, guarded: Guarded) =>
   invocations(command, REMOVER).some(args =>
     paths(args.join(' '), cwd, home).some(path => path.endsWith('/.claude') || guarded.roots.some(root => isAt(root, path))),
-  )
+  ) ||
+  invocations(command, COPIER).some(args => {
+    const [target, ...sources] = args.map(arg => resolve(arg, cwd, home)).reverse()
 
-// Programs that only read or move around; anything else that touches a guarded path is a change.
+    return (target === norm(home) || target === norm(cwd)) && sources.some(path => path.endsWith('/.claude'))
+  })
+
+const CD = bin('cd|pushd|chdir|Set-Location|sl|Push-Location')
+// Every folder a cd in the command reaches is a base of its relative paths: cd ~ && rm .claude.json.
+// shortcut: as in destructive-guard, each cd is read from the session's folder and from where the cd before it landed, and every
+// folder reached is a base, in any order; a cd to a variable is not followed. Upgrade if a script cds back and forth.
+const basesOf = (command: string, cwd: string, home: string) => {
+  let at = cwd
+
+  return [
+    cwd,
+    ...invocations(command, CD).flatMap(args => {
+      // A bare cd goes home.
+      const dir = args.find(word => !word.startsWith('-')) ?? '~'
+      at = resolve(dir, at, home)
+
+      return [at, resolve(dir, cwd, home)]
+    }),
+  ]
+}
+
+// Programs that only read, test or move around; anything else that touches a guarded path is a change.
 const READER = bin(
-  'cat|cut|which|type|gc|Get-Content|ls|dir|gci|Get-ChildItem|Get-Item|gi|Test-Path|Resolve-Path|head|tail|less|more|grep|egrep|rg|Select-String|sls|wc|stat|diff|jq|echo|Write-Output|cd|pushd|popd|chdir|Set-Location|sl|pwd|Get-Location|Select-Object|Where-Object|Measure-Object|ConvertFrom-Json|Format-List|Out-String|realpath|dirname|basename',
+  String.raw`cat|cut|which|type|gc|Get-Content|ls|dir|gci|Get-ChildItem|Get-Item|gi|Test-Path|Resolve-Path|Split-Path|head|tail|less|more|grep|egrep|rg|Select-String|sls|wc|stat|diff|jq|echo|printf|Write-Output|Write-Host|true|false|:|test|\[\[?|cd|pushd|popd|chdir|Set-Location|sl|pwd|Get-Location|Select-Object|select|Where-Object|where|Measure-Object|measure|Sort-Object|ConvertFrom-Json|ConvertTo-Json|Format-List|fl|Format-Table|ft|Out-String|realpath|dirname|basename`,
 )
 const GIT = bin('git')
 const GIT_VALUE = /^(-C|-c|--git-dir|--work-tree|--namespace)$/
 const GIT_READS = /^(status|log|diff|show|rev-parse|ls-files|blame|describe)$/
-// git diff --output and log -o write a file.
+// git diff --output and log -o write a file, and a config value can name a program git then runs (-c core.fsmonitor=...).
 const isGitRead = (args: readonly string[]) =>
   GIT_READS.test(args.find((word, i) => !word.startsWith('-') && !GIT_VALUE.test(args[i - 1] ?? '')) ?? '') &&
-  !args.some(arg => /^(--output|-o)/.test(arg))
+  !args.some(arg => /^(--output|-o|-c$|--config-env)/.test(arg))
 // git commit and tag with -F - read a heredoc as their message; git apply or am would read it as a patch. Only -C may come before the
 // subcommand (-c core.editor=sh can run it), and no editor or template (-e, -t) may open it.
 const isGitMessage = (args: readonly string[]) => {
@@ -156,9 +219,12 @@ const isGitMessage = (args: readonly string[]) => {
   )
 }
 
-// A redirection into a file writes it; 2>&1, > /dev/null and a > inside quotes do not.
+// A redirection into a file writes it, >& file too; 2>&1, >&-, > /dev/null and a > inside quotes do not. An escaped quote opens no
+// quoted run (echo \" > file \"), so the line is read with and without its escapes.
 const writesFile = (command: string) =>
-  /\d*>>?(?!&)/.test(command.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""').replace(/\d*>>?\s*(\/dev\/null|\$null|nul)\b|\d*>&\d/gi, ''))
+  [command, command.replace(/[\\`]./g, '')].some(text =>
+    />>?(?!&-)/.test(text.replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '""').replace(/\d*>>?\s*(\/dev\/null|\$null|nul)\b|\d*>&\d/gi, '')),
+  )
 
 const NODE = bin('node')
 // The Codex companion runs Codex and keeps its jobs outside the guarded dirs; other plugin scripts can install or uninstall.
@@ -227,11 +293,18 @@ export const register: Register = on => {
       return { deny: `${$.plugin.name}: this changes Claude Code's plugins, MCP servers or config, ${DENY}` }
     }
 
-    // The command as written, and with its variables filled in: a path split across them is guarded either way.
-    const changes = [command, expandVariables(command)].some(
-      view =>
-        (mentions(view, cwd, home, guarded, preloads) && !isReadOnly(view, cwd, home, guarded, preloads)) ||
-        removesAbove(view, cwd, home, guarded),
+    // Bash expands .claude/settings{,.local}.json to both words, and drops a backslash before a letter (~/.cl\aude is ~/.claude); a C:\ path keeps its own.
+    const expanded = command.replace(/(\S*)\{([^{}\s]*,[^{}\s]*)\}(\S*)/g, (_, pre: string, alternatives: string, post: string) =>
+      alternatives.split(',').map(one => `${pre}${one}${post}`).join(' '),
+    )
+    const unescaped = command.replace(/\S+/g, word => (/^[a-z]:/i.test(word) ? word : word.replace(/\\(?=[A-Za-z])/g, '')))
+    // The command as written, each of those ways, and with its variables filled in: a path is guarded however it is spelled.
+    const changes = [command, expandVariables(command), expanded, unescaped].some(view =>
+      basesOf(view, cwd, home).some(
+        base =>
+          (mentions(view, base, home, guarded, preloads) && !isReadOnly(view, base, home, guarded, preloads)) ||
+          removesAbove(view, base, home, guarded),
+      ),
     )
 
     return changes
