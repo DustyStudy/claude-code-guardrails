@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- secret-read-guard (new): denies reading a credential file into the
+  conversation by `Read`, `Grep`, or a shell command that prints it or
+  copies it out (`.env`, AWS, SSH and cloud CLI credentials, private keys,
+  Terraform state and `*.tfvars`, `.npmrc`, `.netrc`, kube and Docker
+  config); dumping the whole environment; and commands that print a stored
+  credential (`aws configure get` of a secret, `aws configure
+  export-credentials`, `gh auth token`, `git credential fill`, `terraform
+  state pull`). `.env.example`, `*.pub`, existence checks and programs that
+  use a file without printing it still run. `SECRET_READ_ALLOW` exempts
+  globs. The mod count is seventeen.
+- tf-lint 0.4.0: the secret deny on edits also covers GitLab, npm,
+  Anthropic, OpenAI, Stripe live, Google API, Azure storage and Supabase
+  keys, Slack `xoxs-` tokens and webhooks, and PGP and any other
+  `PRIVATE KEY` block. A value holding `EXAMPLE` still passes.
 - aws-guard: also denies, by AWS CLI and by cmdlet, calls that turn off
   logging or detection (CloudTrail, GuardDuty, Config, Security Hub,
   `logs delete-log-group`/`put-retention-policy`, `ec2 delete-flow-logs`),
