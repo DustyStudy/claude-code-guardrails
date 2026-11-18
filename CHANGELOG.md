@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- jev-guard 0.3.0: also checks the script run without its extension
+  (`tools\jev`) and a direct call to `api.typesafe.ai` (`curl`,
+  `Invoke-RestMethod`). A name split by quotes or a PowerShell backtick
+  (`prod.tf''vars`) is read whole. More secret files count (`prod.env`,
+  `.envrc`, `cat <.env`, anything under `.aws`, `.ssh`, `.kube`, `.docker`,
+  `.azure` or `gcloud`, `.git-credentials`, `.pypirc`, `*.ppk`, `*.jks`),
+  as do the key formats tf-lint denies (GitLab, fine-grained GitHub, npm,
+  Anthropic, OpenAI, Stripe live, Google, Supabase), a secret read by
+  `env:NAME`, `GetEnvironmentVariable` or `printenv NAME`, the whole
+  environment piped on, and the output of `gh auth token`, `aws
+  secretsmanager get-secret-value`, `aws configure get`, `terraform output`,
+  `show` and `state pull`. A profile named for GovCloud counts as GovCloud.
 - model-guard 0.3.0: more Codex runs are checked: the interactive CLI given a
   prompt (`codex "fix it"`), the CLI started by a package runner (`npx
   @openai/codex exec`, `npm exec`, `pnpm dlx`, `bunx`), and the companion run
