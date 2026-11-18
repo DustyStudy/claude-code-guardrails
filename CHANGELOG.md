@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- commit-identity-guard 0.4.1: closes ways around it found in a red-team
+  pass. A commit is now seen when written `GIT commit`, `git c""ommit`,
+  across a line continuation, or after `--work-tree <dir>`; a PR when gh's
+  options come before `pr`, and `gh pr merge` is checked too (body, `-F`,
+  `--author-email`). A trailer is found when written `--trailer
+  "Co-Authored-By=..."` or with quotes inside its words, in a file given as
+  `-aF` or `--fil`, and on an amend with no new message (`--am`, no
+  `--no-edit`) or a `-c <commit>` reuse. An address is read from `-c
+  USER.EMAIL=`, a key split by quotes, a value with no `@`, `$env:VAR =
+  'x'`, `git config user.email x &&`, `--auth=`, and an `--author` that is
+  only a pattern is denied. Identity variables count as an override only on
+  git's own command, not when printed or held in another variable. Config
+  the guard cannot read (`GIT_CONFIG_*`, `HOME`, `EMAIL`, `--config-env`,
+  `include.path`) is denied. `-Rowner/repo`, `-R github.com/owner/repo` and
+  `GH_REPO=` name the repo.
 - aws-guard 0.4.2: denies ways around the list found in a red-team pass. An
   abbreviated or unknown global option whose value stood where the service
   was expected (`aws --prof security iam delete-role`); `--dry-run` taken
