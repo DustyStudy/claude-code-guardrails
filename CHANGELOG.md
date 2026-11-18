@@ -45,6 +45,32 @@
   is the whole part. `aria2c`, `Start-BitsTransfer`, `certutil -urlcache`
   and .NET downloads taint like `curl`. `aws ... --engine` is no longer
   taken for `--endpoint-url`.
+- destructive-guard 0.6.1: closes spellings found in a red-team pass. git's
+  shortened long options (`reset --har`, `push --mirr`, `clean --forc`,
+  `switch --discard`), `git --config-env k=V reset --hard`, `git -c
+  clean.requireForce=false clean`, and `restore ./*` or `restore ..` are
+  denied like the plain forms. So are `rm --r --f`, `rm -rf ~name`,
+  `rd /s/q`, and a relative delete after `Push-Location`. SQL is also read
+  without its comments (`DROP/**/TABLE`, `DELETE FROM t -- WHERE`), and
+  `DROP MATERIALIZED VIEW`, `OWNED`, `KEYSPACE` and `PARTITION`,
+  `deleteMany({})`, `dropdb`, and the `pgcli`, `mycli`, `litecli`, `usql`
+  and `cqlsh` clients count. Disk formats add `format D:`, `mke2fs`,
+  `mkswap`, `wipefs`, `dd of=\\.\PhysicalDrive0` and a redirection into
+  `/dev/sd*`; `dd of=/dev/stdout` now runs.
+- self-guard 0.3.1: closes spellings found in a red-team pass. A guarded
+  path is now found inside a quoted command line or code (`bash -c "..."`,
+  `python -c "open('...')"`), after an option's `=` (`--output=path`),
+  through `$USERPROFILE` or `%HOMEDRIVE%%HOMEPATH%`, a wildcard
+  (`~/.claud*/CLAUDE.md`, `.claude/settings*.json`), braces
+  (`settings{,.local}.json`), a backslash bash drops (`~/.cl\aude`), and as
+  a relative path after a `cd` (`cd ~ && rm .claude.json`). `>& file`, a
+  redirection behind an escaped quote, `git -c key=program status`, and
+  `cp -r other/.claude ~` are changes. Write and Edit resolve `\Users\me`
+  and `C:..\x` as Windows does. A commit or PR message (`-m`, `--body`,
+  `--title`) may still name a guarded path. Reading next to `true`, `test`,
+  `[ ... ]`, `printf` or PowerShell's `select` and `where` is no longer
+  taken for a change (`cat .claude/settings.local.json 2>/dev/null || true`).
+
 - secret-allow-guard 0.2.0: also flags `curl -u user:pass`, an
   `Authorization` header of any scheme (`Basic`, `token`), `docker login -p`,
   `redis-cli -a`, `mysqladmin -p` and the other `mysql*` and `mariadb*`

@@ -84,6 +84,34 @@ const DENIED = [
   'cd ..; cd ..; rm -rf app/cache',
   // A subshell's cd does not carry on: the second cd .. leaves the project.
   '(cd build); cd ..; rm -rf sibling',
+  // Found in the red-team pass: other spellings of the same loss.
+  'git reset --har',
+  'git push --mirr origin',
+  'git clean --forc',
+  'git switch --discard main',
+  'git --config-env x.y=HOME reset --hard',
+  'git -c clean.requireForce=false clean -d',
+  'git restore ./*',
+  'git checkout -- ./*',
+  'git restore ..',
+  'rm --r --f ~',
+  'rm --recurs --force /c/Users/me/Documents',
+  'rm -rf ~other',
+  'cmd /c rd /s/q C:\\Users\\me\\Documents',
+  'Push-Location ..; Remove-Item -Recurse other-repo',
+  `psql -c "DROP/**/TABLE users"`,
+  'psql <<SQL\nDROP -- gone\nTABLE users;\nSQL',
+  'psql <<SQL\nDELETE FROM users -- WHERE id = 1\n;\nSQL',
+  `psql -c "DROP MATERIALIZED VIEW totals"`,
+  `psql -c "DROP OWNED BY app"`,
+  `pgcli -c "DROP TABLE users"`,
+  'dropdb prod',
+  `mongosh --eval "db.users.deleteMany({})"`,
+  'cmd /c format D: /q /y',
+  'mke2fs /dev/sdb1',
+  'wipefs -a /dev/sdb',
+  'dd if=disk.img of=//./PhysicalDrive1',
+  'cat disk.img > /dev/sda',
 ] as const
 
 // Ordinary work: runs.
@@ -130,6 +158,18 @@ const ALLOWED = [
   'git push -fn origin main',
   'dd if=/dev/zero of=/dev/null bs=1M count=1',
   'Clear-Disk -Number 2 -WhatIf',
+  'git push --follow-tags',
+  'git restore ../README.md',
+  'git clean --dry-run --force',
+  'rm --verbose -r dist',
+  'rm -rf build/~cache',
+  'cmd /c rd /s/q dist',
+  `psql -c "DROP INDEX users_email_idx"`,
+  `mongosh --eval "db.users.deleteMany({ old: true })"`,
+  './scripts/format src',
+  'git log --format=%s -1',
+  'dd if=disk.img of=/dev/stdout',
+  'echo done > /dev/null',
 ] as const
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
