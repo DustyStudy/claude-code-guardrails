@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- secret-read-guard 0.2.0: closes ways around it found in a red-team pass.
+  `Monitor` and the desktop terminal tool are now read like Bash. grep
+  flags that let the file pass for the pattern are fixed (`grep -a KEY
+  .env`, `grep KEY -E .env`, `grep -eKEY .env`, `grep -f pats .env`, `rg -rl
+  KEY .env`, `jq -c . terraform.tfstate`, `sed -nep .env`). Also denied:
+  `cat 0< .env` and `cat <>.env`; `cat $(ls .env)` and `gc (ls *.tfvars)`;
+  `cat .e\nv` and `ca\t .env` in Bash; `cp terraform.tfstate{,.json}`,
+  `install`, `rsync`, `scp` and `xcopy` out of a credential file; `rev`,
+  `paste`, `fold`, `column`, `iconv`, `zcat`, `perl -pe` and `ruby -pe`;
+  `OpenRead`, `StreamReader`, `createReadStream` and `File.read`; the whole
+  environment from an interpreter (`python -c "print(os.environ)"`, `node
+  -p process.env`, `jq -n env`, awk `ENVIRON`, ruby `ENV`, perl `%ENV`) and
+  `/proc/<pid>/environ`; `gh auth git-credential`, `aws sts
+  get-session-token` and `assume-role`, `docker-credential-* get`, `gpg
+  --export-secret-keys`. New guarded names: `.envrc`, `*.env`,
+  `.env-<name>`, any file in `~/.ssh` but `config`, `known_hosts`,
+  `authorized_keys` and `*.pub`, `~/.terraform.d/credentials.tfrc.json`,
+  `.terraformrc` and `.vault-token`. One variable by name still runs.
+- taint-guard 0.7.0: closes ways around the lock found in a red-team pass.
+  Once tainted it now also denies: sends that are no program's argument
+  (bash `/dev/tcp`, .NET `Net.WebClient`/`Sockets`/`Dns`, a
+  `\\host.example\share` or `//host.example/share` path, a `*_PROXY`
+  variable, a URL handed to `start`, `Start-Process`, `explorer` or
+  `xdg-open`); git made to run a program (`-c alias.x=!...`,
+  `core.sshCommand`, a pager or editor other than `cat`/`true`/`less`,
+  `GIT_SSH_COMMAND`, `--upload-pack`) or to push by another name
+  (`send-pack`, `subtree push`, `lfs push`); gh reads sent to another host
+  (`-R evil.example/o/r`, a URL off github.com, `GH_HOST` or `GH_REPO` on
+  any call); `AWS_ENDPOINT_URL` and `--endpoint-url` abbreviated to `--e`;
+  `terraform init -from-module` or with a remote address, `refresh`,
+  `workspace new|delete`, `terragrunt run-all apply`; `kubectl` and `helm`
+  writes; `npm pub` (npm takes a command by prefix), `python -m twine`,
+  `poetry publish`, `dotnet nuget push`, `docker buildx --output
+  type=registry`; a URL handed to `cargo`, `gem`, `deno`, `node`, `kubectl`
+  and other runners; `openssl s_client`, `aria2c`, `http`, `plink`/`pscp`,
+  `rclone`, `whois` and more network tools; `claude` and `codex` (a new
+  session is not tainted); `CronCreate` and `RemoteTrigger`; and MCP
+  resource reads (`ReadMcpResourceTool`), which are now judged as a call to
+  their server and taint like one. A WebFetch URL is denied when encoded
+  data sits anywhere in a path part (`TOKEN~`, `a;TOKEN`), not only when it
+  is the whole part. `aria2c`, `Start-BitsTransfer`, `certutil -urlcache`
+  and .NET downloads taint like `curl`. `aws ... --engine` is no longer
+  taken for `--endpoint-url`.
 - commit-identity-guard 0.4.1: closes ways around it found in a red-team
   pass. A commit is now seen when written `GIT commit`, `git c""ommit`,
   across a line continuation, or after `--work-tree <dir>`; a PR when gh's

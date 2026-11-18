@@ -39,13 +39,17 @@ const resolve = (path: string, { cwd, home }: World) => {
 // Files whose content is a credential, as normalised paths. Each team keeps its own exceptions in SECRET_READ_ALLOW.
 const SECRET_FILE = new RegExp(
   [
-    String.raw`(^|/)\.env(\.[^/]*)?$`,
+    // .env, .env.local, .env-prod, .envrc and prod.env; not .environment.md.
+    String.raw`(^|/)[^/]*\.env(rc|[._-][^/]*)?$`,
+    // Every variable of a process, as a file.
+    String.raw`^/proc/[^/]+/environ$`,
     String.raw`/\.aws/(credentials|(sso|cli)/cache/[^/]+)$`,
-    String.raw`(^|/)(\.ssh/id_[^/]*|id_(rsa|dsa|ecdsa|ed25519)[^/]*)$`,
+    // A private key in ~/.ssh can have any name; the files beside it that hold none are known.
+    String.raw`(^|/)(\.ssh/(?!(config|known_hosts[^/]*|authorized_keys)$)[^/]+|id_(rsa|dsa|ecdsa|ed25519)[^/]*)$`,
     String.raw`\.(pem|key|p12|pfx|ppk|jks|keystore)$`,
     String.raw`\.tfstate(\.[^/]*backup)?$`,
     String.raw`\.tfvars(\.json)?$`,
-    String.raw`(^|/)(\.npmrc|\.netrc|_netrc|\.pypirc|\.pgpass|\.git-credentials)$`,
+    String.raw`(^|/)(\.npmrc|\.netrc|_netrc|\.pypirc|\.pgpass|\.git-credentials|\.terraformrc|terraform\.rc|credentials\.tfrc\.json|\.vault-token)$`,
     String.raw`/\.docker/config\.json$`,
     String.raw`/\.kube/config$`,
     String.raw`/(gh|github cli)/hosts\.yml$`,
@@ -76,7 +80,7 @@ const HOME_FILES = [
   '.codex/auth.json',
   '.claude/.credentials.json',
 ]
-const PROJECT_FILES = ['.env', '.env.local', '.npmrc', 'terraform.tfstate', 'terraform.tfvars', 'id_rsa']
+const PROJECT_FILES = ['.env', '.env.local', '.envrc', '.npmrc', 'terraform.tfstate', 'terraform.tfvars', 'id_rsa']
 
 // shortcut: * and ? only, [a-z] sets are read as text, so `cat .en[v]` slips past; read sets if one is seen in use.
 const globSource = (glob: string) =>
@@ -130,34 +134,45 @@ const secretIn = (words: readonly string[], world: World) => words.flatMap(word 
 // shortcut: an interpreter given its own code (python -c, node -e, openssl, tar then cat) is not followed beyond READ_CALL;
 // no parser fixes that: for it, keep the files out of the account Claude runs as.
 const READER = bin(
-  'cat|tac|nl|type|gc|Get-Content|head|tail|less|more|bat|base64|xxd|od|hexdump|strings|Format-Hex|certutil|cut|sort|uniq|diff|dd|Import-Csv',
+  'cat|tac|nl|rev|type|gc|Get-Content|head|tail|less|more|bat|base64|base32|xxd|od|hd|hexdump|strings|Format-Hex|certutil|cut|paste|fold|fmt|pr|expand|column|iconv|zcat|sort|uniq|diff|cmp|comm|dd|Import-Csv',
 )
 const GREP = bin('grep|egrep|rg')
 // Their first plain argument is a pattern or script, not a file: `rg "\.tfvars" docs` searches for the name.
-const PATTERN_FIRST = bin('fgrep|ag|findstr|Select-String|sls|awk|gawk|jq')
+// perl and ruby are here for -pe and -ne, which print the files after the code.
+const PATTERN_FIRST = bin('fgrep|ag|awk|gawk|jq|perl|ruby')
+// Their options are whole words (-CaseSensitive), so no letter in one is a short flag.
+const PS_PATTERN_FIRST = bin('findstr|Select-String|sls')
 // An edit in place prints nothing.
 const EDITOR = bin('sed|yq')
 const isInPlace = (args: readonly string[]) => args.some(arg => /^(-i|--in-place)/.test(arg))
-const VALUE_FLAG = /^(-[ABCmtTgf]|--(after-context|before-context|context|max-count|type|type-not|glob|iglob|file)|-(literal)?path|-context)$/i
-const operands = (args: readonly string[]) => {
-  const flagged = args.findIndex(arg => /^(-e|--regexp|-patt\w*)$/i.test(arg))
+// By case: grep's -a, -b, -c and -F take no value, and one read as taking it let the file pass for the pattern. -T and -E take one
+// only in rg, so they are left out.
+const isValueFlag = (arg: string) =>
+  /^(-[ABCmtgf]|--(after-context|before-context|context|max-count|type|type-not|glob|iglob|file))$/.test(arg) || /^-((literal)?path|context)$/i.test(arg)
+const operands = (args: readonly string[], hasShortFlags = true) => {
+  // -e KEY and -f patterns, alone or ending a cluster (-ie KEY), name the pattern in the next word.
+  const flagged = args.findIndex(arg => (hasShortFlags && /^(-[a-zA-Z]*[ef]|--regexp|--file)$/.test(arg)) || /^-patt\w*$/i.test(arg))
   // The value of -A 2, -t md or -g '*.tf' is not the pattern; -g's stays, since it names files.
-  const first = args.findIndex((arg, i) => !arg.startsWith('-') && !VALUE_FLAG.test(args[i - 1] ?? ''))
+  const first = args.findIndex((arg, i) => !arg.startsWith('-') && !isValueFlag(args[i - 1] ?? ''))
 
-  return args.some(arg => arg.startsWith('--regexp=')) ? args : args.filter((_, i) => i !== (flagged >= 0 ? flagged + 1 : first))
+  // Glued on (-eKEY, --file=x) the pattern is no word of its own, so every bare word is a file.
+  return hasShortFlags && args.some(arg => /^(--(regexp|file)=|-[a-zA-Z]*[ef][^-])/.test(arg))
+    ? args
+    : args.filter((_, i) => i !== (flagged >= 0 ? flagged + 1 : first))
 }
 
 // The one read of a credential file that runs: its variable names, without the values.
 const NAMES_PATTERN = /^\^(\[A-Za-z_\]\[A-Za-z0-9_\]\*|\\w\+)( \*)?=$/
 const isNamesOnly = (args: readonly string[]) =>
-  // -q, -c and -l answer whether or where, and print no line of the file.
-  args.some(arg => /^(-[a-zA-BD-Z]*[qcl][a-zA-BD-Z]*|--quiet|--count|--files-with-matches)$/.test(arg)) ||
+  // -q, -c and -l answer whether or where, and print no line of the file. Before them in a cluster only flags that take no
+  // value: in -esecret the c is part of the pattern.
+  args.some(arg => /^(-[hHiInsvwxEFPz]*[qcl][a-zA-BD-Z]*|--quiet|--count|--files-with-matches)$/.test(arg)) ||
   (args.some(arg => /^-[EPh]*o[EPh]*$/.test(arg)) &&
     args.filter(arg => arg.startsWith('-')).every(arg => /^-[oEPh]+$/.test(arg)) &&
     NAMES_PATTERN.test(args.find(arg => !arg.startsWith('-')) ?? ''))
 
 // A copy, move or link out of a credential file leaves the content where a later read finds it.
-const COPIER = bin('cp|copy|Copy-Item|cpi|mv|move|Move-Item|mi|ren|Rename-Item|rni|ln')
+const COPIER = bin('cp|copy|Copy-Item|cpi|mv|move|Move-Item|mi|ren|Rename-Item|rni|ln|install|rsync|scp|xcopy')
 const copiedOut = (args: readonly string[], world: World) => {
   const flag = args.findIndex(arg => /^(-dest\w*|-t|--target-directory)$/i.test(arg))
   const words = args.filter((arg, i) => !/^-[\w-]+$/.test(arg) && (flag < 0 || i !== flag + 1))
@@ -169,7 +184,8 @@ const copiedOut = (args: readonly string[], world: World) => {
 }
 
 // A file read by code handed to an interpreter: [IO.File]::ReadAllText, open(), readFileSync.
-const READ_CALL = /ReadAll(Text|Bytes|Lines)|ReadLines|OpenText|ReadToEnd|readFileSync|readFile\b|\bopen\(|read_text|read_bytes|file_get_contents/
+const READ_CALL =
+  /ReadAll(Text|Bytes|Lines)|ReadLines|OpenText|OpenRead|StreamReader|ReadToEnd|readFileSync|readFile\b|createReadStream|\bopen\(|read_text|read_bytes|file_get_contents|(File|IO)\.read/
 
 const QUOTED = /"(?:\\.|[^"\\])*"|'[^']*'/g
 // What can stand before the program: an assignment, a keyword, a plain wrapper or a shell with its -c.
@@ -218,6 +234,15 @@ const dumpsEnv = ([program, ...args]: readonly string[]) => {
     (/^(gci|ls|dir|get-childitem|get-item|gi|get-content|gc|type|cat)$/.test(name) && args.some(arg => /^env:[\\/]?(\S*\*\S*)?$/i.test(arg)))
   )
 }
+// Code handed to an interpreter that prints every variable. One by name (os.environ['X'], process.env.X) runs.
+const ENV_CODE: readonly (readonly [RegExp, RegExp])[] = [
+  [bin('python|python3|py'), /os\.environ(?!\s*\[|\.get\()/],
+  [bin('node|deno|bun'), /process\.env(?![\w.[])|Deno\.env\.toObject/],
+  [bin('ruby'), /\bENV\b(?!\s*\[|\.fetch)/],
+  [bin('perl'), /%ENV/],
+  [bin('awk|gawk'), /ENVIRON(?!\s*\[\s*")/],
+  [bin('jq|yq'), /^\s*(\$ENV|env)\b(?!\.\w|\s*\[)/],
+]
 // shortcut: "names only" is read from the next stage's first words (cut -f1, wc, select Name), not proven; a longer pipeline
 // that puts values back is not followed.
 const NAMES_ONLY = /^(cut (?=.*-d ?=).*-f ?1( |$)|wc( |$)|(select|select-object|%|foreach-object) (-\w+ )*(name|key)$|measure)/i
@@ -225,8 +250,18 @@ const NAMES_ONLY = /^(cut (?=.*-d ?=).*-f ?1( |$)|wc( |$)|(select|select-object|
 // Calls that print a stored credential.
 const says = (args: readonly string[], phrase: RegExp) => phrase.test(` ${args.filter(arg => !arg.startsWith('-')).join(' ')} `)
 const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean])[] = [
-  [bin('aws'), args => says(args, / configure export-credentials /) || (says(args, / configure get /) && args.some(arg => /secret|token/i.test(arg)))],
-  [bin('gh'), args => says(args, / auth token /) || (says(args, / auth status /) && args.some(arg => /^(-t|--show-token)$/.test(arg)))],
+  [
+    bin('aws'),
+    args =>
+      says(args, / configure export-credentials | sts (get-session-token|get-federation-token|assume-role\S*) /) ||
+      (says(args, / configure get /) && args.some(arg => /secret|token/i.test(arg))),
+  ],
+  [
+    bin('gh'),
+    args => says(args, / auth (token|git-credential) /) || (says(args, / auth status /) && args.some(arg => /^(-t|--show-token)$/.test(arg))),
+  ],
+  [bin(String.raw`docker-credential-[\w-]+`), args => args.includes('get')],
+  [bin('gpg|gpg2'), args => args.some(arg => /^--export-secret-(sub)?keys$/.test(arg))],
   [bin('git'), args => says(args, / credential(-[\w-]+)? (fill|get) /)],
   [bin('terraform|tofu|terragrunt'), args => says(args, / state pull /)],
   [bin('gcloud'), args => says(args, / print-(access|identity)-token /)],
@@ -246,35 +281,41 @@ const finding = (command: string, world: World): string | undefined => {
     ...invocations(command, READER),
     ...invocations(command, GREP)
       .filter(args => !isNamesOnly(args))
-      .map(operands),
-    ...invocations(command, PATTERN_FIRST).map(operands),
+      .map(args => operands(args)),
+    ...invocations(command, PATTERN_FIRST).map(args => operands(args)),
+    ...invocations(command, PS_PATTERN_FIRST).map(args => operands(args, false)),
     ...invocations(command, EDITOR)
       .filter(args => !isInPlace(args))
-      .map(operands),
+      .map(args => operands(args)),
   ]
   const statements = statementsOf(command)
+  // cat {.env,app.json}, cp .env{,.txt}: the shared parser ends a word at a brace, so brace words are read from the command.
+  const braces = command.match(/[^\s;|&()<>`"']*\{[^{}\s]*,[^{}\s]*\}[^\s;|&()<>`"']*/g) ?? []
+  const copies = invocations(command, COPIER)
   const read =
     readers.map(args => secretIn(args, world)).find(Boolean) ??
-    invocations(command, COPIER)
-      .map(args => copiedOut(args, world))
-      .find(Boolean) ??
-    // cat < .env, $(< key.pem): the file reaches the program without being its argument.
-    secretIn([...command.replace(QUOTED, quoted => quoted.replace(/</g, ' ')).matchAll(/(?<![<\d])<(?![<(&])\s*([^\s<>|;&()]+)/g)].map(([, file = '']) => file), world) ??
+    [...copies, ...(copies.length > 0 ? braces.map(braced) : [])].map(args => copiedOut(args, world)).find(Boolean) ??
+    // cat < .env, cat 0<.env, cat <>.env, $(< key.pem): the file reaches the program without being its argument.
+    secretIn([...command.replace(QUOTED, quoted => quoted.replace(/</g, ' ')).matchAll(/(?<!<)<(?![<(&])>?\s*([^\s<>|;&()]+)/g)].map(([, file = '']) => file), world) ??
     (READ_CALL.test(command) ? secretIn(command.split(/[\s;|&()<>`,[\]"']+/), world) : undefined) ??
-    // cat {.env,app.json}: the shared parser ends a word at a brace, so a reader's brace words are read from the command.
-    (readers.length > 0 ? secretIn(command.match(/[^\s;|&()<>`"']*\{[^{}\s]*,[^{}\s]*\}[^\s;|&()<>`"']*/g) ?? [], world) : undefined)
+    (readers.length > 0 ? secretIn(braces, world) : undefined)
 
   if (read !== undefined) {
     return fileDeny(read)
   }
 
-  const fed = statements
-    // The names must be handed on as files: find | sort and ls | grep only read the list.
-    .filter(
-      stages =>
-        stages.flat().some(word => /^(-exec\w*|xargs|%|foreach-object|foreach|\$_)$/i.test(word)) ||
-        stages.some(([program]) => PIPE_READER.test(nameOf(program))),
-    )
+  // cat $(find . -name .env), gc (ls *.tfvars): a lister in a substitution puts its names on the reader's command line.
+  const substituted = [...command.matchAll(/(?:\$|\s)\(([^()]*)\)|`([^`]*)`/g)].flatMap(([, body, ticked]) => statementsOf(body ?? ticked ?? ''))
+  const fed = [
+    ...statements
+      // The names must be handed on as files: find | sort and ls | grep only read the list.
+      .filter(
+        stages =>
+          stages.flat().some(word => /^(-exec\w*|xargs|%|foreach-object|foreach|\$_)$/i.test(word)) ||
+          stages.some(([program]) => PIPE_READER.test(nameOf(program))),
+      ),
+    ...substituted,
+  ]
     .flatMap(stages => stages.filter(([program]) => LISTER.test(nameOf(program))))
     .map(words => secretIn(words.slice(1), world))
     .find(Boolean)
@@ -293,7 +334,8 @@ const finding = (command: string, world: World): string | undefined => {
 
   if (
     statements.some(stages => stages.some((stage, i) => dumpsEnv(stage) && !NAMES_ONLY.test((stages[i + 1] ?? []).join(' ')))) ||
-    /GetEnvironmentVariables/i.test(command)
+    /GetEnvironmentVariables/i.test(command) ||
+    ENV_CODE.some(([program, dumps]) => invocations(command, program).some(args => args.some(arg => dumps.test(arg))))
   ) {
     return `this would put every environment variable, tokens and keys among them, ${WHERE} Read one variable by name (printenv NAME, $env:NAME), or list the names only: env | cut -d= -f1.`
   }
@@ -314,6 +356,10 @@ const worldOf = (cwd: string, home: string, allowed = ''): World => ({
     .map(glob => new RegExp(`(^|/)${globSource(norm(glob.replace(HOME_VAR, home)))}$`)),
 })
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+// shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
+
 export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
   on('tool.call', { tool: ['Read', 'Grep'] }, async ($, e, next) => {
@@ -328,10 +374,14 @@ export const register: Register = on => {
     return secret === undefined ? next(e) : { deny: `${$.plugin.name}: ${fileDeny(secret)}` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))
 
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
-    const found = finding(
-      e.command,
-      worldOf(await $.session.cwd(), (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW')))
+  on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const command = String((e as { command?: unknown }).command ?? '')
+    const world = worldOf(await $.session.cwd(), (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
+    // Bash drops a backslash before a letter outside quotes (cat .e\nv is cat .env), so the line is read with and without them;
+    // only PowerShell is known not to.
+    const bare = command.replace(new RegExp(String.raw`${QUOTED.source}|\\(?=[A-Za-z])`, 'g'), part => (part === '\\' ? '' : part))
+    const found = finding(command, world) ?? (e.tool === 'PowerShell' ? undefined : finding(bare, world))
 
     return found === undefined ? next(e) : { deny: `${$.plugin.name}: ${found}` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))
