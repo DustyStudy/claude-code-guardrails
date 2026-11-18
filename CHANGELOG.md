@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- tf-lint 0.5.0: the secret deny also matches the AWS secret key under the
+  provider's `secret_key` and the API's `SecretAccessKey`. The Terraform
+  checks now read a rule resource that holds a nested block (an
+  `aws_security_group_rule` with `lifecycle` was skipped), blocks with
+  unquoted labels (`resource aws_kms_key logs {`, `provider aws {`),
+  `*.tofu` files and ARNs in any `aws-*` partition, and ignore a setting
+  inside a `/* */` comment that starts its line.
 - jev-guard 0.3.0: also checks the script run without its extension
   (`tools\jev`) and a direct call to `api.typesafe.ai` (`curl`,
   `Invoke-RestMethod`). A name split by quotes or a PowerShell backtick

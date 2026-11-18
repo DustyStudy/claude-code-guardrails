@@ -1,9 +1,10 @@
 import type { Register } from 'claude-code'
 
-const TERRAFORM = /\.(tf|tfvars|hcl)(\.json)?$/i
-// AWS's documented sample keys (…EXAMPLE) pass, so docs and tests can quote them.
+const TERRAFORM = /\.(tf|tfvars|hcl|tofu)(\.json)?$/i
+// AWS's documented sample keys (…EXAMPLE) pass, so docs and tests can quote them. The secret key by each of its names: the
+// provider's secret_key, the CLI's aws_secret_access_key, the API's SecretAccessKey.
 const SECRET =
-  /\b(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}\b|secret_access_key["']?\s*[=:]\s*["']?(?![^"'\s]*EXAMPLE)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/i
+  /\b(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}\b|secret_?(?:access_?)?key["']?\s*[=:]\s*["']?(?![^"'\s]*EXAMPLE)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/i
 // The other secrets the rule names: private keys and the API tokens with a fixed shape. This is secret-allow-guard's list of
 // formats and more; mods load folder by folder, so each keeps its own. A value holding EXAMPLE passes, as AWS's samples do.
 // shortcut: no JWTs, bearer values, password= or user:pass@host: in source files those are mostly fixtures and local defaults,
@@ -65,7 +66,8 @@ const keyAndProviderFindings = (source: string): string[] => {
   const text = source.replace(/"(?:\\.|[^"\\])*"/g, quoted => quoted.replace(/[{}]/g, ''))
   const found: string[] = []
 
-  for (const body of bodiesOf(text, /resource\s+"aws_kms_key"\s+"[^"]*"/)) {
+  // Terraform reads a label without its quotes too: resource aws_kms_key logs {.
+  for (const body of bodiesOf(text, /resource\s+"?aws_kms_key"?\s+"?[\w-]*"?/)) {
     const spec = /\b(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body)?.[2] ?? 'SYMMETRIC_DEFAULT'
     const window = /\bdeletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body)
 
@@ -82,7 +84,7 @@ const keyAndProviderFindings = (source: string): string[] => {
     }
   }
 
-  for (const body of bodiesOf(text, /provider\s+"aws"/)) {
+  for (const body of bodiesOf(text, /provider\s+"?aws"?/)) {
     if (/\bregion\s*=\s*"us-gov-/.test(body) && !/\buse_fips_endpoint\s*=\s*true\b/.test(body)) {
       found.push('configures a GovCloud provider without use_fips_endpoint = true')
     }
@@ -91,25 +93,33 @@ const keyAndProviderFindings = (source: string): string[] => {
   return found
 }
 
-// shortcut: reads only the text being written, block by innermost braces; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
+// shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
 const findings = (source: string): string[] => {
   const text = source
+    // A block comment, only when it starts its line: "bucket/*" and "cron(0 */2 * * ? *)" in strings are not one.
+    .replace(/^\s*\/\*[\s\S]*?\*\//gm, '')
     .split('\n')
     .map(line => line.replace(/(^|\s)(#|\/\/).*$/, ''))
     .join('\n')
     .replace(/\$\{[^}]*\}/g, '')
   const found = keyAndProviderFindings(text)
 
-  if (/arn:aws(-us-gov|-cn)?:/.test(text)) {
+  if (/arn:aws(-[a-z-]+)?:/.test(text)) {
     found.push(
       'hardcodes a partition in an ARN; use arn:${data.aws_partition.current.partition}:...',
     )
   }
 
   // A tags map is not a block: dropped, it leaves the resource body innermost. Other maps may hold rules (locals), so they stay.
-  const blocks = [...text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null').matchAll(/([^\n{}]*)\{([^{}]*)\}/g)].map(
-    ([, head = '', body = '']) => ({ head, body }),
-  )
+  const BLOCK = /([^\n{}]*)\{([^{}]*)\}/g
+  const blocks: { head: string; body: string }[] = []
+  let rest = text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null')
+
+  // Innermost blocks, then the ones that held them with those emptied: a rule resource with a lifecycle block is read too.
+  for (let inner = [...rest.matchAll(BLOCK)]; inner.length > 0; inner = [...rest.matchAll(BLOCK)]) {
+    blocks.push(...inner.map(([, head = '', body = '']) => ({ head, body })))
+    rest = rest.replace(BLOCK, '$1')
+  }
 
   for (const { head, body } of blocks.length > 0 ? blocks : [{ head: '', body: text }]) {
     const isEgress = /egress/.test(head) || /type\s*=\s*"egress"/.test(body)
