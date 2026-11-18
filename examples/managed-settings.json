@@ -1,0 +1,94 @@
+{
+  "requiredMinimumVersion": "2.1.324",
+
+  "extraKnownMarketplaces": {
+    "claude-code-guardrails": {
+      "source": {
+        "source": "github",
+        "repo": "YOUR-GITHUB-ORG/claude-code-guardrails",
+        "ref": "REPLACE-WITH-THE-40-CHARACTER-COMMIT-SHA-YOU-REVIEWED"
+      }
+    }
+  },
+  "strictKnownMarketplaces": [
+    {
+      "source": "github",
+      "repo": "YOUR-GITHUB-ORG/claude-code-guardrails",
+      "ref": "REPLACE-WITH-THE-40-CHARACTER-COMMIT-SHA-YOU-REVIEWED"
+    }
+  ],
+  "disableSideloadFlags": true,
+
+  "enabledPlugins": {
+    "terraform-guard@claude-code-guardrails": true,
+    "aws-guard@claude-code-guardrails": true,
+    "destructive-guard@claude-code-guardrails": true,
+    "self-guard@claude-code-guardrails": true,
+    "taint-guard@claude-code-guardrails": true,
+    "tf-lint@claude-code-guardrails": true,
+    "secret-allow-guard@claude-code-guardrails": true,
+    "commit-identity-guard@claude-code-guardrails": true
+  },
+  "prependPlugins": [
+    "terraform-guard@claude-code-guardrails",
+    "aws-guard@claude-code-guardrails",
+    "destructive-guard@claude-code-guardrails",
+    "self-guard@claude-code-guardrails",
+    "taint-guard@claude-code-guardrails",
+    "tf-lint@claude-code-guardrails",
+    "secret-allow-guard@claude-code-guardrails",
+    "commit-identity-guard@claude-code-guardrails",
+    "sec-default@builtin"
+  ],
+
+  "allowManagedHooksOnly": true,
+  "allowManagedPermissionRulesOnly": true,
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(//**/.env)",
+      "Read(//**/.env.*)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.ssh/**)",
+      "Read(//**/*.tfstate)",
+      "Read(//**/*.tfstate.*)",
+      "Read(//**/*.tfvars)",
+      "Read(//**/*.tfvars.json)",
+      "Read(//**/*.pem)",
+      "mcp__terminal__run_in_terminal"
+    ]
+  },
+
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowManagedReadPathsOnly": true
+    },
+    "network": {
+      "allowManagedDomainsOnly": true,
+      "allowedDomains": [
+        "github.com",
+        "registry.terraform.io",
+        "releases.hashicorp.com",
+        "*.amazonaws.com"
+      ]
+    }
+  },
+
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel-collector.example.com:4317",
+    "OTEL_LOG_TOOL_DETAILS": "1",
+    "DISABLE_FEEDBACK_COMMAND": "1",
+    "COMMIT_GUARD_OWNERS": "YOUR-GITHUB-ORG"
+  },
+
+  "cleanupPeriodDays": 30,
+  "desktopSessionCleanupPeriodDays": 30,
+  "feedbackSurveyRate": 0,
+  "feedbackDrafts": "off"
+}

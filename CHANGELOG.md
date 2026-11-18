@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `examples/managed-settings.json`: a managed-settings baseline for a
+  company rollout (mods locked on, marketplace pinned to a commit, bypass
+  mode off, managed-only hooks and permission rules, credential-file deny
+  rules, sandbox network allowlist, OpenTelemetry export, retention). The
+  README's "A managed-settings baseline" explains each block and what the
+  telemetry does not record. `npm test` checks the file.
 - taint-guard: in a tainted session, denies git calls that name a URL or
   `user@host:` (`clone`, `fetch`, `pull`, `ls-remote`, `remote`,
   `submodule`, `config`, `archive`); installs from a URL or with the index,
