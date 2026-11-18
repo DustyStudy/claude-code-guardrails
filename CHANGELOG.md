@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- model-guard 0.3.0: more Codex runs are checked: the interactive CLI given a
+  prompt (`codex "fix it"`), the CLI started by a package runner (`npx
+  @openai/codex exec`, `npm exec`, `pnpm dlx`, `bunx`), and the companion run
+  by `bun` or `deno`. `-c review_model=x` and a padded `-c " model = x"` count
+  as the model, and a `--model` that the companion reads as the value of
+  `--cwd`, `--prompt-file`, `--base` or `--scope` no longer counts as the
+  flag. With `MODEL_GUARD_SUBAGENT_MODEL` set, a `claude` run from the shell
+  that names another model (`--model`, or a model in its `--agents` or
+  `--settings` JSON) is denied, and a session started with
+  `mcp__ccd_session__start_session` inherits this session's model whatever
+  model the call names.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME

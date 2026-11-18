@@ -44,7 +44,7 @@ much of your Claude and Codex plans is left.
 | [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out: `.env` files, AWS, SSH, cloud CLI, npm, Docker, kube, GitHub CLI, Codex and Claude credentials, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`) and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws configure export-credentials`, `gh auth token`, `git credential fill`, `terraform state pull`). `.env.example`, `*.pub`, existence checks and programs that use a file without printing it (`terraform -var-file`, `ssh -i`) still run. |
 | [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
-| [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
+| [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name, denies a `claude` run from the shell that names another, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
 | [secret-allow-guard](mods/secret-allow-guard) | Reminder | CLI and Desktop | At session start, warns when a permission rule in the project's or your own `.claude/settings*.json` holds a literal secret ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | CLI and Desktop | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
@@ -256,7 +256,7 @@ theirs is set.
 |---|---|---|
 | `COMMIT_GUARD_OWNERS` | commit-identity-guard | Comma-separated GitHub owners whose repos the rules cover, such as `my-user,my-org`. |
 | `AWS_CONTEXT_HIGHLIGHT` | aws-context | Comma-separated text that marks a sensitive profile name, such as `security,111122223333`. |
-| `MODEL_GUARD_SUBAGENT_MODEL` | model-guard | The model every subagent starts on, such as `opus`. A fork always runs on the session's own model. |
+| `MODEL_GUARD_SUBAGENT_MODEL` | model-guard | The model every subagent starts on, such as `opus`. A fork always runs on the session's own model, as does a session started from this one; a `claude` run from the shell may name no other. |
 | `MODEL_GUARD_CODEX_ARGS` | model-guard | The flags every Codex run must pass, written as you pass them, such as `--model gpt-6-astra --effort high`. |
 | `SECRET_READ_ALLOW` | secret-read-guard | Comma-separated globs of files the guard leaves readable, such as `*.pem,test/fixtures/*.key,.npmrc`. A glob with no folder matches the file name anywhere; one with folders matches the end of the path; `~` is your home folder. Use it for public certificates and fixtures, not to open `.env` everywhere. |
 | `TAINT_GUARD_TRUSTED` | taint-guard | Comma-separated MCP tool name prefixes whose results are trusted and which stay usable in a tainted session, such as `mcp__plugin_context7_,mcp__plugin_semgrep_guardian__`. tf-plan-summary's tool is always trusted; gh-ci-status's is not, since an Actions log carries a pull request's text. |
@@ -388,7 +388,10 @@ when it would be worth lifting.
   and run at the effort in Codex's config. The CLI has no `--effort` either:
   it takes `-c model_reasoning_effort=x`, and `-c model=x`, `-mx` and `-m=x`
   count as the model, every one of which must match; a profile, `--oss` or
-  another provider is denied.
+  another provider is denied. A call with no subcommand is read as the
+  interactive CLI when it has a plain word, so `find . -name codex -type f`
+  is denied too. A `claude` run from the shell is checked for the model it
+  names, not for one set in a settings file or `ANTHROPIC_MODEL`.
 - **destructive-guard** reads a delete's targets as written: a path built
   at run time, `find -delete`, a script file, or SQL in a file given with
   `-f` is not read. The project is the session's folder unless that is home
