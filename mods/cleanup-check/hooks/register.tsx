@@ -56,6 +56,87 @@ export const leftovers = ({ current, base, merged, gone, pushed, elsewhere, untr
   ]
 }
 
+// A folder name safe to join into a path: no separators, not . or ..
+const NAME = /^(?!\.{1,2}$)[\w.+-]+$/
+// A plugin updated less than a day ago keeps its old copies: a session started before the update may still run from one.
+const GRACE_MS = 24 * 60 * 60 * 1000
+
+// One entry of installed_plugins.json's `plugins`, keyed "name@marketplace"; a plugin installed in several scopes has several.
+export type Install = { installPath?: string; lastUpdated?: string }
+export type PluginCache = { dir: string; keep: readonly string[] }
+
+// One spelling per folder: C:\a\\b\ and c:/a/b match, so a doubled or trailing separator never makes a version in use look unused.
+const same = (path: string) => path.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase()
+
+/** Each plugin's cache folder whose old versions may go, with the versions in use to keep. */
+export const prunable = (cache: string, plugins: Readonly<Record<string, readonly Install[]>>, now: number): PluginCache[] =>
+  Object.entries(plugins).flatMap(([key, installs]) => {
+    const [name, market, ...rest] = key.split('@')
+    const sep = cache.includes('\\') ? '\\' : '/'
+    const dir = `${cache}${sep}${market}${sep}${name}`
+    const keep = installs.map(one => one.installPath ?? '')
+    const updated = installs.map(one => Date.parse(one.lastUpdated ?? ''))
+    // Unsure what is in use, or a copy not under this folder (a local install): leave it all.
+    const isKnown =
+      rest.length === 0 &&
+      [name, market].every(one => one !== undefined && NAME.test(one)) &&
+      installs.length > 0 &&
+      keep.every(one => same(one).startsWith(`${same(dir)}/`)) &&
+      updated.every(one => !Number.isNaN(one) && now - one >= GRACE_MS)
+
+    return isKnown ? [{ dir, keep }] : []
+  })
+
+/** The version folders under a plugin's cache folder that no install uses. */
+export const oldCopies = ({ dir, keep }: PluginCache, versions: readonly string[]): string[] => {
+  const sep = dir.includes('\\') ? '\\' : '/'
+  const kept = keep.map(same)
+
+  return versions.filter(one => NAME.test(one)).map(one => `${dir}${sep}${one}`).filter(one => !kept.includes(same(one)))
+}
+
+// shortcut: no grace for a session left open over a day across an update; its skills from the old copy fail until it restarts.
+const pruneCache = async ($: EngineInterface) => {
+  // `||`, not `??`: an empty variable is unset, not the filesystem root.
+  const raw =
+    (await $.env.get('CLAUDE_CONFIG_DIR')) || (await $.env.get('USERPROFILE'))?.concat('\\.claude') || (await $.env.get('HOME'))?.concat('/.claude')
+  const isWindows = /^[A-Za-z]:[\\/]/.test(raw ?? '')
+  // Windows gets backslashes throughout, since rd reads a forward slash as a switch.
+  const home = isWindows ? raw?.replace(/\//g, '\\').replace(/\\+$/, '') : raw?.replace(/\/+$/, '')
+
+  // Absolute only, and nothing cmd.exe would read as an operator or variable.
+  if (home === undefined || !(isWindows || home.startsWith('/')) || /[&|<>^%!"\r\n]/.test(home)) {
+    return 0
+  }
+
+  const sep = isWindows ? '\\' : '/'
+  const installed = await $.fs
+    .read(`${home}${sep}plugins${sep}installed_plugins.json`)
+    .then(text => JSON.parse(text) as { plugins?: Record<string, Install[]> })
+    .catch(() => undefined)
+  let removed = 0
+
+  for (const plugin of prunable(`${home}${sep}plugins${sep}cache`, installed?.plugins ?? {}, Date.now())) {
+    // A link or junction anywhere on the way would send the deletes somewhere else: the folder must resolve to itself.
+    const real = (await $.fs.stat(plugin.dir, { resolve: true }).catch(() => undefined))?.realPath
+    if (real === undefined || same(real) !== same(plugin.dir)) {
+      continue
+    }
+
+    const entries = await $.fs.list(plugin.dir).catch(() => [])
+    const versions = entries.filter(one => one.kind === 'dir' && !one.isLink).map(one => one.name)
+
+    for (const path of oldCopies(plugin, versions)) {
+      const argv = isWindows ? ['cmd', '/d', '/c', 'rd', '/s', '/q', path] : ['rm', '-rf', '--', path]
+      const done = await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
+
+      removed += done?.exitCode === 0 ? 1 : 0
+    }
+  }
+
+  return removed
+}
+
 const git = async ($: EngineInterface, cwd: string, args: readonly string[]) => {
   try {
     const got = await $.process.run(['git', ...args], { cwd, timeoutMs: 10_000 })
@@ -106,6 +187,17 @@ const look = async ($: EngineInterface): Promise<Repo | undefined> => {
 }
 
 export const register: Register = on => {
+  // Plugin updates leave the old versions in the cache; clear them once a session, off the startup path.
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+
+    void pruneCache($)
+      .then(removed => removed > 0 && $.ui.toast(`Cleanup: removed ${removed} old plugin cop${removed > 1 ? 'ies' : 'y'}`))
+      .catch(() => undefined)
+
+    return started
+  })
+
   on('turn.complete', async ($, e, next) => {
     // A subagent's turn ends inside the main one: the main turn's end is when the person looks.
     if (e.agentId !== undefined) {

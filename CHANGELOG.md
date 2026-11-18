@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- cleanup-check: at session start, deletes plugin versions that updates left
+  in `~/.claude/plugins/cache`, keeping each version `installed_plugins.json`
+  lists and any plugin updated in the last day, and shows a toast with the
+  count. Plugins it cannot place are left alone.
 - taint-guard: `gh pr merge` runs in a tainted session. A body, subject or
   author flag, `--admin`, a URL off github.com, or `GH_HOST` still deny it.
 - taint-guard: `TAINT_GUARD_BROWSER_HOSTS` names sites where the browser
