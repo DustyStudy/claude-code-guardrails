@@ -284,6 +284,19 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['Remove-R53HostedZone -Id Z1', false],
   ['Edit-R53ResourceRecordSet -HostedZoneId Z1 -ChangeBatch_Change $c', true],
   ['Remove-CTTrail -Name org-trail -WhatIf', true],
+  // An option the guard does not know, or an abbreviated one, puts its value before the service.
+  ['aws --prof security iam delete-role --role-name x', false],
+  ['aws --cli-error-format json kms schedule-key-deletion --key-id abc', false],
+  ['aws --debug iam delete-role --role-name x', false],
+  ['aws --profile organizations sts get-caller-identity', true],
+  ['aws --debug s3 cp organizations backup', true],
+  // A dry run taken back, a forced delete read from JSON, the cmdlet's own name for it, and pip's AWS CLI.
+  ['aws ec2 terminate-instances --instance-ids i-1 --dry-run --no-dry-run', false],
+  [`aws secretsmanager delete-secret --cli-input-json '{"SecretId":"s","ForceDeleteWithoutRecovery":true}'`, false],
+  ['Remove-SECSecret -SecretId s -DeleteWithNoRecovery $true -Force', false],
+  ['aws.cmd iam delete-role --role-name x', false],
+  ['python -m awscli iam delete-role --role-name x', false],
+  ['python3 -m awscli iam list-roles', true],
 ]
 
 for (const tool of ['Bash', 'PowerShell'] as const) {

@@ -2,7 +2,9 @@ import type { Register } from 'claude-code'
 
 import { invocations } from './shell'
 
-const BINARY = /^(.*[\\/])?aws(\.exe)?$/i
+const BINARY = /^(.*[\\/])?aws(\.exe|\.cmd)?$/i
+// pip's AWS CLI also runs as a module: python -m awscli iam delete-role.
+const PYTHON = /^(.*[\\/])?py(thon[\d.]*)?(\.exe)?$/i
 // Global options that take a value, which is not the service or the operation.
 const VALUE_OPTION =
   /^--(profile|region|output|endpoint-url|query|color|ca-bundle|cli-read-timeout|cli-connect-timeout|cli-binary-format)$/
@@ -91,7 +93,8 @@ const DENIED = new Map(
 // The CLI takes an option by any unambiguous prefix, so the shortest one is matched.
 const DENIED_WITH = new Map([
   ['s3 rm', /^--rec/],
-  ['secretsmanager delete-secret', /^--f/],
+  // Its JSON input can carry ForceDeleteWithoutRecovery, and is not read.
+  ['secretsmanager delete-secret', /^--(f|cli-input)/],
 ])
 // The option that makes a call only say what it would do, for the services that have one.
 const DRY_RUN = new Map([
@@ -129,31 +132,44 @@ const has = (parameter: RegExp) => (args: readonly string[]) => args.some(arg =>
 // without the one -Key it deletes (a piped or listed set of keys). PowerShell takes a parameter by any unambiguous prefix.
 const CMDLET_WITH: readonly (readonly [RegExp, string, (args: readonly string[]) => boolean])[] = [
   [named('Stop-EC2Instance'), 'Stop-EC2Instance -Terminate', has(/^-T/i)],
-  [named('Remove-SECSecret'), 'Remove-SECSecret -ForceDeleteWithoutRecovery', has(/^-ForceD/i)],
+  [named('Remove-SECSecret'), 'Remove-SECSecret -ForceDeleteWithoutRecovery', has(/^-(ForceD|Del)/i)],
   [named('Remove-S3Object'), 'Remove-S3Object', args => !has(/^-Key(:|$)/i)(args)],
 ]
 
 // The service and operation are the first two bare words, wherever the global options sit.
 const mutation = (args: readonly string[]): string | undefined => {
-  const [service = '', operation] = args.filter(
-    (word, i) => !word.startsWith('-') && !VALUE_OPTION.test(args[i - 1] ?? ''),
-  )
+  const bare = args.flatMap((word, i) => (word.startsWith('-') || VALUE_OPTION.test(args[i - 1] ?? '') ? [] : [i]))
 
-  if (operation === undefined) {
-    return undefined
+  for (const [nth, serviceAt] of bare.entries()) {
+    const operationAt = bare[nth + 1] ?? args.length
+    const [service = '', operation] = [args[serviceAt], args[operationAt]]
+
+    if (operation === undefined) {
+      return undefined
+    }
+
+    const call = `${service} ${operation}`
+    const dryRun = DRY_RUN.get(service)
+    // `help` right after the operation, a skeleton and a dry run only print: nothing is called. `--role-name help` is a value.
+    // --no-dry-run after --dry-run takes it back.
+    const isDryRun =
+      args[operationAt + 1] === 'help' ||
+      args.includes('--generate-cli-skeleton') ||
+      (dryRun !== undefined && args.includes(dryRun) && !args.includes('--no-dry-run'))
+    const option = DENIED_WITH.get(call)
+    const isDenied = option === undefined ? DENIED.get(service)?.test(operation) : has(option)(args)
+
+    if (!isDryRun && isDenied) {
+      return call
+    }
+
+    // A word after an option may be its value, not the service: VALUE_OPTION misses abbreviations (--prof x) and new options.
+    if (!(args[serviceAt - 1] ?? '').startsWith('-')) {
+      return undefined
+    }
   }
 
-  const call = `${service} ${operation}`
-  const dryRun = DRY_RUN.get(service)
-  // `help` right after the operation, a skeleton and a dry run only print: nothing is called. `--role-name help` is a value.
-  const isDryRun =
-    args[args.indexOf(operation) + 1] === 'help' ||
-    args.includes('--generate-cli-skeleton') ||
-    (dryRun !== undefined && args.includes(dryRun))
-  const option = DENIED_WITH.get(call)
-  const isDenied = option === undefined ? DENIED.get(service)?.test(operation) : has(option)(args)
-
-  return !isDryRun && isDenied ? call : undefined
+  return undefined
 }
 
 // -WhatIf only says what the cmdlet would do.
@@ -161,7 +177,8 @@ const isWhatIf = (args: readonly string[]) => args.some(arg => /^-WhatIf(:\$true
 
 // The call to name in the deny: the CLI's service and operation, or the cmdlet as written.
 const denied = (command: string): string | undefined => {
-  const cli = invocations(command, BINARY).map(mutation).find(Boolean)
+  const viaPython = invocations(command, PYTHON).filter(args => args[0] === '-m' && args[1] === 'awscli').map(args => args.slice(2))
+  const cli = [...invocations(command, BINARY), ...viaPython].map(mutation).find(Boolean)
   if (cli !== undefined) {
     return `aws ${cli}`
   }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- aws-guard 0.4.2: denies ways around the list found in a red-team pass. An
+  abbreviated or unknown global option whose value stood where the service
+  was expected (`aws --prof security iam delete-role`); `--dry-run` taken
+  back by `--no-dry-run`; `secretsmanager delete-secret` with
+  `--cli-input-json`, which can carry the forced delete; `Remove-SECSecret
+  -DeleteWithNoRecovery`; and the pip AWS CLI called as `aws.cmd` or
+  `python -m awscli`.
 - terraform-guard 0.3.1: denies ways around `-auto-approve` found in a
   red-team pass. Terragrunt destroying every unit, where it approves by
   itself (`run-all destroy`, `run --all destroy`, `destroy --all`,
