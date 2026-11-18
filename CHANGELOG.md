@@ -25,10 +25,13 @@
   description, author or license, or the marketplace does not list every
   mod. The test job's runner blocks network egress except GitHub and the
   npm registry.
-- cleanup-check: at session start, deletes plugin versions that updates left
-  in `~/.claude/plugins/cache`, keeping each version `installed_plugins.json`
-  lists and any plugin updated in the last day, and shows a toast with the
-  count. Plugins it cannot place are left alone.
+- cleanup-check: at session start, counts plugin versions that updates left
+  in `~/.claude/plugins/cache` and shows the count in a toast. With
+  `CLEANUP_CHECK_PRUNE_CACHE=1` it deletes them, keeping each version
+  `installed_plugins.json` lists and any plugin updated in the last day.
+  Plugins it cannot place are left alone, including an install path deeper
+  than a version folder. Paths compare case-insensitively only on Windows
+  drive paths.
 - taint-guard: `gh pr merge` runs in a tainted session. A body, subject or
   author flag, `--admin`, a URL off github.com, or `GH_HOST` still deny it.
 - taint-guard: `TAINT_GUARD_BROWSER_HOSTS` names sites where the browser

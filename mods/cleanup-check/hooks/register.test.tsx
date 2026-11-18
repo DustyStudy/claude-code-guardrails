@@ -1,7 +1,7 @@
-import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import type { EngineInterface, On } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
 
-import { leftovers, oldCopies, prunable } from './register'
+import { leftovers, oldCopies, prunable, same } from './register'
 
 const CACHE = 'C:\\Users\\me\\.claude\\plugins\\cache'
 const DAY = 24 * 60 * 60 * 1000
@@ -48,6 +48,85 @@ test('old version folders go; the ones in use stay whatever their case or slashe
   expect(oldCopies({ dir: '/home/me/.claude/plugins/cache/m/p', keep: ['/home/me/.claude/plugins/cache/m/p/2.0.0'] }, ['1.0.0', '2.0.0'])).toEqual([
     '/home/me/.claude/plugins/cache/m/p/1.0.0',
   ])
+})
+
+test('a path is one folder whatever its slashes; case folds on a drive path only', () => {
+  expect(same('C:\\Users\\Me\\\\.claude\\')).toBe(same('c:/users/me/.claude'))
+  expect(same('/home/me/m/P')).not.toBe(same('/home/me/m/p'))
+  expect(same('/home/me/m/p//')).toBe('/home/me/m/p')
+  // A short name is a different spelling, so a plugin reached through one is skipped, never pruned.
+  expect(same('C:\\Users\\DUSTIN~1\\.claude')).not.toBe(same('C:\\Users\\dustin.arrington\\.claude'))
+})
+
+test('nothing but a version folder right under the plugin is ever deleted, and never one in use', () => {
+  const dir = `${CACHE}\\m\\p`
+  const all = ['', '.', '..', 'a/b', 'a\\b', '..\\..', 'C:', 'DUSTIN~1', '1.0.0', '2.0.0']
+
+  expect(oldCopies({ dir, keep: [`${dir}\\2.0.0`] }, all)).toEqual([`${dir}\\1.0.0`])
+  for (const path of oldCopies({ dir, keep: [] }, all)) {
+    expect(same(path).startsWith(`${same(dir)}/`)).toBe(true)
+    expect(same(path)).not.toBe(same(CACHE))
+  }
+  // An install deeper than a version folder, a short name, or the plugin folder itself: unsure what is in use, so left alone.
+  for (const installPath of [`${dir}\\2.0.0\\sub`, `${dir}\\2000~1`, dir, `${dir}\\`, `${CACHE}\\m\\pp\\1.0.0`]) {
+    expect(prunable(CACHE, { 'p@m': [{ installPath, lastUpdated: OLD }] }, NOW)).toEqual([])
+  }
+  // An empty market or name would put the plugin folder at the cache root.
+  expect(prunable(CACHE, { 'p@': [{ installPath: `${CACHE}\\p\\1.0.0`, lastUpdated: OLD }], '@m': [{ installPath: `${CACHE}\\m\\1.0.0`, lastUpdated: OLD }] }, NOW)).toEqual([])
+})
+
+// A config dir with context7 at e614 and two old copies; records the toasts and every command run.
+const cache = async ($: EngineInterface, on: On, prune: string | undefined) => {
+  const home = 'C:\\Users\\me\\.claude'
+  const dir = `${home}\\plugins\\cache\\official\\context7`
+  const toasts: string[] = []
+  const runs: string[][] = []
+  mock.env(on, { USERPROFILE: 'C:\\Users\\me', ...(prune === undefined ? {} : { CLEANUP_CHECK_PRUNE_CACHE: prune }) })
+  on('fs.read', () => ({ value: JSON.stringify({ plugins: { 'context7@official': [{ installPath: `${dir}\\e614`, lastUpdated: OLD }] } }) }))
+  // The plugin folder resolves to itself: no link on the way. Not e.path, which the host resolves its own way on each platform.
+  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, mtimeMs: 0, isLink: false, realPath: dir } }))
+  on('fs.list', () => ({
+    value: ['0412', 'e614', 'ff92'].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })),
+  }))
+  on('process.run', (_, e) => {
+    runs.push(e.argv)
+
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: 'C:\\repos\\stack', surface: 'terminal', isInteractive: true })
+  // The prune runs off the startup path.
+  await new Promise(done => setTimeout(done, 50))
+
+  return { dir, toasts, runs }
+}
+
+test('by default old plugin copies are counted, not deleted', async ($, on) => {
+  const { toasts, runs } = await cache($, on, undefined)
+
+  expect(runs).toEqual([])
+  expect(toasts).toEqual(['Cleanup: 2 old plugin copies in the plugin cache; set CLEANUP_CHECK_PRUNE_CACHE=1 to remove them at session start'])
+})
+
+test('only CLEANUP_CHECK_PRUNE_CACHE=1 turns deleting on', async ($, on) => {
+  const { runs } = await cache($, on, 'true')
+
+  expect(runs).toEqual([])
+})
+
+test('with CLEANUP_CHECK_PRUNE_CACHE=1 the old copies go and the one in use stays', async ($, on) => {
+  const { dir, toasts, runs } = await cache($, on, '1')
+
+  expect(runs).toEqual([
+    ['cmd', '/d', '/c', 'rd', '/s', '/q', `${dir}\\0412`],
+    ['cmd', '/d', '/c', 'rd', '/s', '/q', `${dir}\\ff92`],
+  ])
+  expect(toasts).toEqual(['Cleanup: removed 2 old plugin copies'])
 })
 
 const CLEAN = { current: 'main', base: 'main', merged: ['main'], gone: [], pushed: ['main'], elsewhere: [], untracked: [] }
