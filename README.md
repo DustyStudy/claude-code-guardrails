@@ -230,7 +230,7 @@ when it would be worth lifting.
   file that opens the credential itself slips past. It follows the usual
   readers and the common file-reading calls handed to an interpreter
   (`open(`, `readFileSync`, `ReadAllText`), not every program that can
-  print a file (`openssl`, `tar`, `git show`, `terraform show` and
+  print a file (`openssl`, `tar`, `git show`, `docker compose config`, `terraform show` and
   `output`, `aws secretsmanager get-secret-value`). A recursive search of
   a project folder (`grep -r x .`, the Grep tool with no path) still reads
   a `.env` there unless `.gitignore` hides it, and one variable printed by

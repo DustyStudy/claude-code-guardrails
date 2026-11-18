@@ -58,7 +58,7 @@ const SECRET_FILE = new RegExp(
 // A public key, and the committed stand-ins that hold names but no values.
 const NOT_SECRET = /\.(pub|example|sample|template)$/
 // Folders that hold little else: a search or copy of the whole folder reads the credential.
-const SECRET_DIR = /\/(\.ssh|\.aws|\.aws\/sso|\.aws\/(sso|cli)\/cache|\.azure|\.kube|\.config\/gcloud|\.config\/gh)$/
+const SECRET_DIR = /\/(\.ssh|\.aws|\.aws\/sso|\.aws\/(sso|cli)\/cache|\.azure|\.kube|\.docker|\.config|\.config\/gcloud|\.config\/gh|appdata\/roaming|appdata\/roaming\/(gcloud|github cli))$/
 
 // What a wildcard is tried against: the credential files of a home folder, and the ones a project folder usually holds.
 const HOME_FILES = [
@@ -92,7 +92,7 @@ const isSecretFile = (path: string, world: World) =>
 
 // Whether a resolved path names a credential file, a folder of them, or a wildcard that takes one in.
 const isSecret = (path: string, world: World) => {
-  if (isSecretFile(path, world) || SECRET_DIR.test(path)) {
+  if (isSecretFile(path, world) || SECRET_DIR.test(path) || path === norm(world.home)) {
     return true
   }
 
@@ -109,11 +109,16 @@ const isSecret = (path: string, world: World) => {
 }
 
 // The paths one word of a command names: -Path:x, --file=x and if=x name x, a,b and {a,b} name two.
+// a.{b,c} is a.b and a.c; one level, which is how a pair of files is written.
+const braced = (word: string) => {
+  const [, before = '', list = '', after = ''] = /^(.*?)\{([^{}]*,[^{}]*)\}(.*)$/.exec(word) ?? []
+
+  return list === '' ? [word] : list.split(',').map(one => before + one + after)
+}
+
 const pathsOf = (word: string, world: World) =>
-  word
-    .replace(/["']/g, '')
-    .replace(HOME_VAR, world.home)
-    .split(',')
+  braced(word.replace(/["']/g, '').replace(HOME_VAR, world.home))
+    .flatMap(one => one.split(','))
     .map(one => one.replace(/^--?[\w-]+[=:](?![\\/])/, '').replace(/^\w+=/, '').replace(HOME_VAR, world.home).replace(/[{}]/g, ''))
     .filter(Boolean)
     .map(one => resolve(one, world))
@@ -129,20 +134,27 @@ const READER = bin(
 )
 const GREP = bin('grep|egrep|rg')
 // Their first plain argument is a pattern or script, not a file: `rg "\.tfvars" docs` searches for the name.
-const PATTERN_FIRST = bin('fgrep|ag|findstr|Select-String|sls|sed|awk|gawk|jq|yq')
+const PATTERN_FIRST = bin('fgrep|ag|findstr|Select-String|sls|awk|gawk|jq')
+// An edit in place prints nothing.
+const EDITOR = bin('sed|yq')
+const isInPlace = (args: readonly string[]) => args.some(arg => /^(-i|--in-place)/.test(arg))
+const VALUE_FLAG = /^(-[ABCmtTgf]|--(after-context|before-context|context|max-count|type|type-not|glob|iglob|file)|-(literal)?path|-context)$/i
 const operands = (args: readonly string[]) => {
   const flagged = args.findIndex(arg => /^(-e|--regexp|-patt\w*)$/i.test(arg))
-  const first = args.findIndex((arg, i) => !arg.startsWith('-') && !/^-(literal)?path$/i.test(args[i - 1] ?? ''))
+  // The value of -A 2, -t md or -g '*.tf' is not the pattern; -g's stays, since it names files.
+  const first = args.findIndex((arg, i) => !arg.startsWith('-') && !VALUE_FLAG.test(args[i - 1] ?? ''))
 
-  return args.filter((_, i) => i !== (flagged >= 0 ? flagged + 1 : first))
+  return args.some(arg => arg.startsWith('--regexp=')) ? args : args.filter((_, i) => i !== (flagged >= 0 ? flagged + 1 : first))
 }
 
 // The one read of a credential file that runs: its variable names, without the values.
 const NAMES_PATTERN = /^\^(\[A-Za-z_\]\[A-Za-z0-9_\]\*|\\w\+)( \*)?=$/
 const isNamesOnly = (args: readonly string[]) =>
-  args.some(arg => /^-[EPh]*o[EPh]*$/.test(arg)) &&
-  args.filter(arg => arg.startsWith('-')).every(arg => /^-[oEPh]+$/.test(arg)) &&
-  NAMES_PATTERN.test(args.find(arg => !arg.startsWith('-')) ?? '')
+  // -q, -c and -l answer whether or where, and print no line of the file.
+  args.some(arg => /^(-[a-zA-BD-Z]*[qcl][a-zA-BD-Z]*|--quiet|--count|--files-with-matches)$/.test(arg)) ||
+  (args.some(arg => /^-[EPh]*o[EPh]*$/.test(arg)) &&
+    args.filter(arg => arg.startsWith('-')).every(arg => /^-[oEPh]+$/.test(arg)) &&
+    NAMES_PATTERN.test(args.find(arg => !arg.startsWith('-')) ?? ''))
 
 // A copy, move or link out of a credential file leaves the content where a later read finds it.
 const COPIER = bin('cp|copy|Copy-Item|cpi|mv|move|Move-Item|mi|ren|Rename-Item|rni|ln')
@@ -192,20 +204,23 @@ const statementsOf = (command: string, depth = 0): string[][][] => {
 const nameOf = (program = '') => program.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()
 
 // Programs that hand file names on to the next one: find -exec, ls | xargs, Get-ChildItem | Get-Content.
+// PowerShell readers that take piped items as files to open.
+const PIPE_READER = /^(get-content|gc|select-string|sls|copy-item|cpi)$/
 const LISTER = /^(find|fd|ls|dir|gci|get-childitem|get-item|gi|resolve-path|echo|printf|write-output)$/
 // Every environment variable at once. One by name (printenv PATH, $env:PATH) runs.
 const dumpsEnv = ([program, ...args]: readonly string[]) => {
   const name = nameOf(program)
 
   return (
-    (name === 'set' && args.length === 0) ||
+    // cmd's `set AWS` prints every variable that starts AWS.
+    (name === 'set' && (args.length === 0 || (args.length === 1 && /^\w+$/.test(args[0] ?? '')))) ||
     (/^(env|printenv|export|declare|typeset)$/.test(name) && args.every(arg => arg.startsWith('-') || (name === 'env' && /^\w+=/.test(arg)))) ||
     (/^(gci|ls|dir|get-childitem|get-item|gi|get-content|gc|type|cat)$/.test(name) && args.some(arg => /^env:[\\/]?(\S*\*\S*)?$/i.test(arg)))
   )
 }
 // shortcut: "names only" is read from the next stage's first words (cut -f1, wc, select Name), not proven; a longer pipeline
 // that puts values back is not followed.
-const NAMES_ONLY = /^(cut .*-f ?1( |$)|wc( |$)|(select|select-object|%|foreach-object) (-\w+ )*(name|key)$|measure)/i
+const NAMES_ONLY = /^(cut (?=.*-d ?=).*-f ?1( |$)|wc( |$)|(select|select-object|%|foreach-object) (-\w+ )*(name|key)$|measure)/i
 
 // Calls that print a stored credential.
 const says = (args: readonly string[], phrase: RegExp) => phrase.test(` ${args.filter(arg => !arg.startsWith('-')).join(' ')} `)
@@ -216,6 +231,7 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
   [bin('terraform|tofu|terragrunt'), args => says(args, / state pull /)],
   [bin('gcloud'), args => says(args, / print-(access|identity)-token /)],
   [bin('az'), args => says(args, / account get-access-token /)],
+  [bin('kubectl|oc'), args => says(args, / config view /) && args.some(arg => /^--(raw|flatten)/.test(arg))],
 ]
 
 const WHERE = 'into the conversation, where it is sent to the API, saved in transcripts and can end up in a commit or a command.'
@@ -232,6 +248,9 @@ const finding = (command: string, world: World): string | undefined => {
       .filter(args => !isNamesOnly(args))
       .map(operands),
     ...invocations(command, PATTERN_FIRST).map(operands),
+    ...invocations(command, EDITOR)
+      .filter(args => !isInPlace(args))
+      .map(operands),
   ]
   const statements = statementsOf(command)
   const read =
@@ -241,14 +260,21 @@ const finding = (command: string, world: World): string | undefined => {
       .find(Boolean) ??
     // cat < .env, $(< key.pem): the file reaches the program without being its argument.
     secretIn([...command.replace(QUOTED, quoted => quoted.replace(/</g, ' ')).matchAll(/(?<![<\d])<(?![<(&])\s*([^\s<>|;&()]+)/g)].map(([, file = '']) => file), world) ??
-    (READ_CALL.test(command) ? secretIn(command.split(/[\s;|&()<>`,[\]"']+/), world) : undefined)
+    (READ_CALL.test(command) ? secretIn(command.split(/[\s;|&()<>`,[\]"']+/), world) : undefined) ??
+    // cat {.env,app.json}: the shared parser ends a word at a brace, so a reader's brace words are read from the command.
+    (readers.length > 0 ? secretIn(command.match(/[^\s;|&()<>`"']*\{[^{}\s]*,[^{}\s]*\}[^\s;|&()<>`"']*/g) ?? [], world) : undefined)
 
   if (read !== undefined) {
     return fileDeny(read)
   }
 
   const fed = statements
-    .filter(stages => stages.length > 1 || stages.flat().some(word => /^(-exec\w*|xargs)$/.test(word)))
+    // The names must be handed on as files: find | sort and ls | grep only read the list.
+    .filter(
+      stages =>
+        stages.flat().some(word => /^(-exec\w*|xargs|%|foreach-object|foreach|\$_)$/i.test(word)) ||
+        stages.some(([program]) => PIPE_READER.test(nameOf(program))),
+    )
     .flatMap(stages => stages.filter(([program]) => LISTER.test(nameOf(program))))
     .map(words => secretIn(words.slice(1), world))
     .find(Boolean)
@@ -292,8 +318,12 @@ export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
   on('tool.call', { tool: ['Read', 'Grep'] }, async ($, e, next) => {
     const world = worldOf(await $.session.cwd(), (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
-    const named = e.tool === 'Read' ? [e.file_path] : [e.path ?? '', ...(e.glob ?? '').split(/\s+/)].filter(Boolean)
-    const secret = secretIn(named, world)
+    // A Grep glob is matched under its path.
+    const secret =
+      e.tool === 'Read'
+        ? secretIn([e.file_path], world)
+        : (secretIn([e.path ?? ''].filter(Boolean), world) ??
+          secretIn((e.glob ?? '').split(/\s+/).filter(Boolean), { ...world, cwd: resolve(e.path ?? '.', world) }))
 
     return secret === undefined ? next(e) : { deny: `${$.plugin.name}: ${fileDeny(secret)}` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))

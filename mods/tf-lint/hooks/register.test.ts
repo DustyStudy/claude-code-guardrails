@@ -74,6 +74,7 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a GitLab token', '.gitlab-ci.yml', `TOKEN: ${'glpat'}-${'aB3_'.repeat(5)}`, undefined],
   ['an npm token', 'ci.yml', `NPM_TOKEN: ${'npm'}_${'aB3d'.repeat(9)}`, undefined],
   ['a Slack app token', 'config.yml', `slack: ${'xoxs'}-1234567890-abcdef`, undefined],
+  ['a Slack app-level token', 'config.yml', `slack: ${'xapp'}-1-A0AB12CD3-1234567890-abcdef`, undefined],
   ['a Slack webhook', 'alerts.tf', `url = "https://${'hooks.slack'}.com/services/T0AB12CD3/B0AB12CD3/${'aB3d'.repeat(6)}"`, undefined],
   ['an Anthropic key', 'app.py', `key = "${'sk-ant'}-api03-${'aB3d'.repeat(6)}"`, undefined],
   ['an OpenAI project key', 'app.py', `key = "${'sk-proj'}-${'aB3d'.repeat(6)}"`, undefined],

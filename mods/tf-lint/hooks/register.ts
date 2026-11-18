@@ -16,6 +16,7 @@ const TOKENS = new RegExp(
     String.raw`\bglpat-[A-Za-z0-9_-]{20,}`,
     String.raw`\bnpm_[A-Za-z0-9]{36}\b`,
     String.raw`\bxox[abprs]-[A-Za-z0-9-]{10,}`,
+    String.raw`\bxapp-\d-[A-Za-z0-9-]{10,}`,
     String.raw`hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]{20,}`,
     // Anthropic and OpenAI: sk-ant-..., sk-proj-..., and the older bare sk- with one long run (a CSS class sk-fade-in-... has none).
     String.raw`\bsk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}`,
