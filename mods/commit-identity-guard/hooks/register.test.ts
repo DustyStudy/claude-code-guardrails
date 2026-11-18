@@ -47,6 +47,41 @@ const CASES: readonly (readonly [string, string, string, string, true | RegExp, 
   ['a commit reusing a Claude-trailer message by --reuse-message', COVERED, NOREPLY, 'git commit --reuse-message=abc123', /Claude trailer/, { message: `feat: x\n\n${TRAILER}` }],
   ['a commit reusing a clean noreply commit', COVERED, NOREPLY, 'git commit -C abc123', true],
   ['a message that names git commit', COVERED, NOREPLY, 'git commit -m "fix: guard git commit identity"', true],
+  ['a commit split by a line continuation', COVERED, NOREPLY, `git \\\ncommit -m "x\n\n${TRAILER}"`, TRAILERS],
+  ['a commit through GIT in capitals', COVERED, 'me@example.com', 'GIT commit -m fix', ADDRESS],
+  ['a commit with quotes inside the subcommand', COVERED, 'me@example.com', 'git c""ommit -m fix', ADDRESS],
+  ['a commit after --work-tree and its value', COVERED, 'me@example.com', 'git --work-tree . commit -m fix', ADDRESS],
+  ['a PR with gh options before pr', OTHER, NOREPLY, 'gh -R example-org/widgets pr create --title t --body "Generated with Claude Code"', TRAILERS],
+  ['a PR aimed at a covered owner by an attached -R', OTHER, NOREPLY, 'gh pr create -Rexample-org/widgets --title t --body "Generated with Claude Code"', TRAILERS],
+  ['a squash merge body with the Claude line', COVERED, NOREPLY, `gh pr merge 3 --squash --body "${TRAILER}"`, TRAILERS],
+  ['a squash merge under a personal address', COVERED, NOREPLY, 'gh pr merge 3 --squash --author-email me@example.com', ADDRESS],
+  ['a clean squash merge', COVERED, 'me@example.com', 'gh pr merge 3 --squash', true],
+  ['a --trailer written with =', COVERED, NOREPLY, 'git commit -m x --trailer "Co-Authored-By=Claude <noreply@anthropic.com>"', TRAILERS],
+  ['a trailer with quotes inside its words', COVERED, NOREPLY, 'git commit -m x -m "Co-Authored-By: Cl""aude <noreply@anthr""opic.com>"', TRAILERS],
+  ['an abbreviated amend that keeps a personal author', COVERED, NOREPLY, 'git commit --ame --no-edit', ADDRESS, { author: 'me@example.com' }],
+  ['an amend left to the editor that keeps a Claude trailer', COVERED, NOREPLY, 'GIT_EDITOR=true git commit --amend', /Claude trailer/, { message: `feat: x\n\n${TRAILER}` }],
+  ['an amend with a new message given as -am', COVERED, NOREPLY, 'git commit --amend -am "feat: x"', true, { message: `feat: x\n\n${TRAILER}` }],
+  ['a commit reusing a personal author by -c', COVERED, NOREPLY, 'git commit -c abc123', ADDRESS, { author: 'me@example.com' }],
+  ['an inline personal address under USER.EMAIL', COVERED, NOREPLY, 'git -c USER.EMAIL=me@example.com commit -m fix', ADDRESS],
+  ['an inline personal address with quotes inside the key', COVERED, NOREPLY, 'git -c user.ema"il"=me@example.com commit -m fix', ADDRESS],
+  ['an inline address with no @', COVERED, NOREPLY, 'git -c user.email=localhost commit -m fix', ADDRESS],
+  ['a personal author set the PowerShell way', COVERED, NOREPLY, "$env:GIT_AUTHOR_EMAIL = 'me@example.com'; git commit -m fix", ADDRESS],
+  ['a personal config behind identity variables that are only printed', COVERED, 'me@example.com', `echo GIT_AUTHOR_EMAIL=${NOREPLY} GIT_COMMITTER_EMAIL=${NOREPLY} && git commit -m fix`, ADDRESS],
+  ['an author looked up by a pattern', COVERED, NOREPLY, 'git commit --author=jane -m fix', ADDRESS],
+  ['an abbreviated --author', COVERED, NOREPLY, 'git commit --auth="Jane <me@example.com>" -m fix', ADDRESS],
+  ['a noreply author under a noreply config', COVERED, NOREPLY, `git commit --author="Jane <${NOREPLY}>" -m fix`, true],
+  ['a personal address configured in the same command', COVERED, NOREPLY, 'git config user.email me@example.com && git commit -m fix', ADDRESS],
+  ['a read of user.email in the same command', COVERED, NOREPLY, 'git config user.email && git commit -m fix', true],
+  ['an identity from config the guard cannot read', COVERED, NOREPLY, 'GIT_CONFIG_GLOBAL=/tmp/other.gitconfig git commit -m fix', /cannot read/],
+  ['an identity from --config-env', COVERED, NOREPLY, 'ADDRESS=me@example.com git --config-env=user.email=ADDRESS commit -m fix', /cannot read/],
+  ['a personal config behind a user.name that reads -c user.email=', COVERED, 'me@example.com', `git -c user.name="x -c user.email=${NOREPLY}" commit -m fix`, ADDRESS],
+  ['a personal config behind another variable that reads as both identities', COVERED, 'me@example.com', `X="GIT_AUTHOR_EMAIL=${NOREPLY} GIT_COMMITTER_EMAIL=${NOREPLY}" git commit -m fix`, ADDRESS],
+  ['both identities quoted, over a personal config', COVERED, 'me@example.com', `GIT_AUTHOR_EMAIL="${NOREPLY}" GIT_COMMITTER_EMAIL="${NOREPLY}" git commit -m fix`, true],
+  ['a message that names an author option', COVERED, NOREPLY, 'git commit -m "fix: read --author values"', true],
+  ['a quoted inline noreply address over a personal config', COVERED, 'me@example.com', `git -c "user.email=${NOREPLY}" commit -m fix`, true],
+  ['a PR opened after git add -A', COVERED, NOREPLY, 'git add -A; gh pr create --title t --body x', true],
+  ['a read of user.email on the line before the commit', COVERED, NOREPLY, 'git config user.email\ngit commit -m fix', true],
+  ['a message that names both in prose', COVERED, NOREPLY, 'git commit -m "docs: a co-authored-by line from Claude is denied"', true],
 ]
 
 for (const [name, remote, email, command, expected, head] of CASES) {
@@ -202,7 +237,7 @@ const withFiles = async ($: EngineInterface, on: On, command: string, files: Rec
   return { hasRun, ran, read }
 }
 
-for (const command of ['git commit -F msg.txt', 'git commit -Fmsg.txt', 'gh pr create --title t -Fmsg.txt','git commit --file=msg.txt', 'git commit --file "msg.txt"', 'gh pr create --title t --body-file msg.txt', 'gh pr edit 3 -F msg.txt']) {
+for (const command of ['git commit -F msg.txt', 'git commit -aF msg.txt', 'git commit --fil msg.txt', 'gh pr merge 3 --squash -F msg.txt', 'git commit -Fmsg.txt', 'gh pr create --title t -Fmsg.txt','git commit --file=msg.txt', 'git commit --file "msg.txt"', 'gh pr create --title t --body-file msg.txt', 'gh pr edit 3 -F msg.txt']) {
   test(`denies a Claude trailer read from a file: ${command}`, async ($, on) => {
     const { hasRun, ran } = await withFiles($, on, command, { 'msg.txt': `feat: x\n\n${TRAILER}\n` })
     expect(hasRun).toBe(false)

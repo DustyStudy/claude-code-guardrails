@@ -3,24 +3,33 @@ import type { Register } from 'claude-code'
 import { invocations } from './shell'
 
 const BINARY = /^(.*[\\/])?(terraform|tofu|terragrunt)(\.exe)?$/i
-// Flags whose value can be the next word, which must not pass for a plan file.
-const VALUE_FLAG =
-  /^--?(var|var-file|target|replace|parallelism|lock-timeout|state|state-out|backup)$/
+// Flags that stand alone. Any other flag written without `=` takes the next word as its value (-var-file prod.tfvars,
+// --working-dir live), which must not pass for a plan file or a subcommand.
+const BARE_FLAG =
+  /^--?(no-color|json|compact-warnings|concise|show-sensitive|destroy|refresh-only|input|lock|refresh|non-interactive|terragrunt-non-interactive|all|a|graph)$/
+const positional = (args: readonly string[]) =>
+  args.filter((word, i) => !word.startsWith('-') && !(/^-[^=]*$/.test(args[i - 1] ?? '') && !BARE_FLAG.test(args[i - 1] ?? '')))
 const HOW = 'Run `terraform plan -out=tfplan`, review it, then `terraform apply tfplan`.'
 
 // Subcommands that take `apply` or `destroy` only as a value (`terraform output apply`, `state show destroy`).
 const OTHER_VERB =
-  /^(output|show|state|console|fmt|validate|providers|workspace|graph|import|init|plan|version|get|login|logout|taint|untaint|force-unlock|test|metadata|modules|refresh)$/
+  /^(output|show|state|console|fmt|validate|providers|workspace|import|init|plan|version|get|login|logout|taint|untaint|force-unlock|test|metadata|modules|refresh)$/
 const HELP = /^--?h(elp)?$/
 // Terraform also takes flags from TF_CLI_ARGS and TF_CLI_ARGS_<verb>: set on the command line, or inherited (passed in as `inherited`).
-const INJECTED = /TF_CLI_ARGS\w*\s*=\s*["']?[^;&|\n]*-auto-approve(?!=(0|f|false)\b)/i
+// However it is set: VAR=, $env:VAR +=, [Environment]::SetEnvironmentVariable('VAR', ...).
+const INJECTED = /TF_CLI_ARGS\w*[^;&|\n]*-auto-approve(?!=(0|f|false)\b)/i
+// Terragrunt's apply-all and destroy-all, and the ways it runs every unit, where it adds -auto-approve itself.
+const VERB = /^(apply|destroy)(-all)?$/
+const EVERY_UNIT = /^(run-all|graph|stack|--all|-a|--graph|destroy-all)$/
+// An answer fed to destroy's prompt approves it: a pipe before it, or its input redirected.
+const FED = /(?<!\|)\|(?!\|)[\s\S]*(?<![\w.-])destroy(?![\w.-])|</
 
 type Inherited = { all?: string; apply?: string; destroy?: string }
 
 const refusal = (command: string, env: Inherited = {}): string | undefined => {
   for (const args of invocations(command, BINARY)) {
-    const verbAt = args.findIndex(word => word === 'apply' || word === 'destroy')
-    const first = args.find(word => !word.startsWith('-'))
+    const verbAt = args.findIndex(word => VERB.test(word))
+    const [first] = positional(args)
 
     // Help changes nothing; another subcommand first means apply is its argument.
     if (verbAt < 0 || args.some(word => HELP.test(word)) || OTHER_VERB.test(first ?? '')) {
@@ -28,7 +37,7 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
     }
 
     const rest = args.slice(verbAt + 1)
-    const verb = args[verbAt] === 'apply' ? 'apply' : 'destroy'
+    const verb = args[verbAt]?.startsWith('apply') ? 'apply' : 'destroy'
     const inherited = `${env.all ?? ''} ${env[verb] ?? ''}`.split(/\s+/).filter(Boolean)
 
     // Terraform reads =1, =t, =TRUE as true too, so only an explicit false passes.
@@ -36,11 +45,15 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
       return `-auto-approve is not allowed on ${args[verbAt]}. ${HOW}`
     }
 
-    const hasPlan = rest.some(
-      (word, i) => !word.startsWith('-') && !VALUE_FLAG.test(rest[i - 1] ?? ''),
-    )
+    if (verb === 'destroy' && [...positional(args), ...args.filter(word => word.startsWith('-'))].some(word => EVERY_UNIT.test(word)) && !args.some(word => /^--(terragrunt-)?no-auto-approve$/.test(word))) {
+      return `terragrunt adds -auto-approve to a destroy of every unit. Pass --no-auto-approve, or: ${HOW}`
+    }
 
-    if (args[verbAt] === 'apply' && !hasPlan) {
+    if (verb === 'destroy' && FED.test(command)) {
+      return `destroy takes its approval from the user, not from a pipe or a file. Run it on its own, or: ${HOW}`
+    }
+
+    if (verb === 'apply' && positional(rest).length === 0) {
       return `apply needs a saved plan file. ${HOW}`
     }
   }

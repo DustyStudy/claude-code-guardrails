@@ -45,6 +45,39 @@
   is the whole part. `aria2c`, `Start-BitsTransfer`, `certutil -urlcache`
   and .NET downloads taint like `curl`. `aws ... --engine` is no longer
   taken for `--endpoint-url`.
+- commit-identity-guard 0.4.1: closes ways around it found in a red-team
+  pass. A commit is now seen when written `GIT commit`, `git c""ommit`,
+  across a line continuation, or after `--work-tree <dir>`; a PR when gh's
+  options come before `pr`, and `gh pr merge` is checked too (body, `-F`,
+  `--author-email`). A trailer is found when written `--trailer
+  "Co-Authored-By=..."` or with quotes inside its words, in a file given as
+  `-aF` or `--fil`, and on an amend with no new message (`--am`, no
+  `--no-edit`) or a `-c <commit>` reuse. An address is read from `-c
+  USER.EMAIL=`, a key split by quotes, a value with no `@`, `$env:VAR =
+  'x'`, `git config user.email x &&`, `--auth=`, and an `--author` that is
+  only a pattern is denied. Identity variables count as an override only on
+  git's own command, not when printed or held in another variable. Config
+  the guard cannot read (`GIT_CONFIG_*`, `HOME`, `EMAIL`, `--config-env`,
+  `include.path`) is denied. `-Rowner/repo`, `-R github.com/owner/repo` and
+  `GH_REPO=` name the repo.
+- aws-guard 0.4.2: denies ways around the list found in a red-team pass. An
+  abbreviated or unknown global option whose value stood where the service
+  was expected (`aws --prof security iam delete-role`); `--dry-run` taken
+  back by `--no-dry-run`; `secretsmanager delete-secret` with
+  `--cli-input-json`, which can carry the forced delete; `Remove-SECSecret
+  -DeleteWithNoRecovery`; and the pip AWS CLI called as `aws.cmd` or
+  `python -m awscli`.
+- terraform-guard 0.3.1: denies ways around `-auto-approve` found in a
+  red-team pass. Terragrunt destroying every unit, where it approves by
+  itself (`run-all destroy`, `run --all destroy`, `destroy --all`,
+  `graph destroy`, `destroy-all`; `--no-auto-approve` still runs);
+  `apply-all`; an approval fed to `destroy` (`echo yes | terraform destroy`,
+  `terraform destroy <<< yes`); and `TF_CLI_ARGS` set with `+=` or
+  `SetEnvironmentVariable`. A flag's value no longer passes for a plan file
+  or a subcommand: any flag written without `=` takes the next word unless
+  it is known to stand alone, so `terragrunt run-all apply
+  --terragrunt-working-dir live`, `tofu apply -exclude x` and `terragrunt
+  --working-dir modules apply -auto-approve` are denied.
 - destructive-guard 0.6.1: closes spellings found in a red-team pass. git's
   shortened long options (`reset --har`, `push --mirr`, `clean --forc`,
   `switch --discard`), `git --config-env k=V reset --hard`, `git -c
