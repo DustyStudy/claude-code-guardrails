@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- terraform-guard 0.3.1: denies ways around `-auto-approve` found in a
+  red-team pass. Terragrunt destroying every unit, where it approves by
+  itself (`run-all destroy`, `run --all destroy`, `destroy --all`,
+  `graph destroy`, `destroy-all`; `--no-auto-approve` still runs);
+  `apply-all`; an approval fed to `destroy` (`echo yes | terraform destroy`,
+  `terraform destroy <<< yes`); and `TF_CLI_ARGS` set with `+=` or
+  `SetEnvironmentVariable`. A flag's value no longer passes for a plan file
+  or a subcommand: any flag written without `=` takes the next word unless
+  it is known to stand alone, so `terragrunt run-all apply
+  --terragrunt-working-dir live`, `tofu apply -exclude x` and `terragrunt
+  --working-dir modules apply -auto-approve` are denied.
 - self-guard 0.3.0: a path built through a variable is now filled in before
   the command is read. `$d="$HOME\.claude"; Copy-Item x "$d\CLAUDE.md"`,
   `d=~/.claude; rm $d/settings.json`, `export D=...` and `Join-Path $HOME
