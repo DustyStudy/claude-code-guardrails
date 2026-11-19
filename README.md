@@ -38,6 +38,7 @@ much of your Claude and Codex plans is left.
 |---|---|---|---|
 | [terraform-guard](mods/terraform-guard) | Guard | CLI and Desktop | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities, change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
+| [supply-chain-guard](mods/supply-chain-guard) | Guard | CLI and Desktop | Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run. |
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
@@ -280,7 +281,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, destructive-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
+terraform-guard, aws-guard, supply-chain-guard, destructive-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
@@ -335,6 +336,8 @@ when it would be worth lifting.
   (`iam create-role`, `cloudformation delete-stack`, `s3 sync --delete`,
   `route53 change-resource-record-sets`, security group rules) are left to
   IAM and to review. `--dry-run` and `--dryrun` are trusted as written.
+- **supply-chain-guard** reads the install verbs of pip, uv, npm, pnpm, yarn
+  and bun; poetry, conda and a script that installs are not checked.
 - **tf-lint** reads only the text being written, block by block. A rule split
   across edits or built from variables is missed; run Checkov on the whole
   file for that.
