@@ -55,6 +55,10 @@
       "source": "./mods/self-guard"
     },
     {
+      "name": "supply-chain-guard",
+      "source": "./mods/supply-chain-guard"
+    },
+    {
       "name": "taint-guard",
       "source": "./mods/taint-guard"
     },
