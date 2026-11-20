@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Seventeen mods that stop risky commands
+when it works on AWS and Terraform. Nineteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -22,7 +22,7 @@ much of your Claude and Codex plans is left.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** over a thousand tests across the seventeen mods, run in CI
+- **Result:** over a thousand tests across the nineteen mods, run in CI
   against a pinned Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -40,6 +40,7 @@ much of your Claude and Codex plans is left.
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities, change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
 | [supply-chain-guard](mods/supply-chain-guard) | Guard | CLI and Desktop | Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run. |
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
+| [merged-branch-guard](mods/merged-branch-guard) | Guard | CLI and Desktop | Denies `git push` that continues a branch whose pull request is already merged (and has no open one) and which GitHub has deleted, since the push would recreate it and strand the new commits outside any PR. Long-lived branches still on the remote, such as `develop`, and new branches that reuse an old name run. The deny names the merged PR and gives the commands to move the commits to a new branch cut from the default branch. Asks GitHub through `gh`; when `gh` is missing, signed out, offline or slow, the push runs with a note. |
 | [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
 | [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out: `.env` files, AWS, SSH, cloud CLI, npm, Docker, kube, GitHub CLI, Codex and Claude credentials, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`) and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws configure export-credentials`, `gh auth token`, `git credential fill`, `terraform state pull`). `.env.example`, `*.pub`, existence checks and programs that use a file without printing it (`terraform -var-file`, `ssh -i`) still run. |
@@ -72,7 +73,7 @@ reaches you.
 Requires `git` and Claude Code at or above the release pinned in
 [package.json](package.json), which is the release CI tests against; older
 releases may lack mod APIs the mods use. gh-ci-status needs the [GitHub CLI](https://cli.github.com/) signed
-in; tf-plan-summary needs `terraform`.
+in, and merged-branch-guard uses it when present; tf-plan-summary needs `terraform`.
 
 1. Clone the repository:
 
@@ -281,7 +282,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, supply-chain-guard, destructive-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
+terraform-guard, aws-guard, supply-chain-guard, destructive-guard, merged-branch-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
@@ -403,6 +404,26 @@ when it would be worth lifting.
   as written, so a symlink or junction inside the project that points out of
   it is followed by `rm` but not by the guard. Cloud deletes
   (`aws s3 rb`, `terminate-instances`) are left to aws-guard and IAM.
+- **merged-branch-guard** asks `gh pr list --head <branch>` with a 5-second
+  timeout, and lets the push run with a note when `gh` is missing, signed
+  out, offline or slow, so it stops a mistake only while GitHub answers. It
+  reads the branch from the refspec as written, or from the current branch
+  for a bare `git push` or `HEAD`, as `push.default=simple` would; a branch
+  pushed under another name by config, an upstream with a different name, or
+  a command built at run time is not read; `--all` and `--branches` are
+  checked for the current branch only, and an abbreviated option (`--del`,
+  `--dry`) is not read as the full one. It asks about the repository `gh`
+  resolves from the session's folder (or git's `-C`); a `cd` earlier in the
+  command is not followed, and a push to a fork's remote is checked against
+  the repository `gh` picks. Pushes to the default branch, tags and deletes
+  are never checked. A branch name held in a variable (`git push origin
+  $BRANCH`) is not expanded, so that push is not checked. It denies only
+  when the branch is gone from the remote, so in a repo without
+  automatic branch deletion a push to a merged branch that still exists
+  runs. A new branch that reuses a merged branch's name is told apart by
+  whether the merged PR's last commit is in what is pushed; after a merge
+  commit (not a squash) that commit is on the default branch too, so a
+  fresh branch from it under the old name is still denied.
 - **taint-guard** cuts the blast radius of a prompt injection; it does not
   detect one. It knows the sinks by program name, so a script that opens a
   socket itself (`python -c`, `node -e`) passes, as does a file read with

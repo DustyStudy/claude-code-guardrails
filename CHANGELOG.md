@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- merged-branch-guard 0.1.0 (new): denies `git push` that continues a
+  branch whose pull request is already merged, has no open one, and is gone
+  from the remote. Such a push recreates the branch GitHub deleted on merge
+  and leaves the new commits outside any PR. Long-lived branches still on
+  the remote and new branches reusing an old name run.
+  The deny names the merged PR and gives the commands to cut a new branch
+  from the default branch and cherry-pick the commits made after the merge.
+  Pushes with an open PR or no PR, to the default branch, of tags and of
+  deletes run. When `gh` is missing, signed out, offline or slow (5-second
+  timeout), the push runs with a note.
+- README: the mod count reads nineteen; it had not counted
+  supply-chain-guard.
 - secret-read-guard 0.2.0: closes ways around it found in a red-team pass.
   `Monitor` and the desktop terminal tool are now read like Bash. grep
   flags that let the file pass for the pattern are fixed (`grep -a KEY
