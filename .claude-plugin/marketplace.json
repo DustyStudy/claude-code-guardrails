@@ -35,6 +35,10 @@
       "source": "./mods/jev-guard"
     },
     {
+      "name": "merged-branch-guard",
+      "source": "./mods/merged-branch-guard"
+    },
+    {
       "name": "model-guard",
       "source": "./mods/model-guard"
     },
