@@ -25,12 +25,20 @@ const OPERATIONS: Readonly<Record<string, readonly string[]>> = {
     'set-default-policy-version',
     'add-user-to-group',
     '(create|update)-(access-key|login-profile)',
+    '(upload|update)-(ssh-public-key|signing-certificate)',
     '(create|reset)-service-specific-credential',
     'deactivate-mfa-device',
     'update-account-password-policy',
     // Any change to a federation provider: create, update, add or remove a client ID or thumbprint.
     r`(?!get-|list-)[\w-]*(saml|open-id-connect)-provider[\w-]*`,
   ],
+  // IAM Identity Center: any call but a read hands out account access; its directory's users and groups are who gets it.
+  'sso-admin': [r`(?!describe-|list-|get-|help$)[a-z][\w-]*`],
+  identitystore: [r`(create|update|delete)-[\w-]+`],
+  // A trust anchor or profile lets any certificate the anchor signs take a role.
+  rolesanywhere: ['(create|update|enable)-(trust-anchor|profile)'],
+  // Writes a CSV's static keys into the credentials file.
+  configure: ['import'],
   kms: [
     'schedule-key-deletion',
     'delete-imported-key-material',
@@ -95,6 +103,8 @@ const DENIED_WITH = new Map([
   ['s3 rm', /^--rec/],
   // Its JSON input can carry ForceDeleteWithoutRecovery, and is not read.
   ['secretsmanager delete-secret', /^--(f|cli-input)/],
+  // A static key written to disk; `profile.dev.aws_secret_access_key` names one profile's. Setting the region still runs.
+  ['configure set', /(^|\.)aws_(access_key_id|secret_access_key|session_token)$/],
 ])
 // The option that makes a call only say what it would do, for the services that have one.
 const DRY_RUN = new Map([
@@ -110,6 +120,10 @@ const CMDLET_NAME = [
   r`Remove-IAM\w+|(Register|Unregister|Write)-IAM(User|Group|Role)Policy|Set-IAM(User|Role)PermissionsBoundary`,
   r`Update-IAMAssumeRolePolicy|New-IAMPolicyVersion|Set-IAMDefaultPolicyVersion|Add-IAMUserToGroup`,
   r`(New|Update)-IAM(AccessKey|LoginProfile)|(New|Reset)-IAMServiceSpecificCredential|Disable-IAMMFADevice`,
+  r`(Publish|Update)-IAM(SSHPublicKey|SigningCertificate)`,
+  // Identity Center's admin cmdlets but Get; the identity store's writes, by full noun (Find- and Assert-IDS* are reads).
+  r`(?!Get-)[a-z]+-SSOADMN\w+|(New|Update|Remove)-IDS(User|Group(Membership)?|IdentityStore)`,
+  r`(New|Update|Enable)-IAMRA(TrustAnchor|Profile)`,
   r`Update-IAMAccountPasswordPolicy|(?!Get-)[a-z]+-IAM\w*(SAML|OpenIDConnect)Provider\w*`,
   r`Request-KMSKeyDeletion|Remove-KMSImportedKeyMaterial|Disable-KMSKey(Rotation)?|Write-KMSKeyPolicy`,
   r`(New|Revoke|Disable)-KMSGrant|(Remove|Disconnect)-KMSCustomKeyStore`,
@@ -128,12 +142,18 @@ const named = (name: string) => new RegExp(r`^([\w.]+\\)?(${name})$`, 'i')
 const CMDLET = named(CMDLET_NAME)
 const CMDLET_IN_TEXT = new RegExp(r`(?<![\w-])(${CMDLET_NAME})(?![\w-])`, 'i')
 const has = (parameter: RegExp) => (args: readonly string[]) => args.some(arg => parameter.test(arg))
-// Cmdlets denied only by their arguments: Stop-EC2Instance -Terminate, a secret deleted with no recovery window, and Remove-S3Object
-// without the one -Key it deletes (a piped or listed set of keys). PowerShell takes a parameter by any unambiguous prefix.
-const CMDLET_WITH: readonly (readonly [RegExp, string, (args: readonly string[]) => boolean])[] = [
-  [named('Stop-EC2Instance'), 'Stop-EC2Instance -Terminate', has(/^-T/i)],
-  [named('Remove-SECSecret'), 'Remove-SECSecret -ForceDeleteWithoutRecovery', has(/^-(ForceD|Del)/i)],
-  [named('Remove-S3Object'), 'Remove-S3Object', args => !has(/^-Key(:|$)/i)(args)],
+// -AccessKey, -SecretKey, -SessionToken, -Credential (the only C parameter) or their aliases AK, SK, ST; -Se and -St alone are ambiguous.
+const hasKey = has(/^-(Ac|AK(:|$)|Sec|SK(:|$)|Ses|ST(:|$)|C)/i)
+// Cmdlets denied only by their arguments: Stop-EC2Instance -Terminate, a secret deleted with no recovery window, Remove-S3Object
+// without the one -Key it deletes (a piped or listed set of keys), and a static key saved to a profile (-StoreAs, or the
+// default profile Initialize-AWSDefaultConfiguration writes); switching profile or keys for the shell only run.
+// PowerShell takes a parameter by any unambiguous prefix.
+const CMDLET_WITH: readonly (readonly [string, string, (args: readonly string[]) => boolean])[] = [
+  ['Stop-EC2Instance', 'Stop-EC2Instance -Terminate', has(/^-T/i)],
+  ['Remove-SECSecret', 'Remove-SECSecret -ForceDeleteWithoutRecovery', has(/^-(ForceD|Del)/i)],
+  ['Remove-S3Object', 'Remove-S3Object', args => !has(/^-Key(:|$)/i)(args)],
+  ['Set-AWSCredentials?', 'Set-AWSCredential -StoreAs', args => has(/^-StoreA/i)(args) && hasKey(args)],
+  ['Initialize-AWSDefault(Configuration|s)', 'Initialize-AWSDefaultConfiguration', hasKey],
 ]
 
 // The service and operation are the first two bare words, wherever the global options sit.
@@ -187,9 +207,15 @@ const denied = (command: string): string | undefined => {
     return command.match(CMDLET_IN_TEXT)?.[0] ?? 'an AWS Tools for PowerShell call'
   }
 
-  return CMDLET_WITH.find(([cmdlet, , isDenied]) =>
-    invocations(command, cmdlet).some(args => !isWhatIf(args) && isDenied(args)),
-  )?.[1]
+  return CMDLET_WITH.find(([name, , isDenied]) => {
+    const calls = invocations(command, named(name))
+    // The parser ends a call at a parenthesis (-InstanceId ($x) -Terminate), so each statement it starts in the text counts too.
+    const written = [...command.matchAll(new RegExp(r`(?<![\w-])(${name})(?![\w-])[^;|\n]*`, 'gi'))].map(([statement]) =>
+      statement.split(/[\s(){}]+/),
+    )
+
+    return calls.length > 0 && [...calls, ...written].some(args => !isWhatIf(args) && isDenied(args))
+  })?.[1]
 }
 
 // Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.

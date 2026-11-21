@@ -115,7 +115,7 @@ for (const [rule, isSecret] of RULES) {
 test('never shows the secret itself', async ($, on) => {
   const toast = await start($, on, { [LOCAL]: settings('Bash(sshpass -p rootpass ssh root@203.0.113.7)') }, IGNORED)
   expect(toast.includes('rootpass')).toBe(false)
-  expect(toast.includes('1 permission rule looks like')).toBe(true)
+  expect(toast.includes('1 entry looks like')).toBe(true)
 })
 
 test('scans the shared and user settings too', async ($, on) => {
@@ -123,13 +123,94 @@ test('scans the shared and user settings too', async ($, on) => {
     '/repo/.claude/settings.json': settings(`Bash(echo ${AWS})`),
     '/home/me/.claude/settings.json': settings(`Bash(echo ${GITHUB})`, `Bash(echo ${OPENAI})`),
   })
-  expect(toast.includes('/repo/.claude/settings.json: 1 permission rule')).toBe(true)
-  expect(toast.includes('/home/me/.claude/settings.json: 2 permission rules')).toBe(true)
+  expect(toast.includes('/repo/.claude/settings.json: 1 entry looks')).toBe(true)
+  expect(toast.includes('/home/me/.claude/settings.json: 2 entries look')).toBe(true)
 })
 
 test('scans the user settings in CLAUDE_CONFIG_DIR', async ($, on) => {
   const toast = await start($, on, { '/cfg/settings.json': settings(`Bash(echo ${AWS})`) }, {}, { CLAUDE_CONFIG_DIR: '/cfg' })
-  expect(toast.includes('/cfg/settings.json: 1 permission rule')).toBe(true)
+  expect(toast.includes('/cfg/settings.json: 1 entry looks')).toBe(true)
+})
+
+const API_KEY = ['abcdef', '123456'].join('')
+const BEARER = `Bearer ${'ab'.repeat(10)}`
+
+test('flags a literal secret in settings env', async ($, on) => {
+  const toast = await start($, on, {
+    '/repo/.claude/settings.json': JSON.stringify({ env: { GITHUB_TOKEN: GITHUB, AWS_REGION: 'us-gov-west-1' } }),
+  })
+  expect(toast.includes('/repo/.claude/settings.json: 1 entry looks like a literal secret (permission rules, env, MCP env or headers)')).toBe(true)
+})
+
+test('flags a literal secret in settings MCP env and headers, and counts both', async ($, on) => {
+  const toast = await start($, on, {
+    '/home/me/.claude/settings.json': JSON.stringify({
+      permissions: { allow: [`Bash(echo ${AWS})`] },
+      mcpServers: { api: { command: 'npx', env: { API_KEY }, headers: { Authorization: BEARER } } },
+    }),
+  })
+  expect(toast.includes('/home/me/.claude/settings.json: 3 entries look')).toBe(true)
+})
+
+test('flags MCP secrets in ~/.claude.json, top level and per project', async ($, on) => {
+  const toast = await start($, on, {
+    '/home/me/.claude.json': JSON.stringify({
+      mcpServers: { a: { command: 'npx', env: { OPENAI_API_KEY: OPENAI } } },
+      projects: { '/repo': { mcpServers: { b: { type: 'http', url: 'https://mcp.example.com', headers: { 'X-API-Key': API_KEY } } } } },
+    }),
+  })
+  expect(toast.includes('/home/me/.claude.json: 2 entries look')).toBe(true)
+})
+
+test('scans .claude.json in CLAUDE_CONFIG_DIR', async ($, on) => {
+  const toast = await start($, on, { '/cfg/.claude.json': JSON.stringify({ mcpServers: { a: { env: { GITHUB_TOKEN: GITHUB } } } }) }, {}, { CLAUDE_CONFIG_DIR: '/cfg' })
+  expect(toast.includes('/cfg/.claude.json: 1 entry looks')).toBe(true)
+})
+
+test('flags MCP secrets in the project .mcp.json', async ($, on) => {
+  const toast = await start($, on, {
+    '/repo/.mcp.json': JSON.stringify({ mcpServers: { a: { command: 'npx', env: { DB_URL: 'postgresql://app:Pa55word@db.example.com/prod' } } } }),
+  })
+  expect(toast.includes('/repo/.mcp.json: 1 entry looks')).toBe(true)
+})
+
+test('never shows an env or header secret itself', async ($, on) => {
+  const toast = await start($, on, {
+    '/repo/.mcp.json': JSON.stringify({ mcpServers: { a: { env: { GITHUB_TOKEN: GITHUB }, headers: { 'X-API-Key': API_KEY, Authorization: BEARER } } } }),
+  })
+  expect(toast.includes('3 entries look')).toBe(true)
+  for (const secret of [GITHUB, API_KEY, BEARER, 'ab'.repeat(10)]) {
+    expect(toast.includes(secret)).toBe(false)
+  }
+})
+
+test('passes env and header values that reference a variable', async ($, on) => {
+  const server = {
+    command: 'npx',
+    env: { GITHUB_TOKEN: '${GITHUB_TOKEN}', DB_PASSWORD: '$DB_PASSWORD', API_KEY: '${API_KEY:-}', SLACK_TOKEN: '${SLACK_TOKEN:-x}' },
+    headers: { Authorization: 'Bearer ${TOKEN}', 'X-API-Key': '${KEY}' },
+  }
+  expect(
+    await start($, on, {
+      '/repo/.claude/settings.json': JSON.stringify({ env: server.env, mcpServers: { a: server } }),
+      '/repo/.mcp.json': JSON.stringify({ mcpServers: { a: server } }),
+      '/home/me/.claude.json': JSON.stringify({ mcpServers: { a: server }, projects: { '/repo': { mcpServers: { a: server } } } }),
+    }),
+  ).toBe('')
+})
+
+test('passes ordinary env, non-string values and a plain MCP server', async ($, on) => {
+  const plain = { mcpServers: { fs: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '/repo'] } } }
+  expect(
+    await start($, on, {
+      '/repo/.claude/settings.json': JSON.stringify({
+        env: { AWS_REGION: 'us-gov-west-1', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000', MAX_THINKING_TOKENS: '8000', SOME_TOKEN: 12345678, API_KEY: true },
+        ...plain,
+      }),
+      '/repo/.mcp.json': JSON.stringify(plain),
+      '/home/me/.claude.json': JSON.stringify({ ...plain, projects: { '/repo': plain } }),
+    }),
+  ).toBe('')
 })
 
 test('scans a file that does not parse, whole', async ($, on) => {
