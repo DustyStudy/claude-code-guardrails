@@ -5,9 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Thirteen mods that stop risky commands
-before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
-content, catch secrets before they are written, flag insecure
+when it works on AWS and Terraform. Twelve mods that stop risky commands
+before they run, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
 context, and keep subagents and Codex on the models you choose.
 
@@ -21,7 +20,7 @@ context, and keep subagents and Codex on the models you choose.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** over a thousand tests across the thirteen mods, run in CI
+- **Result:** over a thousand tests across the twelve mods, run in CI
   against a pinned Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -39,7 +38,6 @@ context, and keep subagents and Codex on the models you choose.
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities (including SSH public keys, signing certificates, IAM Identity Center permission sets, assignments and directory users and groups, and IAM Roles Anywhere trust anchors and profiles), write static access keys to disk (`aws configure set aws_secret_access_key`, `aws configure import`, `Set-AWSCredential -StoreAs` with keys), change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
 | [supply-chain-guard](mods/supply-chain-guard) | Guard | CLI and Desktop | Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run. |
 | [merged-branch-guard](mods/merged-branch-guard) | Guard | CLI and Desktop | Denies `git push` that continues a branch whose pull request is already merged (and has no open one) and which GitHub has deleted, since the push would recreate it and strand the new commits outside any PR. Long-lived branches still on the remote, such as `develop`, and new branches that reuse an old name run. The deny names the merged PR and gives the commands to move the commits to a new branch cut from the default branch. Asks GitHub through `gh`; when `gh` is missing, signed out, offline or slow, the push runs with a note. |
-| [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
 | [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out (`cp`, `robocopy`, `mklink`, `New-Item -ItemType SymbolicLink`, `Compress-Archive`, `tar -c`): `.env` files, AWS (`aws login`/SSO/CLI caches too), SSH, cloud CLI and Az PowerShell, npm, Docker, any file under `~/.kube`, GitHub CLI, git, Codex and Claude credentials (`~/.claude.json` too), service-account JSON keys, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Denies sending one out (`gh gist create .env`, `curl -F f=@.env`, `aws s3 cp .env s3://…`, `Invoke-WebRequest -InFile`, `git add .env`) and a recursive search from above the home folder (`rg x C:\Users`, `grep -r x /`). Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`, through `aws-vault exec`, `op run` or `doppler run` too), printing one variable named for a credential (`echo $GITHUB_TOKEN`, `$env:AWS_SECRET_ACCESS_KEY`), and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`, `aws ecr get-login-password`, `Get-SECSecretValue`, `gh auth token`, `git credential fill`, `terraform state pull`, `terraform output -json`, `op read`, `vault kv get`, `sops -d`, `kubectl get secret -o yaml`). `.env.example`, `*.pub`, a project's `.mcp.json`, existence checks, programs that use a file or variable without printing it (`terraform -var-file`, `ssh -i`, `curl -H "Authorization: Bearer $GITHUB_TOKEN"`, `echo $GITHUB_TOKEN \| gh auth login --with-token`) and `aws ecr get-login-password \| docker login --password-stdin` still run. |
 | [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits, file-writing shell commands (`>`, `tee`, heredoc, `Set-Content`) and MCP tool calls (mail, artifacts) that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, sets a GovCloud provider without FIPS endpoints, creates a static `aws_iam_access_key` or an `aws_iam_user_login_profile`, trusts GitHub OIDC without a pinned repo `sub` and an `aud` condition, grants a `*` principal without a condition, or leaves a secret-named variable or output unmarked `sensitive` (or gives such a variable a literal default). Flags GitHub Actions workflows that pass static AWS keys instead of `role-to-assume`. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name (moving to a fallback model and effort while it is out of usage), denies a `claude` run from the shell that names another, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
@@ -113,7 +111,6 @@ same JSON through MDM or claude.ai's server-managed settings):
   "enabledPlugins": {
     "terraform-guard@claude-code-guardrails": true,
     "aws-guard@claude-code-guardrails": true,
-    "taint-guard@claude-code-guardrails": true,
     "tf-lint@claude-code-guardrails": true
   }
 }
@@ -162,7 +159,7 @@ block, in file order:
   controls, or at `DustyStudy/claude-code-guardrails`.
 - **`enabledPlugins`, `prependPlugins`** lock on the mods that deny or flag
   a mistake whoever is at the keyboard: terraform-guard, aws-guard,
-  taint-guard, tf-lint and secret-allow-guard. Add
+  tf-lint and secret-allow-guard. Add
   secret-read-guard to both lists once a release ships it. `prependPlugins`
   is what makes each one count as the organization's mod, and it must keep
   `sec-default@builtin`, Claude Code's own guard, in the list.
@@ -202,8 +199,7 @@ block, in file order:
   `settings`, `CLAUDE.md`, `agents`, `skills`, `commands` and `plugins`
   instead. A combined flag such as `-fu` and a `+branch` refspec still pass.
 - **`sandbox`** runs Bash commands in the OS sandbox with no unsandboxed
-  retry, and lets them reach only the listed hosts, which is the network
-  allowlist taint-guard's limit below asks for. `allowManagedReadPathsOnly`
+  retry, and lets them reach only the listed hosts, which keeps a prompt injection from sending data out. `allowManagedReadPathsOnly`
   stops an engineer re-opening a path the deny rules close. Trim the list: a broad host
   such as `github.com` or `*.amazonaws.com` is itself a way out. With
   `~/.ssh` denied, use HTTPS git remotes. The sandbox does not exist on
@@ -256,10 +252,6 @@ model-guard does nothing extra until its is set.
 | `MODEL_GUARD_FALLBACK_EFFORT` | model-guard | The effort subagents run at on the fallback model: `low`, `medium`, `high`, `xhigh` or `max`. It applies to every agent type, built-in ones included. Unset: the agent's own effort. |
 | `MODEL_GUARD_CODEX_ARGS` | model-guard | The flags every Codex run must pass, written as you pass them, such as `--model gpt-6-astra --effort high`. |
 | `SECRET_READ_ALLOW` | secret-read-guard | Comma-separated globs of files the guard leaves readable, such as `*.pem,test/fixtures/*.key,.npmrc`. A glob with no folder matches the file name anywhere; one with folders matches the end of the path; `~` is your home folder. Use it for public certificates and fixtures, not to open `.env` everywhere. |
-| `TAINT_GUARD_TRUSTED` | taint-guard | Comma-separated MCP tool name prefixes whose results are trusted and which stay usable in a tainted session, such as `mcp__plugin_context7_,mcp__plugin_semgrep_guardian__`. tf-plan-summary's tool is always trusted; gh-ci-status's is not, since an Actions log carries a pull request's text. |
-| `TAINT_GUARD_TRUSTED_HOSTS` | taint-guard | Comma-separated hosts whose pages a WebFetch reads without tainting the session, such as `docs.aws.amazon.com,learn.microsoft.com`. A host also covers its subdomains. Name the bare domain, not a `www.` host: WebFetch follows a redirect between the two, so a `www.` host alone is never trusted. Name only sites whose pages no outsider writes: not `github.com` or a forum. `curl` still taints; WebSearch only warns. |
-| `TAINT_GUARD_READ_SERVERS` | taint-guard | Comma-separated MCP tool name prefixes, one per server, whose read tools (named `search`, `get`, `list`, `read` or `query`) stay usable in a tainted session. Their results still taint it, and the server's other tools are still denied. A read's arguments reach that server, so name only servers no outsider runs: first-party connectors such as Gmail, and the desktop app's own `mcp__ccd_session_mgmt__,mcp__ccd_settings__`. |
-| `TAINT_GUARD_BROWSER_HOSTS` | taint-guard | Comma-separated hosts, matched exactly (no subdomains), where the browser tools (Claude in Chrome and the desktop app's built-in browser) work without tainting the session, such as `create.roblox.com,www.roblox.com,roblox.com`. The guard reads each tab's address from the browser's own tab list, fresh before and after the call, never from page text: a call stays clean when its tab is on a listed host both times and any page it opens is listed (a blank new tab counts; a tab list call needs every tab listed). Once tainted, one step on such a tab still runs, and opening and closing tabs always do; page scripts (`javascript_tool`) do not. Any other site, an unknown tab, a call with no tab ID and no single active tab, or a `browser_batch` with more than one page step taints, or once tainted is denied, as before. |
 
 ## Development
 
@@ -273,7 +265,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, supply-chain-guard, merged-branch-guard, taint-guard, model-guard and secret-read-guard each carry the same
+terraform-guard, aws-guard, supply-chain-guard, merged-branch-guard, model-guard and secret-read-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
@@ -432,25 +424,6 @@ when it would be worth lifting.
   whether the merged PR's last commit is in what is pushed; after a merge
   commit (not a squash) that commit is on the default branch too, so a
   fresh branch from it under the old name is still denied.
-- **taint-guard** cuts the blast radius of a prompt injection; it does not
-  detect one. It knows the sinks by program name, so a script that opens a
-  socket itself (`python -c`, `node -e`) passes, as does a file read with
-  Read from a repo someone else wrote. A tainted WebFetch is judged by the
-  shape of its URL, so a query string, userinfo, or an encoded path segment
-  or host label is denied, but short or word-like data in a path or
-  subdomain still gets out; deny WebFetch or use `/sandbox` with a network
-  allowlist for that. Plain `git fetch`, `git pull` and `submodule update`
-  reach the remotes in the repo's config, so an edit to `.git/config` or
-  `.gitmodules` with the Edit tool can point them elsewhere; `npm install`
-  likewise follows an `.npmrc`. `gh pr list` and other listing calls do not
-  taint, though titles are third-party text. Any `gh api` call taints, even
-  one that returns only your own data. WebSearch
-  stays usable and does not lock: its query goes to the search provider, not
-  to a host the attacker reads, but its snippets can still carry an
-  injection, which then meets no lock. It reads command lines with the shared parser, so a quoted
-  argument with spaces under a wrapper (`env git -C "a b" push`) is split and
-  can hide a subcommand. az and gcloud are denied whole. The lock lasts for the session; a new session starts
-  clean.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
   something runs `git fetch --prune`.
 ## Security

@@ -43,10 +43,6 @@
       "source": "./mods/supply-chain-guard"
     },
     {
-      "name": "taint-guard",
-      "source": "./mods/taint-guard"
-    },
-    {
       "name": "terraform-guard",
       "source": "./mods/terraform-guard"
     },

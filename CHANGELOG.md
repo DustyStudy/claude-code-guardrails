@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Removed taint-guard. It was not loaded in the maintainer's own setup, and
+  Claude Code's auto mode now judges outbound and publishing commands itself,
+  with a server-side check on suspicious tool results. Nothing replaces its
+  `/taint-clear` lock; for a session that reads untrusted content, use the
+  sandbox network allowlist in `examples/managed-settings.json`. The example
+  no longer enables it, and the `TAINT_GUARD_*` settings are gone.
 - examples/managed-settings.json: the force-push deny rules are now whole
   words for Bash and PowerShell, so `git push origin main --force` is denied
   and `--force-with-lease` still runs; `Edit(~/.claude/**)` is replaced by
