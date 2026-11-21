@@ -22,22 +22,16 @@
   "enabledPlugins": {
     "terraform-guard@claude-code-guardrails": true,
     "aws-guard@claude-code-guardrails": true,
-    "destructive-guard@claude-code-guardrails": true,
-    "self-guard@claude-code-guardrails": true,
     "taint-guard@claude-code-guardrails": true,
     "tf-lint@claude-code-guardrails": true,
-    "secret-allow-guard@claude-code-guardrails": true,
-    "commit-identity-guard@claude-code-guardrails": true
+    "secret-allow-guard@claude-code-guardrails": true
   },
   "prependPlugins": [
     "terraform-guard@claude-code-guardrails",
     "aws-guard@claude-code-guardrails",
-    "destructive-guard@claude-code-guardrails",
-    "self-guard@claude-code-guardrails",
     "taint-guard@claude-code-guardrails",
     "tf-lint@claude-code-guardrails",
     "secret-allow-guard@claude-code-guardrails",
-    "commit-identity-guard@claude-code-guardrails",
     "sec-default@builtin"
   ],
 
@@ -55,7 +49,13 @@
       "Read(//**/*.tfvars)",
       "Read(//**/*.tfvars.json)",
       "Read(//**/*.pem)",
-      "mcp__terminal__run_in_terminal"
+      "mcp__terminal__run_in_terminal",
+      "Bash(git push --force*)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Edit(~/.claude/**)",
+      "Edit(~/.claude.json)"
     ]
   },
 
@@ -83,8 +83,7 @@
     "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otel-collector.example.com:4317",
     "OTEL_LOG_TOOL_DETAILS": "1",
-    "DISABLE_FEEDBACK_COMMAND": "1",
-    "COMMIT_GUARD_OWNERS": "YOUR-GITHUB-ORG"
+    "DISABLE_FEEDBACK_COMMAND": "1"
   },
 
   "cleanupPeriodDays": 30,

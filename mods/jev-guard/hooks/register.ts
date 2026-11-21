@@ -19,9 +19,8 @@ const SECRET_OUTPUT =
 // A GovCloud or CUI context, by region, partition or the name of the folder the work is in.
 // CUI as its own label: CUI_project and cui-data count, circuit does not.
 const GOV = /us-gov-|aws-us-gov|govcloud|(^|[^a-z])cui([^a-z]|$)/i
-const SEEN = { plugin: 'aws-context', key: 'seen' } as const
 
-// The `region` of a profile's section in an AWS config file's text, or ''. Same as aws-context's regionIn.
+// The `region` of a profile's section in an AWS config file's text, or ''.
 const regionIn = (config: string, profile: string) => {
   const name = `["']?${profile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']?`
   const header = new RegExp(String.raw`^\[\s*${profile === 'default' ? '(profile\\s+)?' : 'profile\\s+'}${name}\s*\]\s*([#;].*)?$`)
@@ -58,17 +57,12 @@ const refusal = async ($: EngineInterface, command: string): Promise<string | un
     return 'it carries what looks like a key or token'
   }
 
-  // The last region aws-context saw used, the session's own settings, then the active profile's region in the config file.
-  const seen = await $.state.get(SEEN).then(
-    got => got.value,
-    () => undefined,
-  )
-  const profile = seen?.profile || (await $.env.get('AWS_PROFILE')) || 'default'
+  // The session's own settings, then the active profile's region in the config file.
+  const profile = (await $.env.get('AWS_PROFILE')) || 'default'
   const config =
     (await $.env.get('AWS_CONFIG_FILE')) ??
     [(await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '', '.aws', 'config'].join('/')
   const regions = [
-    seen?.region,
     await $.env.get('AWS_REGION'),
     await $.env.get('AWS_DEFAULT_REGION'),
     regionIn(await $.fs.read(config).then(String, () => ''), profile),
