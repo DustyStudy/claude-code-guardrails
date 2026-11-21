@@ -11,26 +11,6 @@
       "source": "./mods/aws-guard"
     },
     {
-      "name": "cleanup-check",
-      "source": "./mods/cleanup-check"
-    },
-    {
-      "name": "jev-guard",
-      "source": "./mods/jev-guard"
-    },
-    {
-      "name": "merged-branch-guard",
-      "source": "./mods/merged-branch-guard"
-    },
-    {
-      "name": "model-guard",
-      "source": "./mods/model-guard"
-    },
-    {
-      "name": "output-trimmer",
-      "source": "./mods/output-trimmer"
-    },
-    {
       "name": "secret-allow-guard",
       "source": "./mods/secret-allow-guard"
     },
@@ -49,10 +29,6 @@
     {
       "name": "tf-lint",
       "source": "./mods/tf-lint"
-    },
-    {
-      "name": "tf-plan-summary",
-      "source": "./mods/tf-plan-summary"
     }
   ]
 }

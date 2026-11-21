@@ -11,7 +11,7 @@ the mod to do.
 
 In scope: an ordinary command or edit that a guard should deny but lets
 through, a mod that sends or writes data it should not (for example
-tf-plan-summary returning an attribute value), and a mod that fails open
+a mod returning a secret value it found), and a mod that fails open
 when it errors.
 
 Out of scope: the limits listed under "Known limits" in the README, such as

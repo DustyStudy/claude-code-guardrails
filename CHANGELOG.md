@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Removed the jev-guard, model-guard, output-trimmer, cleanup-check, tf-plan-summary
+  and merged-branch-guard mods. Jev and model choice are one person's policy, not
+  the organization baseline, and the other four only remind, display or trim
+  output. Their entries below stay as history; they remain in the 0.7.0 release.
+
 ## 0.7.0 (2026-11-21)
 
 - examples/managed-settings.json: locks on secret-read-guard; the Read deny
