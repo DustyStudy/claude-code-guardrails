@@ -192,6 +192,15 @@ block, in file order:
   a command outside Bash, where no shell guard sees it; add a rule for every
   MCP tool of yours that runs commands (`mcp__<server>__<tool>`), or allow
   only named servers with `allowManagedMcpServersOnly`.
+  The same list replaces the removed destructive-guard and self-guard. A
+  deny always beats an allow, so `--force-with-lease` stays usable only
+  because each force flag is written as a whole word (`git push --force`,
+  `git push * --force *`, and so on) rather than as `--force*`. Write each
+  git rule for `PowerShell(...)` as well as `Bash(...)`, and add a `git -C *`
+  twin, which a plain `git push` rule does not match. `Edit(~/.claude/**)`
+  would also block Claude's memory and plan writes, so the list names
+  `settings`, `CLAUDE.md`, `agents`, `skills`, `commands` and `plugins`
+  instead. A combined flag such as `-fu` and a `+branch` refspec still pass.
 - **`sandbox`** runs Bash commands in the OS sandbox with no unsandboxed
   retry, and lets them reach only the listed hosts, which is the network
   allowlist taint-guard's limit below asks for. `allowManagedReadPathsOnly`

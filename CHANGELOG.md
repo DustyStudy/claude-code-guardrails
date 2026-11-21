@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- examples/managed-settings.json: the force-push deny rules are now whole
+  words for Bash and PowerShell, so `git push origin main --force` is denied
+  and `--force-with-lease` still runs; `Edit(~/.claude/**)` is replaced by
+  the config and code folders it was meant to protect, so Claude can still
+  write its memory and plans.
 - Removed destructive-guard, self-guard, commit-identity-guard,
   gh-ci-status and aws-context: Claude Code now does their job. Auto mode
   blocks force push, `reset --hard`, `clean -fd` and `terraform destroy`, and
