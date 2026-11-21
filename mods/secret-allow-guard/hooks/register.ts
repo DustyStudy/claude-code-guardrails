@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
 
 // A literal secret in a permission rule: "Yes, and don't ask again" saves the whole command, secret included.
+// The same matchers check env and MCP server env and headers.
 // A value starting with $ is a variable reference and passes.
 const SECRET = [
   /\b(?:PGPASSWORD|MYSQL_PWD|REDISCLI_AUTH)=["']?(?!\$)[^\s"';]/,
@@ -33,24 +34,39 @@ const SECRET = [
   /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]+)*\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
 ]
 
-type Settings = { permissions?: Partial<Record<'allow' | 'ask' | 'deny', unknown>> }
+const record = (value: unknown): Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 
-// The permission rules, numbered as they stand; a file that does not parse is scanned whole.
-const rules = (text: string): string[] => {
+// `NAME=value` and `Name: value`, so the name-based matchers apply as well as the key formats.
+const pairs = (value: unknown, join: string): string[] =>
+  Object.entries(record(value)).flatMap(([name, one]) => (typeof one === 'string' ? [`${name}${join}${one}`] : []))
+
+const servers = (value: unknown): string[] =>
+  Object.values(record(value)).flatMap(server => [...pairs(record(server).env, '='), ...pairs(record(server).headers, ': ')])
+
+// Permission rules, env, and MCP server env and headers (also per project, in ~/.claude.json); a file that does not parse is scanned whole.
+const entries = (text: string): string[] => {
   try {
-    const { permissions = {} } = JSON.parse(text) as Settings
+    const parsed = record(JSON.parse(text))
+    const permissions = record(parsed.permissions)
+    const rules = ['allow', 'ask', 'deny'].flatMap(list => {
+      const listed = permissions[list]
 
-    return (['allow', 'ask', 'deny'] as const).flatMap(list => {
-      const entries = permissions[list]
-
-      return Array.isArray(entries) ? entries.filter((rule): rule is string => typeof rule === 'string') : []
+      return Array.isArray(listed) ? listed.filter((rule): rule is string => typeof rule === 'string') : []
     })
+
+    return [
+      ...rules,
+      ...pairs(parsed.env, '='),
+      ...servers(parsed.mcpServers),
+      ...Object.values(record(parsed.projects)).flatMap(project => servers(record(project).mcpServers)),
+    ]
   } catch {
     return [text]
   }
 }
 
-const findSecrets = (text: string): number => rules(text).filter(rule => SECRET.some(one => one.test(rule))).length
+const findSecrets = (text: string): number => entries(text).filter(entry => SECRET.some(one => one.test(entry))).length
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -58,10 +74,16 @@ export const register: Register = on => {
     const home = (await $.env.get('USERPROFILE').catch(() => undefined)) ?? (await $.env.get('HOME').catch(() => undefined))
     // CLAUDE_CONFIG_DIR moves the user's settings out of ~/.claude.
     const config = await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)
-    const files = [`${e.cwd}/.claude`, ...(home === undefined ? [] : [`${home}/.claude`]), ...(config ? [config] : [])].flatMap(dir => [
-      `${dir}/settings.local.json`,
-      `${dir}/settings.json`,
-    ])
+    // files[0] stays the local settings file, which the git check below reads.
+    const files = [
+      ...[`${e.cwd}/.claude`, ...(home === undefined ? [] : [`${home}/.claude`]), ...(config ? [config] : [])].flatMap(dir => [
+        `${dir}/settings.local.json`,
+        `${dir}/settings.json`,
+      ]),
+      `${e.cwd}/.mcp.json`,
+      ...(home === undefined ? [] : [`${home}/.claude.json`]),
+      ...(config ? [`${config}/.claude.json`] : []),
+    ]
     const warnings: string[] = []
 
     for (const file of new Set(files)) {
@@ -75,7 +97,9 @@ export const register: Register = on => {
 
       // Count and path only: the warning itself must not carry the secret.
       if (count > 0) {
-        warnings.push(`${file}: ${count} permission rule${count === 1 ? '' : 's'} look${count === 1 ? 's' : ''} like a literal secret: delete them and rotate the secrets`)
+        warnings.push(
+          `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, MCP env or headers): delete them and rotate the secrets`,
+        )
       }
     }
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- aws-guard 0.5.0: also denies, by AWS CLI and by cmdlet, changes to
+  non-human identities and static keys: `iam upload-`/`update-ssh-public-key`
+  and `-signing-certificate` (`Publish-`/`Update-IAMSSHPublicKey`,
+  `-IAMSigningCertificate`); every `sso-admin` call but `describe-`,
+  `list-` and `get-` (any `SSOADMN` cmdlet but Get); `identitystore`
+  create, update and delete (`New-`/`Update-`/`Remove-IDSUser`, `Group`,
+  `GroupMembership`); `rolesanywhere` create, update and enable of trust
+  anchors and profiles (`IAMRA` cmdlets); `aws configure set` of
+  `aws_access_key_id`, `aws_secret_access_key` or `aws_session_token`
+  (also `profile.x.`), `aws configure import`, `Set-AWSCredential -StoreAs`
+  with a key or credential, and `Initialize-AWSDefaultConfiguration` with
+  one. Reads, `aws configure set region` and switching profiles run.
+- secret-allow-guard 0.3.0: besides permission rules, also checks `env`
+  values and MCP servers' `env` and `headers` values for literal secrets,
+  with the same matchers, in the settings files it already read, in
+  `~/.claude.json` (your MCP servers and every project's) and in the
+  project's `.mcp.json`. A value written as `$VAR` or `${VAR}` passes. The
+  warning still names only the file and the count.
 - cleanup-check 0.4.0: no longer counts or prunes old plugin versions in
   `~/.claude/plugins/cache`, and `CLEANUP_CHECK_PRUNE_CACHE` is gone.
   Claude Code now deletes an old version itself 14 days after an update

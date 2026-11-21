@@ -37,7 +37,7 @@ much of your Claude and Codex plans is left.
 | Mod | Kind | Works in | What it does |
 |---|---|---|---|
 | [terraform-guard](mods/terraform-guard) | Guard | CLI and Desktop | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
-| [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities, change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
+| [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities (including SSH public keys, signing certificates, IAM Identity Center permission sets, assignments and directory users and groups, and IAM Roles Anywhere trust anchors and profiles), write static access keys to disk (`aws configure set aws_secret_access_key`, `aws configure import`, `Set-AWSCredential -StoreAs` with keys), change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
 | [supply-chain-guard](mods/supply-chain-guard) | Guard | CLI and Desktop | Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run. |
 | [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [merged-branch-guard](mods/merged-branch-guard) | Guard | CLI and Desktop | Denies `git push` that continues a branch whose pull request is already merged (and has no open one) and which GitHub has deleted, since the push would recreate it and strand the new commits outside any PR. Long-lived branches still on the remote, such as `develop`, and new branches that reuse an old name run. The deny names the merged PR and gives the commands to move the commits to a new branch cut from the default branch. Asks GitHub through `gh`; when `gh` is missing, signed out, offline or slow, the push runs with a note. |
@@ -48,7 +48,7 @@ much of your Claude and Codex plans is left.
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name (moving to a fallback model and effort while it is out of usage), denies a `claude` run from the shell that names another, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls, and direct calls to its API, that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
-| [secret-allow-guard](mods/secret-allow-guard) | Reminder | CLI and Desktop | At session start, warns when a permission rule in the project's or your own `.claude/settings*.json` holds a literal secret ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value. |
+| [secret-allow-guard](mods/secret-allow-guard) | Reminder | CLI and Desktop | At session start, warns when a permission rule, an `env` value or an MCP server's `env` or `headers` value holds a literal secret, in the project's or your own `.claude/settings*.json`, `~/.claude.json` (yours and every project's MCP servers) or the project's `.mcp.json` ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | CLI and Desktop | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | CLI and Desktop | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
@@ -339,6 +339,16 @@ when it would be worth lifting.
   (`iam create-role`, `cloudformation delete-stack`, `s3 sync --delete`,
   `route53 change-resource-record-sets`, security group rules) are left to
   IAM and to review. `--dry-run` and `--dryrun` are trusted as written.
+  The interactive `aws configure` wizard runs, since it needs a terminal
+  the agent does not have. Every `sso-admin` call but a read is denied,
+  tags included. Roles Anywhere CRL and attribute-mapping calls, and the
+  CLI's `rolesanywhere delete-*`, run (its `Remove-IAMRA*` cmdlets are
+  denied with the other `Remove-IAM*`). In PowerShell a parenthesized
+  argument ends the call for the shell parser, so an AWS CLI call such as
+  `aws --profile ($p) iam delete-role` or `aws s3 rm ($p) --recursive`
+  runs; the cmdlets denied only by their arguments (`-StoreAs`,
+  `-Terminate`) are also read from the text, so a later mention of the
+  cmdlet's name in the same command can be denied too.
 - **supply-chain-guard** reads the install verbs of pip, uv, npm, pnpm, yarn
   and bun; poetry, conda and a script that installs are not checked.
 - **tf-lint** reads only the text being written, block by block. A rule split
@@ -371,7 +381,12 @@ when it would be worth lifting.
 - **secret-allow-guard** checks at session start, so a rule approved during
   a session is caught by the next one. It matches known key formats and
   secrets typed after a flag or variable name, so a bare password with no
-  marker next to it is missed; a value written as `$VAR` passes. Ignore the
+  marker next to it is missed; a value written as `$VAR` or `${VAR}` passes.
+  An `env` or MCP `env`/`headers` entry is read as `NAME=value`, so a
+  harmless value under a secret-like name (`TOKEN_FILE=/run/token`,
+  `SECRET_NAME=prod/db`, an `AWS_SECRET_ARN`) and a long default
+  (`${API_KEY:-unset}`) are flagged, and an opaque token under a plain
+  header name (`X-Auth`) is missed. Ignore the
   file in every repo on the machine, including ones cloned later, with
   `git config --global core.excludesfile ~/.gitignore_global` and
   `.claude/settings.local.json` as a line in that file.
