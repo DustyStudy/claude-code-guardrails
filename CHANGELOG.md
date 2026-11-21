@@ -8,6 +8,8 @@
   it is the whole command; unquoted heredocs, heredocs fed to any other
   program, anything after the end line, a carriage return, and the terminal
   tool are read as before.
+- output-trimmer: documents that it trims only a command that succeeds. A
+  failed call is not trimmed, and the README says why.
 - supply-chain-guard 0.2.0: also checks `Monitor` and the desktop app's
   terminal tool, as the other command guards do, so an unpinned install run
   through either is denied.
