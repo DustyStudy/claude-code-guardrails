@@ -198,9 +198,9 @@ const optionOf = (args: readonly string[], flag: RegExp) => {
 
   return at < 0 ? undefined : args[at + 1]
 }
-// New-Item -ItemType SymbolicLink -Path link -Target file.
+// New-Item -ItemType SymbolicLink -Path link -Target file, or -Value:file.
 const linked = (args: readonly string[]) => {
-  const target = optionOf(args, /^-(target|value)$/i)
+  const target = optionOf(args, /^-(target|value)$/i) ?? args.find(arg => /^-(target|value):/i.test(arg))?.replace(/^-\w+:/, '')
 
   return target !== undefined && args.some(arg => /^(-itemtype:)?(symboliclink|hardlink|junction)$/i.test(arg)) ? [target, optionOf(args, /^-(path|name)$/i) ?? ''] : []
 }
@@ -319,7 +319,9 @@ const BARE_VAR = new RegExp(
 // What prints what is piped into it; a program that takes it as a credential (gh auth login --with-token, docker login
 // --password-stdin) does not.
 const printsInput = (program = '') =>
-  [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+`)].some(prints => prints.test(program))
+  [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|\w+-Object|select|where|\?|%`)].some(prints =>
+    prints.test(program),
+  )
 const printsVar = (stages: readonly (readonly string[])[]) =>
   stages.some((stage, i) => {
     const [program, ...args] = unwrapped(stage)
@@ -329,19 +331,28 @@ const printsVar = (stages: readonly (readonly string[])[]) =>
       (/^(printenv|gci|ls|dir|get-childitem|get-item|gi|get-content|gc|type|cat)$/.test(name) &&
         args.some(arg => SECRET_ONLY.test(arg) && (name === 'printenv' || /^env:/i.test(arg))))
 
-    return prints && (i === stages.length - 1 || printsInput(stages[i + 1]?.[0]))
+    // Write-Host writes to the screen, whatever follows it.
+    return prints && (i === stages.length - 1 || name === 'write-host' || printsInput(stages[i + 1]?.[0]))
   })
 
 // Calls that send a file out: an upload, a request body, a gist, a commit. Each gives the words that name what it sends.
 // @file, name=@file, file://x and fileb://x attach the file's content.
-const ATTACHED = /^(--?[\w-]+=)?([\w.-]*=?@|fileb?:\/\/)/i
+// curl's -F 'f=<file' sends the content as the field's value.
+const ATTACHED = /^(--?[\w-]+=)?([\w.-]*=?[@<]|fileb?:\/\/)/i
 const attached = (word: string) => word.replace(ATTACHED, '').replace(/;.*$/, '')
 // The file an option names: -T x, --upload-file=x, -InFile:x.
 const fileOf = (args: readonly string[], flag: RegExp) => args.flatMap((arg, i) => (flag.test(arg) ? [/[=:]/.test(arg) ? arg : (args[i + 1] ?? '')] : []))
 const SENDERS: readonly (readonly [RegExp, (args: readonly string[]) => readonly string[]])[] = [
-  // gist create .env, issue comment --body-file .env, release upload, api -F x=@.env and --input .env.
-  [bin('gh'), args => (says(args, / (gist|issue|pr|release|api) /) ? args.map(attached) : [])],
-  [bin('curl'), args => [...args.filter(arg => ATTACHED.test(arg)).map(attached), ...fileOf(args, /^(-T|--upload-file)([=:]|$)/)]],
+  // gist create .env and release upload send their files; issue/pr --body-file and -F, api -F x=@.env and --input send one.
+  [
+    bin('gh'),
+    // A description or notes (-d "why .env is ignored") is no path.
+    args => [...(says(args, / (gist (create|edit)|release (create|upload)) /) ? args.filter(arg => !/\s/.test(arg)) : []), ...fileOf(args, /^(--body-file|-F|--field|--input)([=:]|$)/)].map(attached),
+  ],
+  [
+    bin('curl'),
+    args => [...args.filter(arg => ATTACHED.test(arg)).map(attached), ...fileOf(args, /^(-T|--upload-file)([=:]|$)/), ...args.filter(arg => /^-T./.test(arg)).map(arg => arg.slice(2))],
+  ],
   [bin('wget'), args => fileOf(args, /^--(post|body)-file([=:]|$)/)],
   [bin('Invoke-WebRequest|iwr|Invoke-RestMethod|irm'), args => fileOf(args, /^-InFile(:|$)/i)],
   // s3 cp .env s3://b sends what stands before the bucket; s3 cp s3://b/terraform.tfstate - prints the object.
@@ -349,13 +360,19 @@ const SENDERS: readonly (readonly [RegExp, (args: readonly string[]) => readonly
     bin('aws'),
     args => {
       const at = args.findIndex(arg => /^s3:\/\//i.test(arg))
-      const s3 = says(args, / s3 (cp|mv|sync) /) && at > 0 ? [...args.slice(0, at), ...(args.includes('-') ? [args[at]?.slice(5) ?? ''] : [])] : []
+      // --exclude .env names what stays behind.
+      const local = args.slice(0, at).filter((_, i) => !/^--(exclude|include)$/.test(args[i - 1] ?? ''))
+      const s3 = says(args, / s3 (cp|mv|sync) /) && at > 0 ? [...local, ...(args.includes('-') ? [args[at]?.slice(5) ?? ''] : [])] : []
 
       return [...s3, ...args.filter(arg => /fileb?:\/\//i.test(arg)).map(attached)]
     },
   ],
-  // A message (-m "never commit .env") is no path; git rm --cached, status and check-ignore are no send.
-  [bin('git'), args => (says(args, / (add|stage|commit) /) ? args.filter((_, i) => !/^(-[a-zA-Z]*m|--(message|author|date))$/.test(args[i - 1] ?? '')) : [])],
+  // A message (-m wip, -m "never commit .env") is no path; git rm --cached, status and check-ignore are no send.
+  [
+    bin('git'),
+    args =>
+      says(args, / (add|stage|commit) /) ? args.filter((arg, i) => !/\s/.test(arg) && !/^(-[a-zA-Z]*m|--(message|author|date))$/.test(args[i - 1] ?? '')) : [],
+  ],
 ]
 const sendDeny = (file: string) =>
   `this would send ${file} out with the call (an upload, a request body, a gist or a commit), where it is stored beyond your control. If it must go, ask the user to send it.`
@@ -393,7 +410,7 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
   [bin('aws-vault'), args => says(args, /^ export /) || (says(args, /^ exec /) && args.includes('--json'))],
   [bin('op'), args => says(args, /^ read /) || (says(args, /^ item get /) && args.includes('--reveal'))],
   [bin('vault'), args => says(args, /^ (read|kv get|print token) /)],
-  [bin('sops'), args => (args.some(arg => /^(-d|--decrypt)$/.test(arg)) || says(args, /^ decrypt /)) && !args.some(arg => /^(-i|--in-place|--output)/.test(arg))],
+  [bin('sops'), args => (args.some(arg => /^(-d|--decrypt)$/.test(arg)) || says(args, /^ decrypt /)) && !args.some(arg => /^(-i|--in-place|--output)(=|$)/.test(arg))],
   [
     bin('gh'),
     args => says(args, / auth (token|git-credential) /) || (says(args, / auth status /) && args.some(arg => /^(-t|--show-token)$/.test(arg))),
@@ -415,11 +432,11 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
     bin('kubectl|oc'),
     args =>
       (says(args, / config view /) && args.some(arg => /^--(raw|flatten)/.test(arg))) ||
-      (says(args, / get secrets?( |\/)/) && / (-o|--output)[= ]?(yaml|json|jsonpath|go-template)| --template/.test(` ${args.join(' ')}`)),
+      (says(args, / get /) && args.some(arg => /^secrets?(\/|$)/.test(arg)) && / (-o|--output)[= ]?(yaml|json|jsonpath|go-template)| --template/.test(` ${args.join(' ')}`)),
   ],
 ]
 // aws ecr get-login-password | docker login --password-stdin hands the token to docker, not the conversation.
-const PIPED_LOGIN = /(\S*aws(\.exe)?\s[^|;&\n]*\becr(-public)?\s+get-login-password|Get-ECRLoginCommand)[^|;&\n]*\|\s*[^|;&\n]*\blogin\b[^|;&\n]*--password-stdin/gi
+const PIPED_LOGIN = /(\S*aws(\.exe)?\s[^|;&\n]*\becr(-public)?\s+get-login-password|Get-ECRLoginCommand)[^|;&\n]*\|\s*\S*(docker|podman|nerdctl|finch|helm|oras)(\.exe)?\s[^|;&\n()]*\blogin\b[^|;&\n()]*--password-stdin/gi
 
 const WHERE = 'into the conversation, where it is sent to the API, saved in transcripts and can end up in a commit or a command.'
 const INSTEAD = String.raw`Ask the user for the one value you need, or read the variable names only: grep -oE '^\w+ *=' <file>, or the file's .example copy.`
@@ -481,6 +498,8 @@ const finding = (command: string, world: World): string | undefined => {
       ...invocations(command, bin('rg')),
       ...invocations(command, bin('grep|egrep|fgrep')).filter(args => args.some(arg => /^(-[a-zA-Z]*[rR][a-zA-Z]*|--(dereference-)?recursive)$/.test(arg))),
     ]
+      // rg -l and --count print names and counts, not lines.
+      .filter(args => !isNamesOnly(args))
       .map(args => aboveHome(operands(args), world))
       .find(Boolean) ??
     (readers.length > 0
@@ -507,8 +526,7 @@ const finding = (command: string, world: World): string | undefined => {
     return fileDeny(handed, 'this hands a program that prints it')
   }
 
-  // A message or title is no path: only words without a space are files.
-  const sent = SENDERS.flatMap(([program, files]) => invocations(command, program).map(args => secretIn(files(args).filter(word => !/\s/.test(word)), world))).find(Boolean)
+  const sent = SENDERS.flatMap(([program, files]) => invocations(command, program).map(args => secretIn(files(args), world))).find(Boolean)
 
   if (sent !== undefined) {
     return sendDeny(sent)
@@ -522,8 +540,9 @@ const finding = (command: string, world: World): string | undefined => {
     return `this would put every environment variable, tokens and keys among them, ${WHERE} Read one variable by name (printenv NAME, $env:NAME), or list the names only: env | cut -d= -f1.`
   }
 
-  // echo "TOKEN=$TOKEN" >> .env writes it where the guard still covers it.
-  const intoSecret = secretIn([...command.matchAll(/>>?\s*([^\s|;&<>]+)/g)].map(([, file = '']) => file), world) !== undefined
+  // echo "TOKEN=$TOKEN" >> .env, one statement, writes it where the guard still covers it.
+  const intoSecret =
+    statements.length === 1 && secretIn([...command.matchAll(/(?<![2-9&])>>?\s*([^\s|;&<>]+)/g)].map(([, file = '']) => file), world) !== undefined
 
   if (!intoSecret && (statements.some(printsVar) || [...command.matchAll(BARE_VAR)].some(({ groups }) => groups?.next === undefined || printsInput(groups.next)))) {
     return `this would put the value of a variable named for a credential ${WHERE} Hand it to the program that needs it ("$NAME" as its argument, or piped to its --with-token or --password-stdin) instead of printing it.`

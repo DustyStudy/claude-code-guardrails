@@ -366,8 +366,9 @@ when it would be worth lifting.
   a `.env` there unless `.gitignore` hides it; `aws s3 sync .` uploads one
   too. A variable is judged by its name, so `echo $DB_CONN` runs even when
   it holds a password, and one printed by a program the guard does not
-  know runs. An upload is found by a path with no space in it, so a
-  credential under a folder whose name has a space slips past. It also
+  know runs, while a quoted literal (`echo '$GITHUB_TOKEN'`) is denied. A
+  `git add` or `gh gist create` path with a space in it is read as a
+  message and slips past. It also
   denies `aws secretsmanager create-secret --secret-string file://.env`,
   `terraform output -raw vpc_id` and `terraform show -json plan.out`,
   where the credential goes to AWS or nothing secret would print. MCP file tools are not covered. It
