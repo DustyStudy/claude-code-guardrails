@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.7.0 (2026-11-21)
+
+- examples/managed-settings.json: locks on secret-read-guard; the Read deny
+  list now covers the Azure and Google Cloud CLI token caches, the kube,
+  docker, git, npm, PyPI, Vault and Terraform credential files, Claude's and
+  Codex's sign-ins and private-key formats (the AWS SSO and CLI caches and
+  gh's sign-in stay readable so `aws` and `gh` run sandboxed on short-lived
+  credentials); `sandbox.credentials.envVars` removes static keys and token
+  variables from sandboxed commands; `allowManagedMcpServersOnly` with an empty `allowedMcpServers`
+  loads only MCP servers the file lists; `forceLoginMethod` and
+  `forceLoginOrgUUID` require a claude.ai sign-in to your organization.
 - secret-read-guard 0.3.1: a quoted heredoc that only hands text to `cat`,
   `tee` or `git commit`/`tag` (`cat > notes.md <<'EOF'`) is no longer read as
   commands, so notes that mention `env |` or `.env` are not denied. Only when
