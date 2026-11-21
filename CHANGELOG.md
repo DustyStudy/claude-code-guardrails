@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- tf-lint 0.8.0: flags more non-human-identity risks. In Terraform: a
+  long-lived `google_service_account_key`, `azuread_application_password` or
+  `azuread_service_principal_password`, and a policy that grants every action
+  (`Action "*"`) or all of `iam:*` or `sts:*`. In GitHub Actions workflows: a
+  stored Azure or Google credential (`AZURE_CLIENT_SECRET`, `credentials_json`
+  or `creds` from `secrets`).
+
 - Removed the jev-guard, model-guard, output-trimmer, cleanup-check, tf-plan-summary
   and merged-branch-guard mods. Jev and model choice are one person's policy, not
   the organization baseline, and the other four only remind, display or trim

@@ -156,16 +156,38 @@ const oidcFindings = (text: string): string[] => {
 const RISKY_RESOURCES = [
   ['aws_iam_access_key', 'creates a static IAM access key (aws_iam_access_key); use an IAM role, or OIDC from CI'],
   ['aws_iam_user_login_profile', 'gives an IAM user a console password (aws_iam_user_login_profile); use IAM Identity Center or a role'],
+  ['google_service_account_key', 'creates a long-lived Google service account key (google_service_account_key); use workload identity federation'],
+  ['azuread_application_password', 'creates a long-lived Azure application client secret (azuread_application_password); use a federated identity credential'],
+  ['azuread_service_principal_password', 'creates a long-lived Azure service principal secret (azuread_service_principal_password); use a federated identity credential'],
 ] as const
+
+// The value of each Action key: one string, or a list up to its ], so the "*" of a Resource on the same line is not read as
+// the action; NotAction and not_actions are other keys. A quote may be escaped, as in a policy string inside .tf.json.
+// shortcut: Effect is not read, so a Deny of "*" is flagged too; upgrade to checkov for per-statement reads.
+// shortcut: only the first 400 characters of a list are read, which keeps the scan linear; a longer list's tail is missed.
+const ACTION_VALUES = /\bactions?\\?"?\s*[=:]\s*(\[[^\]{}]{0,400}|\\?"[^"\\\n]{0,40}\\?")/gi
 
 // A workflow that hands the job a stored key; full-line comments are skipped. A key next to role-to-assume is still a static key,
 // while one from an earlier step's, job's or env output is a temporary credential.
-const workflowFindings = (source: string): string[] =>
-  /\baws-(?:access-key-id|secret-access-key)\s*:(?!\s*["']?\$\{\{\s*(?:steps|needs|env)\.)|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*:\s*["']?\$\{\{\s*secrets[.[]/.test(
-    source.replace(/^\s*#.*$/gm, ''),
-  )
-    ? ['passes a static AWS key to the job; use aws-actions/configure-aws-credentials with role-to-assume and permissions: id-token: write']
-    : []
+const WORKFLOW_RULES = [
+  [
+    /\baws-(?:access-key-id|secret-access-key)\s*:(?!\s*["']?\$\{\{\s*(?:steps|needs|env)\.)|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*:\s*["']?\$\{\{\s*secrets[.[]/,
+    'passes a static AWS key to the job; use aws-actions/configure-aws-credentials with role-to-assume and permissions: id-token: write',
+  ],
+  [
+    // The env name, google-github-actions/auth's credentials_json and azure/login's creds, each only when it comes from secrets.
+    // The key may be quoted, and the value may sit under a block scalar (>- or |).
+    /(?<![\w-])(?:AZURE_CLIENT_SECRET|credentials_json|creds)["']?\s*:\s*(?:[>|][-+]?\s*)?["']?\$\{\{\s*secrets[.[]/,
+    'passes a static Azure or Google credential to the job; use workload identity federation (id-token: write, with azure/login client-id, tenant-id and subscription-id, or google-github-actions/auth with workload_identity_provider)',
+  ],
+] as const
+
+const workflowFindings = (source: string): string[] => {
+  // Comments go, full-line and trailing: a # at the line's start or after a space.
+  const text = source.replace(/(^|\s)#.*$/gm, '$1')
+
+  return WORKFLOW_RULES.flatMap(([pattern, finding]) => (pattern.test(text) ? [finding] : []))
+}
 
 // shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
 const findings = (source: string): string[] => {
@@ -199,6 +221,16 @@ const findings = (source: string): string[] => {
     !/\bCondition\b|\bcondition\s*\{/.test(text)
   ) {
     found.push('grants a policy to Principal "*" with no condition; name the principals or add a Condition (aws:PrincipalOrgID, aws:SourceArn)')
+  }
+
+  const actions = [...text.matchAll(ACTION_VALUES)].map(([, value = '']) => value).join('\n')
+
+  if (/"\*\\?"/.test(actions)) {
+    found.push('grants every action (Action "*") in a policy; name the actions the identity needs')
+  }
+
+  if (/"(?:iam|sts):\*\\?"/i.test(actions)) {
+    found.push('grants all IAM or STS actions (iam:* or sts:*); name the actions it needs')
   }
 
   if (/arn:aws(-[a-z-]+)?:/.test(text)) {
