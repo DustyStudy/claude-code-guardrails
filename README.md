@@ -53,7 +53,7 @@ much of your Claude and Codex plans is left.
 | [output-trimmer](mods/output-trimmer) | Context | CLI and Desktop | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | CLI and Desktop | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
-| [cleanup-check](mods/cleanup-check) | Reminder | CLI and Desktop | A status line after each turn (in Desktop, a line above the prompt, with a Clean up button that drafts the ask into the prompt box for you to read and send): a merged branch still checked out, merged branches to delete, saved plan files left behind, and stray keys, certificates, .env files and Terraform state not in git. At session start it also counts old plugin versions that updates leave in `~/.claude/plugins/cache` and shows the count; it deletes them only with `CLEANUP_CHECK_PRUNE_CACHE=1`, keeping every version `installed_plugins.json` lists. |
+| [cleanup-check](mods/cleanup-check) | Reminder | CLI and Desktop | A status line after each turn (in Desktop, a line above the prompt, with a Clean up button that drafts the ask into the prompt box for you to read and send): a merged branch still checked out, merged branches to delete, saved plan files left behind, and stray keys, certificates, .env files and Terraform state not in git. Old plugin versions are left to Claude Code, which deletes each one 14 days after an update replaces it. |
 | [usage-band](mods/usage-band) | Display and reminder | Desktop; the Codex warning in both | Your Claude plan's and Codex plan's 5-hour and weekly usage left above the prompt, each with when it resets: green with more than half left, orange at half or less, red at 20% or less, and LOW under 15%. Codex is there for sessions that hand work to it, such as reviews, second opinions and parallel tasks run through the Codex plugin, which spend the Codex plan rather than Claude's. Claude's figures are the ones the session reports; Codex's are read from its session logs, and show once Codex has run in the last seven days. After a Codex run with a window at 20% left or less, it tells the model so the next review can wait, and notifies you once per window. |
 
 **Works in** is where each mod does its job. A mod that only hooks tool
@@ -446,14 +446,7 @@ when it would be worth lifting.
   can hide a subcommand. az and gcloud are denied whole. The lock lasts for the session; a new session starts
   clean.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
-  something runs `git fetch --prune`. It deletes old plugin versions only
-  when `CLEANUP_CHECK_PRUNE_CACHE=1` is set (exactly `1`); otherwise it only
-  counts them. When deleting, it leaves a plugin's old versions for a
-  day after the plugin updates, so a session started before the update can
-  still run from them; a session left open longer than that loses that
-  plugin's old copy until it restarts. Plugins it cannot place (a missing
-  path or date, an install outside the cache or not directly a version
-  folder, a path through a link, junction or 8.3 short name) are left alone.
+  something runs `git fetch --prune`.
 - **gh-ci-status** lists the 20 most recently updated open pull requests of
   yours and 20 of Dependabot's (on repositories you own, not an org's). A
   failing log over 4 MiB is cut by the host before the tail is taken; the
