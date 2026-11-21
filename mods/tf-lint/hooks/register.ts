@@ -35,9 +35,10 @@ const secretIn = (text: string) =>
   SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
 // Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too.
 const WORKFLOW = /(^|[\\/])\.github[\\/]workflows[\\/][^\\/]+\.ya?ml$/i
-// The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, ->, => and >= are not redirections.
+// The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, >&-, -> and >= are not
+// redirections; >&file and =>file are. tee counts only as a command after a pipe, not in a filename like tee.log.
 const SHELL_TOOLS = ['Bash', 'PowerShell', 'mcp__terminal__run_in_terminal']
-const WRITES = /(?<![-=])>>?(?![=&])|\btee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b/i
+const WRITES = /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b/i
 const WORLD = /0\.0\.0\.0\/0|::\/0/
 const MANAGEMENT_PORTS = [22, 3389]
 
@@ -107,11 +108,12 @@ const blockFindings = (source: string): string[] => {
     }
 
     for (const body of bodiesOf(text, new RegExp(`\\b${kind}\\s+"?${name}"?`))) {
-      if (!/\bsensitive\s*=\s*true\b/.test(body)) {
+      // A description that says "sensitive = true" is not the setting.
+      if (!/\bsensitive\s*=\s*true\b/.test(body.replace(/"(?:\\.|[^"\\])*"/g, '""'))) {
         found.push(`declares ${kind} "${name}" without sensitive = true`)
       }
 
-      if (kind === 'variable' && /\bdefault\s*=\s*"[^"\n]+"/.test(body)) {
+      if (kind === 'variable' && /\bdefault\s*=\s*(?:"[^"\n]+"|<<)/.test(body)) {
         found.push(`gives variable "${name}" a literal default; pass it in from a secret store or TF_VAR_${name}`)
       }
     }
@@ -156,9 +158,10 @@ const RISKY_RESOURCES = [
   ['aws_iam_user_login_profile', 'gives an IAM user a console password (aws_iam_user_login_profile); use IAM Identity Center or a role'],
 ] as const
 
-// A workflow that hands the job a stored key; full-line comments are skipped. A key next to role-to-assume is still a static key.
+// A workflow that hands the job a stored key; full-line comments are skipped. A key next to role-to-assume is still a static key,
+// while one from an earlier step's, job's or env output is a temporary credential.
 const workflowFindings = (source: string): string[] =>
-  /\baws-(?:access-key-id|secret-access-key)\s*:|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*:\s*\$\{\{\s*secrets\./.test(
+  /\baws-(?:access-key-id|secret-access-key)\s*:(?!\s*["']?\$\{\{\s*(?:steps|needs|env)\.)|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*:\s*["']?\$\{\{\s*secrets[.[]/.test(
     source.replace(/^\s*#.*$/gm, ''),
   )
     ? ['passes a static AWS key to the job; use aws-actions/configure-aws-credentials with role-to-assume and permissions: id-token: write']
@@ -182,7 +185,11 @@ const findings = (source: string): string[] => {
   }
 
   // The OIDC provider resource names the host too; only a role trust (Federated, AssumeRoleWithWebIdentity) needs the conditions.
-  if (/token\.actions\.githubusercontent\.com/.test(text) && /AssumeRoleWithWebIdentity|Federated/.test(text)) {
+  // A trust may name the provider only by reference (aws_iam_openid_connect_provider.github.arn).
+  if (
+    /token\.actions\.githubusercontent\.com|openid_connect_provider\.[\w-]*github/i.test(text) &&
+    /AssumeRoleWithWebIdentity|Federated/.test(text)
+  ) {
     found.push(...oidcFindings(text))
   }
 

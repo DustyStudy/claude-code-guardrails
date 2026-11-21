@@ -351,7 +351,8 @@ when it would be worth lifting.
   KMS, provider, port, variable and trust checks read HCL syntax only. It
   reads workflows only under `.github/workflows/`, so a composite action
   kept elsewhere is not checked; a static key there is flagged even next to
-  `role-to-assume`, since that chains from a static key. Variables and
+  `role-to-assume`, since that chains from a static key, while a key taken
+  from a `steps.`, `needs.` or `env.` output passes as a temporary one. Variables and
   outputs are judged by name: `api_token_url` is flagged, a secret held in
   `db_creds` is not.
 - **secret-read-guard** keeps a secret from being read by accident; it does
