@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- cleanup-check 0.4.0: no longer counts or prunes old plugin versions in
+  `~/.claude/plugins/cache`, and `CLEANUP_CHECK_PRUNE_CACHE` is gone.
+  Claude Code now deletes an old version itself 14 days after an update
+  or uninstall replaces it. The other leftovers it reports are unchanged.
 - model-guard 0.4.0: with `MODEL_GUARD_FALLBACK_MODEL` set (and optionally
   `MODEL_GUARD_FALLBACK_EFFORT`), a subagent whose run on the pinned model
   ends on a usage or rate-limit error flags that model out until its reset,
