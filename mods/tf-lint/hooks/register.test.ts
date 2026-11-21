@@ -201,6 +201,8 @@ const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: strin
   ['Bash with a key and only stderr folded', { tool: 'Bash', command: `echo ${KEY} 2>&1 | grep -c AKIA` }, null],
   ['Bash grepping a key in a tee.log', { tool: 'Bash', command: `grep -c ${KEY} tee.log` }, null],
   ['the terminal appending a token', { tool: 'mcp__terminal__run_in_terminal', command: `echo ${TOKEN} >> .env` }, /command would write a private key/],
+  ['Monitor appending a token', { tool: 'Monitor', command: `echo ${TOKEN} >> .env` }, /command would write a private key/],
+  ['Monitor tailing a log', { tool: 'Monitor', command: 'tail -f app.log' }, null],
   ["Bash writing AWS's sample key", { tool: 'Bash', command: 'echo AKIAIOSFODNN7EXAMPLE > notes.txt' }, null],
   ['Bash with stderr folded into a pipe', { tool: 'Bash', command: 'npm test 2>&1 | tail -5' }, null],
   ['Bash redirecting a log', { tool: 'Bash', command: 'git log > log.txt' }, null],

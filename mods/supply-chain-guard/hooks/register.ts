@@ -45,10 +45,14 @@ const unpinned = (command: string): string | undefined => {
   return named ?? (viaPython ? 'pip' : undefined)
 }
 
+// Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+
 export const register: Register = on => {
   // A deny, not an ask: in auto mode an ask is settled by the classifier, not the person.
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, ($, e, next) => {
-    const manager = unpinned(e.command)
+  on('tool.call', { tool: SHELL_TOOLS }, ($, e, next) => {
+    // A Monitor that opens a WebSocket has no command.
+    const manager = unpinned(String((e as { command?: unknown }).command ?? ''))
 
     return manager === undefined
       ? next(e)

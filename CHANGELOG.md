@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- supply-chain-guard 0.2.0: also checks `Monitor` and the desktop app's
+  terminal tool, as the other command guards do, so an unpinned install run
+  through either is denied.
+- tf-lint 0.7.0: also checks `Monitor`, so a secret written to a file from a
+  Monitor command is denied.
 - Removed taint-guard. It was not loaded in the maintainer's own setup, and
   Claude Code's auto mode now judges outbound and publishing commands itself,
   with a server-side check on suspicious tool results. Nothing replaces its

@@ -37,7 +37,7 @@ const secretIn = (text: string) =>
 const WORKFLOW = /(^|[\\/])\.github[\\/]workflows[\\/][^\\/]+\.ya?ml$/i
 // The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, >&-, -> and >= are not
 // redirections; >&file and =>file are. tee counts only as a command after a pipe, not in a filename like tee.log.
-const SHELL_TOOLS = ['Bash', 'PowerShell', 'mcp__terminal__run_in_terminal']
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
 const WRITES = /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b/i
 const WORLD = /0\.0\.0\.0\/0|::\/0/
 const MANAGEMENT_PORTS = [22, 3389]
