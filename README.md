@@ -406,8 +406,11 @@ when it would be worth lifting.
   `.claude/settings.local.json` as a line in that file.
 - **aws-context** takes a profile's region from the command, then the
   environment, then the profile's section of `~/.aws/config` (or
-  `AWS_CONFIG_FILE`), which it rereads at most every 30 seconds. It does not
-  follow `source_profile` or SSO session settings.
+  `AWS_CONFIG_FILE`), which it rereads at most every 30 seconds. With no
+  profile set, it reads `[default]`. A profile whose name says `gov` or
+  `govcloud` is highlighted even before its region is known, and with no
+  region the partition reads "partition unknown". It does not follow
+  `source_profile` or SSO session settings.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
   `$TEMP/claude-output` until you delete that folder.

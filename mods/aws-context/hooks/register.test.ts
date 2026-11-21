@@ -46,7 +46,7 @@ test('drops the last region when the profile changes', async ($, on) => {
 
   const band = await (await $.ui.mount(BAND)).find({ type: 'Text' })
 
-  expect(band?.text).toBe('AWS security · no region set · aws')
+  expect(band?.text).toBe('AWS security · no region set · partition unknown')
 })
 
 test('falls back to the environment', async ($, on) => {
@@ -129,4 +129,33 @@ test('a region given in a command wins over the config file', async ($, on) => {
   const band = await (await $.ui.mount(BAND)).find({ type: 'Text' })
 
   expect(band?.text).toBe('AWS gov.admin · us-east-2 · aws')
+})
+
+test('with no profile set, the default profile region from the config file is shown', async ($, on) => {
+  mock.env(on, { AWS_CONFIG_FILE: '/aws/config3' })
+  on('fs.read', () => ({ value: CONFIG }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+
+  const band = await (await $.ui.mount(BAND)).find({ type: 'Text' })
+
+  expect(band?.text).toBe('AWS default profile · us-east-1 · aws')
+})
+
+test('a profile named for GovCloud is highlighted before its region is known', async ($, on) => {
+  mock.env(on, { AWS_PROFILE: 'govcloud-ops' })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+
+  const band = await (await $.ui.mount(BAND)).find({ type: 'Text' })
+
+  expect(band?.text).toBe('AWS govcloud-ops · no region set · partition unknown')
+  expect(band?.props).toMatchObject({ color: 'warning', bold: true })
+})
+
+test('a profile whose name only contains government is not highlighted', async ($, on) => {
+  mock.env(on, { AWS_PROFILE: 'government-audit' })
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+
+  const band = await (await $.ui.mount(BAND)).find({ type: 'Text' })
+
+  expect(band?.props).toMatchObject({ dimColor: true })
 })
