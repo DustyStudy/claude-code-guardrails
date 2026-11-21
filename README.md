@@ -391,7 +391,11 @@ when it would be worth lifting.
   `.claude/settings.local.json` as a line in that file.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
-  `$TEMP/claude-output` until you delete that folder.
+  `$TEMP/claude-output` until you delete that folder. It trims only a command
+  that succeeds: a failed call reaches a mod as an error text, not as the
+  command's output, and a mod cannot hand a trimmed one back without hiding
+  that it failed (tested on Claude Code 2.1.317). A failing `terraform apply`
+  comes back whole, up to Claude Code's own cut at about 10,000 characters.
 - **model-guard** checks Codex runs made through the Codex plugin's
   companion script or the `codex` CLI by name, and reads the flags as
   written: `-m`, `-model` and `--model=` all count as `--model` and the last
