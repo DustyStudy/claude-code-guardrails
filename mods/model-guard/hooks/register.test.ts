@@ -1,5 +1,7 @@
 import type { On } from 'claude-code'
-import { expect, mock, test } from 'claude-code/testing'
+import { type Engine as Raise, expect, mock, test } from 'claude-code/testing'
+
+import { LIMIT } from './register'
 
 const ARGS = '--model gpt-6-astra --effort high'
 const COMPANION = 'node "C:/Users/me/.claude/plugins/codex/scripts/codex-companion.mjs"'
@@ -224,4 +226,224 @@ test('a session started from this one inherits its model, whatever the call name
   await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'x', prompt: 'y' } as never)
 
   expect(models).toEqual([undefined, undefined])
+})
+
+// The fallback: subagents move off the pinned model while it is out of usage, and back when it resets.
+const FALLBACK = { MODEL_GUARD_SUBAGENT_MODEL: 'fable', MODEL_GUARD_FALLBACK_MODEL: 'opus', MODEL_GUARD_FALLBACK_EFFORT: 'high' }
+const NOW = Date.parse('2026-01-01T00:00:00Z')
+const HOUR = 60 * 60 * 1000
+const LIMIT_TEXT = 'You have hit your limit for this model.'
+
+type Window = { kind: string; percentUsed: number; resetsAt?: string }
+
+// A session whose subagent's last message is text and whose account has these windows: the requests and notices beneath the guard.
+const session = (on: On, env: Record<string, string>, text = LIMIT_TEXT, rateLimits: Window[] = []) => {
+  const steps: string[] = []
+  const logs: string[] = []
+
+  mock.env(on, env)
+  mock.store(on)
+  const clock = mock.clock(on, { now: NOW })
+
+  on('turn.step', async function* (_, e) {
+    steps.push(`${e.model} ${e.effort}`)
+
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', (_, e) => ({ text: e.answer }))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text, toolUses: [] }] }))
+  on('session.usage', () => ({ value: { startedAt: NOW, context: {} as never, rateLimits } }))
+  on('ui.log', (_, e) => {
+    logs.push(e.text)
+
+    return { value: undefined }
+  })
+
+  return { steps, logs, clock }
+}
+
+const step = async ($: Raise, agentId?: string, model = 'claude-fable-5-2') => {
+  const stream = $.turn.step({ turnId: 't', index: 0, model, effort: 'medium', messageCount: 1, ...(agentId === undefined ? {} : { agentId }) })
+
+  for await (const _ of stream) {
+    // No chunks beneath.
+  }
+
+  await stream.result
+}
+
+// A subagent makes a request on the pinned model, then its turn dies on an API error.
+const fail = async ($: Raise, agentId = 'a1') => {
+  await step($, agentId)
+  await $.turn.complete({ turnId: 't', agentId, reason: 'error', answer: '', durationMs: 1, isAborted: false })
+}
+
+test('with no limit hit, a subagent request goes out on the pinned model', async ($, on) => {
+  const { steps, logs } = session(on, FALLBACK)
+
+  await step($, 'a1')
+
+  expect(steps).toEqual(['claude-fable-5-2 medium'])
+  expect(logs).toEqual([])
+})
+
+test('a limit error moves the next subagent request to the fallback model and effort, with one notice', async ($, on) => {
+  const { steps, logs } = session(on, FALLBACK)
+
+  await fail($)
+  await step($, 'a2')
+  await $.turn.complete({ turnId: 't', agentId: 'a1', reason: 'error', answer: '', durationMs: 1, isAborted: false })
+  await step($, 'a3')
+
+  expect(steps).toEqual(['claude-fable-5-2 medium', 'opus high', 'opus high'])
+  expect(logs).toEqual([`model-guard: fable is out of usage until ${new Date(NOW + 5 * HOUR).toISOString()}; subagents run on opus at high effort until then.`])
+})
+
+test('no fallback effort switches the model alone', async ($, on) => {
+  const { steps } = session(on, { MODEL_GUARD_SUBAGENT_MODEL: 'fable', MODEL_GUARD_FALLBACK_MODEL: 'opus' })
+
+  await fail($)
+  await step($, 'a2')
+
+  expect(steps.at(-1)).toBe('opus medium')
+})
+
+test('after the reset time, subagents are back on the pinned model, with one notice', async ($, on) => {
+  const { steps, logs, clock } = session(on, FALLBACK)
+
+  await fail($)
+  await clock.advance(5 * HOUR)
+  await step($, 'a2')
+  await step($, 'a2')
+
+  expect(steps.slice(1)).toEqual(['claude-fable-5-2 medium', 'claude-fable-5-2 medium'])
+  expect(logs.slice(1)).toEqual(['model-guard: subagents are back on fable.'])
+})
+
+test('a fork on the session model and the main loop are untouched while the pinned model is out', async ($, on) => {
+  const { steps } = session(on, FALLBACK)
+
+  await fail($)
+  await step($, 'fork1', 'claude-opus-5-5')
+  await step($, undefined, 'claude-opus-5-5')
+  await step($)
+
+  expect(steps.slice(1)).toEqual(['claude-opus-5-5 medium', 'claude-opus-5-5 medium', 'claude-fable-5-2 medium'])
+})
+
+test('no fallback model, no switch', async ($, on) => {
+  const { steps, logs } = session(on, { MODEL_GUARD_SUBAGENT_MODEL: 'fable' })
+
+  await fail($)
+  await step($, 'a2')
+
+  expect(steps.at(-1)).toBe('claude-fable-5-2 medium')
+  expect(logs).toEqual([])
+})
+
+test('an error that is no limit switches nothing', async ($, on) => {
+  const { steps, logs } = session(on, FALLBACK, 'API Error: 500 Internal server error')
+
+  await fail($)
+  await step($, 'a2')
+
+  expect(steps.at(-1)).toBe('claude-fable-5-2 medium')
+  expect(logs).toEqual([])
+})
+
+test('an error of an agent that never ran on the pinned model switches nothing', async ($, on) => {
+  const { steps } = session(on, FALLBACK)
+
+  await step($, 'fork1', 'claude-opus-5-5')
+  await $.turn.complete({ turnId: 't', agentId: 'fork1', reason: 'error', answer: '', durationMs: 1, isAborted: false })
+  await step($, 'a2')
+
+  expect(steps.at(-1)).toBe('claude-fable-5-2 medium')
+})
+
+test('the reset time is read from the error text', async ($, on) => {
+  const at = NOW + 2 * HOUR
+  const { logs } = session(on, FALLBACK, `Claude AI usage limit reached|${at / 1000}`)
+
+  await fail($)
+
+  expect(logs[0]).toContain(new Date(at).toISOString())
+})
+
+test('the reset time is read from a full window, the one named for the model first', async ($, on) => {
+  const { logs } = session(on, FALLBACK, 'API Error: 500 Internal server error', [
+    { kind: 'five_hour', percentUsed: 100, resetsAt: '2026-01-01T03:00:00.000Z' },
+    { kind: 'seven_day_fable', percentUsed: 100, resetsAt: '2026-01-04T00:00:00.000Z' },
+    { kind: 'seven_day', percentUsed: 40, resetsAt: '2026-01-06T00:00:00.000Z' },
+  ])
+
+  await fail($)
+
+  expect(logs[0]).toContain('until 2026-01-04T00:00:00.000Z;')
+})
+
+test('another error while only an account-wide window is full switches nothing', async ($, on) => {
+  const { steps, logs } = session(on, FALLBACK, 'API Error: 500 Internal server error', [
+    { kind: 'five_hour', percentUsed: 100, resetsAt: '2026-01-01T03:00:00.000Z' },
+  ])
+
+  await fail($)
+  await step($, 'a2')
+
+  expect(steps.at(-1)).toBe('claude-fable-5-2 medium')
+  expect(logs).toEqual([])
+})
+
+test('with no window named for the model, the latest full one gives the reset time', async ($, on) => {
+  const { logs } = session(on, FALLBACK, LIMIT_TEXT, [
+    { kind: 'five_hour', percentUsed: 100, resetsAt: '2026-01-01T03:00:00.000Z' },
+    { kind: 'seven_day', percentUsed: 100, resetsAt: '2026-01-06T00:00:00.000Z' },
+  ])
+
+  await fail($)
+
+  expect(logs[0]).toContain('until 2026-01-06T00:00:00.000Z;')
+})
+
+test('a reset time in the past is ignored for the five-hour default', async ($, on) => {
+  const { logs } = session(on, FALLBACK, 'Claude AI usage limit reached|1700000000')
+
+  await fail($)
+
+  expect(logs[0]).toContain(new Date(NOW + 5 * HOUR).toISOString())
+})
+
+// The CLI's message when a subagent ran out of Fable, as seen in a real run.
+const REAL =
+  "API Error: You've hit your Fable limit · resets 4pm (America/Chicago). Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue. (error type rate_limit, HTTP 429)"
+
+test('the real limit message flips to the fallback until its time of day in its zone', async ($, on) => {
+  const { steps, logs } = session(on, FALLBACK, REAL)
+
+  await fail($)
+  await step($, 'a2')
+
+  // NOW is 6pm the day before in Chicago (UTC-6 in January), so the next 4pm there is 22:00 UTC.
+  expect(logs).toEqual(['model-guard: fable is out of usage until 2026-01-01T22:00:00.000Z; subagents run on opus at high effort until then.'])
+  expect(steps.at(-1)).toBe('opus high')
+})
+
+test('side-by-side subagents that hit the limit, then come back, say each once', async ($, on) => {
+  const { logs, clock } = session(on, FALLBACK)
+
+  await Promise.all([step($, 'a1'), step($, 'a2')])
+  await Promise.all(['a1', 'a2'].map(agentId => $.turn.complete({ turnId: 't', agentId, reason: 'error', answer: '', durationMs: 1, isAborted: false })))
+  await clock.advance(5 * HOUR)
+  await Promise.all([step($, 'a3'), step($, 'a4')])
+
+  expect(logs.length).toBe(2)
+  expect(logs[1]).toBe('model-guard: subagents are back on fable.')
+})
+
+test('the limit wording matches loosely', () => {
+  for (const text of [REAL, 'Rate limit exceeded', 'usage limit reached', '429 Too Many Requests', 'You are out of extra usage']) {
+    expect(LIMIT.test(text)).toBe(true)
+  }
+
+  expect(LIMIT.test('API Error: 500 Internal server error')).toBe(false)
 })

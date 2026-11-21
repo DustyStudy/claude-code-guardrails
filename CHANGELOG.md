@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- model-guard 0.4.0: with `MODEL_GUARD_FALLBACK_MODEL` set (and optionally
+  `MODEL_GUARD_FALLBACK_EFFORT`), a subagent whose run on the pinned model
+  ends on a usage or rate-limit error flags that model out until its reset,
+  read from the error (`resets 4pm (America/Chicago)`, an epoch or an ISO
+  time), else the account's full rate-limit window, else five hours. Until
+  then each subagent request on the pinned model goes to the fallback model
+  and effort, then moves back on its own; one notice marks each switch.
+  Forks and the main loop are untouched; unset, nothing changes.
 - merged-branch-guard 0.1.0 (new): denies `git push` that continues a
   branch whose pull request is already merged, has no open one, and is gone
   from the remote. Such a push recreates the branch GitHub deleted on merge
