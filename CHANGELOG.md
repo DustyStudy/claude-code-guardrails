@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- tf-lint 0.6.0: flags non-human-identity risks. In Terraform: a static
+  `aws_iam_access_key` or an `aws_iam_user_login_profile` (also in
+  `.tf.json`); a GitHub OIDC trust policy (`jsonencode`, heredoc JSON or
+  `aws_iam_policy_document`) with no `:sub` condition, a `sub` of `*`,
+  `repo:*` or `repo:<org>/*`, or no `:aud` condition; a `*` principal with
+  no condition; and a variable or output named for a secret, password,
+  token, private key or access key that is not `sensitive = true`, or such
+  a variable with a literal default. In `.github/workflows/*.yml` it flags
+  `aws-access-key-id`, `aws-secret-access-key`, and `AWS_ACCESS_KEY_ID` or
+  `AWS_SECRET_ACCESS_KEY` set from `secrets.`, pointing to `role-to-assume`
+  with `id-token: write`. The secret deny now also covers shell commands
+  that write a file and the arguments of MCP tool calls.
 - cleanup-check 0.4.0: no longer counts or prunes old plugin versions in
   `~/.claude/plugins/cache`, and `CLEANUP_CHECK_PRUNE_CACHE` is gone.
   Claude Code now deletes an old version itself 14 days after an update

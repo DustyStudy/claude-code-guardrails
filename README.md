@@ -44,7 +44,7 @@ much of your Claude and Codex plans is left.
 | [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
 | [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out: `.env` files, AWS, SSH, cloud CLI, npm, Docker, kube, GitHub CLI, Codex and Claude credentials, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`) and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws configure export-credentials`, `gh auth token`, `git credential fill`, `terraform state pull`). `.env.example`, `*.pub`, existence checks and programs that use a file without printing it (`terraform -var-file`, `ssh -i`) still run. |
-| [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits that write an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, or sets a GovCloud provider without FIPS endpoints. |
+| [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits, file-writing shell commands (`>`, `tee`, heredoc, `Set-Content`) and MCP tool calls (mail, artifacts) that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, sets a GovCloud provider without FIPS endpoints, creates a static `aws_iam_access_key` or an `aws_iam_user_login_profile`, trusts GitHub OIDC without a pinned repo `sub` and an `aud` condition, grants a `*` principal without a condition, or leaves a secret-named variable or output unmarked `sensitive` (or gives such a variable a literal default). Flags GitHub Actions workflows that pass static AWS keys instead of `role-to-assume`. |
 | [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name (moving to a fallback model and effort while it is out of usage), denies a `claude` run from the shell that names another, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls, and direct calls to its API, that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
@@ -343,7 +343,17 @@ when it would be worth lifting.
   and bun; poetry, conda and a script that installs are not checked.
 - **tf-lint** reads only the text being written, block by block. A rule split
   across edits or built from variables is missed; run Checkov on the whole
-  file for that.
+  file for that. An edit that changes only a trust policy's `sub` values,
+  out of sight of its `token.actions.githubusercontent.com` principal, is
+  not checked, and the wildcard-principal check looks for any condition in
+  the text, not one per statement. In `.tf.json` it finds the
+  `aws_iam_access_key` and `aws_iam_user_login_profile` resources, but the
+  KMS, provider, port, variable and trust checks read HCL syntax only. It
+  reads workflows only under `.github/workflows/`, so a composite action
+  kept elsewhere is not checked; a static key there is flagged even next to
+  `role-to-assume`, since that chains from a static key. Variables and
+  outputs are judged by name: `api_token_url` is flagged, a secret held in
+  `db_creds` is not.
 - **secret-read-guard** keeps a secret from being read by accident; it does
   not hold against an agent set on reading one. It finds a path as written
   (whole, with `~` or a home variable, or as a `*` wildcard), so a path
@@ -364,7 +374,11 @@ when it would be worth lifting.
 - **tf-lint**'s secret deny matches key formats with a fixed shape. It
   leaves out JWTs, bearer values, `password=` and `user:pass@host`, which
   in source files are mostly fixtures and local defaults; run gitleaks or
-  trufflehog in CI for those.
+  trufflehog in CI for those. In a shell command it checks only one that
+  writes a file (`>`, `>>`, `tee`, a heredoc, `Set-Content`, `Add-Content`,
+  `Out-File`); a key built from pieces, or written by a script the command
+  runs, passes. Every other MCP tool call is checked whole, so one that
+  looks up a real key by its value is denied too.
 - **commit-identity-guard** reads a message file given with `-F`, `--file` or
   `--body-file`, but not a message piped in with `-F -`. It identifies a repo
   by its `origin` remote.

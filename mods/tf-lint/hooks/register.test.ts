@@ -35,6 +35,20 @@ resource "aws_security_group" "web" {
 locals {
   role = "arn:\${data.aws_partition.current.partition}:iam::\${var.account_id}:role/x"
 }`
+// A GitHub OIDC role trust in each of its three forms: a jsonencode map, heredoc JSON, and aws_iam_policy_document blocks.
+const GH = 'token.actions.githubusercontent.com'
+const AUD = `        StringEquals = { "${GH}:aud" = "sts.amazonaws.com" }`
+const SUB = (value: string) => `        StringLike = { "${GH}:sub" = ${value} }`
+const ROLE = (conditions: string) =>
+  `resource "aws_iam_role" "deploy" {\n  assume_role_policy = jsonencode({\n    Statement = [{\n      Action    = "sts:AssumeRoleWithWebIdentity"\n      Principal = { Federated = aws_iam_openid_connect_provider.github.arn }\n      Condition = {\n${conditions}\n      }\n    }]\n  })\n}`
+const HEREDOC = (sub: string) =>
+  `resource "aws_iam_role" "ci" {\n  assume_role_policy = <<EOF\n{\n  "Statement": [{\n    "Effect": "Allow",\n    "Principal": { "Federated": "arn:\${data.aws_partition.current.partition}:iam::1:oidc-provider/${GH}" },\n    "Action": "sts:AssumeRoleWithWebIdentity",\n    "Condition": {\n      "StringEquals": { "${GH}:aud": "sts.amazonaws.com" },\n      "StringLike": { "${GH}:sub": [${sub}] }\n    }\n  }]\n}\nEOF\n}`
+const DOCUMENT = (sub: string) =>
+  `data "aws_iam_policy_document" "trust" {\n  statement {\n    actions = ["sts:AssumeRoleWithWebIdentity"]\n    principals {\n      type        = "Federated"\n      identifiers = [aws_iam_openid_connect_provider.github.arn]\n    }\n    condition {\n      test     = "StringEquals"\n      variable = "${GH}:aud"\n      values   = ["sts.amazonaws.com"]\n    }\n    condition {\n      values   = [${sub}]\n      test     = "StringLike"\n      variable = "${GH}:sub"\n    }\n  }\n}`
+const STATIC_KEYS =
+  'jobs:\n  deploy:\n    steps:\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}\n          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}\n          aws-region: us-gov-west-1'
+const OIDC_WORKFLOW =
+  'permissions:\n  id-token: write\n  contents: read\njobs:\n  deploy:\n    steps:\n      # aws-access-key-id: ${{ secrets.OLD_KEY }}\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws-us-gov:iam::1:role/deploy\n          aws-region: us-gov-west-1'
 
 // What the model reads after the write, or undefined when the write was denied.
 const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefined])[] = [
@@ -110,6 +124,47 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a wildcard ARN path before a cron step', 'iam.tf', 'locals {\n  path = "bucket/*"\n  from_port = 22\n  to_port = 22\n  cidr = "0.0.0.0/0"\n  cron = "cron(0 */2 * * ? *)"\n}', /port 22 /],
   ['an ARN in an OpenTofu file', 'main.tofu', 'role = "arn:aws:iam::1:role/x"', /partition/],
   ['an ARN in an isolated partition', 'main.tf', 'role = "arn:aws-iso-b:iam::1:role/x"', /partition/],
+  // Static IAM credentials.
+  ['an IAM access key', 'iam.tf', 'resource "aws_iam_access_key" "ci" {\n  user = aws_iam_user.ci.name\n}', /static IAM access key/],
+  ['an IAM access key with unquoted labels', 'iam.tf', 'resource aws_iam_access_key ci {\n  user = "ci"\n}', /static IAM access key/],
+  ['an IAM access key in .tf.json', 'iam.tf.json', '{ "resource": { "aws_iam_access_key": { "ci": { "user": "ci" } } } }', /static IAM access key/],
+  ['an IAM console password', 'iam.tf', 'resource "aws_iam_user_login_profile" "me" {\n  user = aws_iam_user.me.name\n}', /console password/],
+  ['an IAM user without keys', 'iam.tf', 'resource "aws_iam_user" "ci" {\n  name = "ci"\n}', null],
+  // GitHub OIDC trust.
+  ['a GitHub OIDC trust pinned to a branch', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/infra:ref:refs/heads/main"')}`), null],
+  ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(repo:acme\/\*\)/],
+  ['a GitHub OIDC trust listing repo:*', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:acme/infra:*", "repo:*"]')}`), /wildcard repository \(repo:\*\)/],
+  ['a GitHub OIDC trust for a bare *', 'role.tf', ROLE(`${AUD}\n${SUB('"*"')}`), /wildcard repository \(\*\)/],
+  ['a GitHub OIDC trust without sub', 'role.tf', ROLE(AUD), /without a :sub condition/],
+  ['a GitHub OIDC trust without aud', 'role.tf', ROLE(SUB('"repo:acme/infra:*"')), /without a :aud condition/],
+  ['a GitHub OIDC trust with an interpolated repo', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:${var.org}/${var.repo}:*"')}`), null],
+  ['a GitHub OIDC trust with an interpolated org and a wildcard repo', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:${var.org}/*"')}`), /wildcard repository/],
+  ['a GitHub OIDC trust in heredoc JSON', 'role.tf', HEREDOC('"repo:acme/infra:environment:prod"'), null],
+  ['a wildcard GitHub OIDC trust in heredoc JSON', 'role.tf', HEREDOC('"repo:acme/*"'), /wildcard repository/],
+  ['a GitHub OIDC trust in a policy document', 'role.tf', DOCUMENT('"repo:acme/infra:ref:refs/heads/main"'), null],
+  ['a wildcard GitHub OIDC trust in a policy document', 'role.tf', DOCUMENT('"repo:acme/*"'), /wildcard repository/],
+  ['the GitHub OIDC provider', 'oidc.tf', `resource "aws_iam_openid_connect_provider" "github" {\n  url            = "https://${GH}"\n  client_id_list = ["sts.amazonaws.com"]\n}`, null],
+  // Wildcard principals.
+  ['a bucket policy open to everyone', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect    = "Allow"\n    Principal = "*"\n    Action    = "s3:GetObject"\n    Resource  = "*"\n  }]\n})', /Principal "\*" with no condition/],
+  ['an AWS "*" principal list in JSON', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Principal": { "AWS": ["*"] }, "Action": "sqs:SendMessage" }] }\nEOF', /Principal "\*"/],
+  ['a policy document open to everyone', 'bucket.tf', 'data "aws_iam_policy_document" "p" {\n  statement {\n    actions = ["s3:GetObject"]\n    principals {\n      type        = "AWS"\n      identifiers = ["*"]\n    }\n  }\n}', /Principal "\*"/],
+  ['a TLS-only deny to everyone', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect    = "Deny"\n    Principal = "*"\n    Action    = "s3:*"\n    Resource  = "*"\n    Condition = { Bool = { "aws:SecureTransport" = "false" } }\n  }]\n})', null],
+  ['a wildcard resource and action, no principal', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": "s3:ListAllMyBuckets", "Resource": "*" }] }\nEOF\ndata "aws_iam_policy_document" "d" {\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}', null],
+  // Secret variables and outputs.
+  ['a password variable without sensitive', 'variables.tf', 'variable "db_password" {\n  type = string\n}', /variable "db_password" without sensitive = true/],
+  ['a sensitive password variable', 'variables.tf', 'variable "db_password" {\n  type      = string\n  sensitive = true\n  default   = ""\n}', null],
+  ['a token variable with a literal default', 'variables.tf', 'variable "api_token" {\n  sensitive = true\n  default   = "hunter2"\n}', /variable "api_token" a literal default/],
+  ['a secret variable defaulting to null', 'variables.tf', 'variable "client_secret" {\n  sensitive = true\n  default   = null\n}', null],
+  ['a secret ARN variable', 'variables.tf', 'variable "secret_arn" {\n  type = string\n}', null],
+  ['a password length variable', 'variables.tf', 'variable "password_length" {\n  default = 16\n}', null],
+  ['a token output without sensitive', 'outputs.tf', 'output "token" {\n  value = aws_x.y.token\n}', /output "token" without sensitive = true/],
+  ['a sensitive token output', 'outputs.tf', 'output "token" {\n  value     = aws_x.y.token\n  sensitive = true\n}', null],
+  // GitHub Actions workflows.
+  ['a workflow with static AWS keys', '.github/workflows/deploy.yml', STATIC_KEYS, /role-to-assume and permissions: id-token: write/],
+  ['a workflow with keys in env, on a Windows path', 'C:\\repo\\.github\\workflows\\ci.yaml', 'env:\n  AWS_ACCESS_KEY_ID:   ${{ secrets.KEY }}\n  AWS_SECRET_ACCESS_KEY: ${{secrets.SECRET}}', /static AWS key/],
+  ['a workflow chaining a role from a static key', '.github/workflows/deploy.yml', `${STATIC_KEYS}\n          role-to-assume: arn:aws:iam::1:role/x`, /static AWS key/],
+  ['a workflow using OIDC', '.github/workflows/deploy.yml', OIDC_WORKFLOW, null],
+  ['key inputs outside a workflow', 'docs/config.yml', 'aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}', null],
 ]
 
 test('a notebook cell with a token is denied', async ($, on) => {
@@ -124,6 +179,44 @@ test('a notebook cell with a token is denied', async ($, on) => {
   expect(hasRun).toBe(false)
   expect(ran.deny).toMatch(/private key or API token into a\.ipynb/)
 })
+
+const KEY = `${'AKIA'}${'ABCDEFGHIJKLMNOP'}`
+const TOKEN = `${'ghp'}_${'c'.repeat(36)}`
+// What the deny says, or null when the call runs.
+const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: string }, RegExp | null])[] = [
+  ['Bash echoing a key into a file', { tool: 'Bash', command: `echo ${KEY} > creds.txt` }, /command would write an AWS access key into a file/],
+  ['Bash writing a key with a heredoc', { tool: 'Bash', command: `cat <<EOF\naws_access_key_id = ${KEY}\nEOF` }, /AWS access key into a file/],
+  ['Bash piping a token to tee', { tool: 'Bash', command: `echo ${TOKEN} | tee -a ~/.npmrc` }, /private key or API token into a file/],
+  ['PowerShell Set-Content with a key', { tool: 'PowerShell', command: `Set-Content -Path creds.txt -Value '${KEY}'` }, /AWS access key into a file/],
+  ['the terminal appending a token', { tool: 'mcp__terminal__run_in_terminal', command: `echo ${TOKEN} >> .env` }, /command would write a private key/],
+  ["Bash writing AWS's sample key", { tool: 'Bash', command: 'echo AKIAIOSFODNN7EXAMPLE > notes.txt' }, null],
+  ['Bash with stderr folded into a pipe', { tool: 'Bash', command: 'npm test 2>&1 | tail -5' }, null],
+  ['Bash redirecting a log', { tool: 'Bash', command: 'git log > log.txt' }, null],
+  ['Bash reading a key without writing a file', { tool: 'Bash', command: `grep -c ${KEY} access.log` }, null],
+  ['an MCP send with a token in its body', { tool: 'mcp__gmail__send', to: 'x', body: `here it is: ${TOKEN}` }, /send a private key or API token to mcp__gmail__send/],
+  ['an MCP send with ordinary text', { tool: 'mcp__gmail__send', to: 'x', body: 'lunch at noon -> room 4' }, null],
+  ['an MCP call with a secret key in a nested string', { tool: 'mcp__notes__create', note: { text: `secret_${'key'} = "${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl"` } }, /send an AWS access key to mcp__notes__create/],
+]
+
+for (const [name, call, expected] of CALLS) {
+  test(`${call.tool}: ${name}`, async ($, on) => {
+    let hasRun = false
+
+    on('tool.call', () => {
+      hasRun = true
+
+      return { result: {} as never }
+    })
+
+    const ran = await $.tool.call(call as never)
+
+    expect(hasRun).toBe(expected === null)
+
+    if (expected !== null) {
+      expect(ran.deny).toMatch(expected)
+    }
+  })
+}
 
 for (const tool of ['Write', 'Edit'] as const) {
   for (const [name, file_path, text, expected] of FLAGS) {
