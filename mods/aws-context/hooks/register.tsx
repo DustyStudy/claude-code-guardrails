@@ -16,8 +16,12 @@ const isHighlighted = (profile: string, list: string | undefined) =>
     .map(one => one.trim().toLowerCase())
     .some(one => one !== '' && profile.toLowerCase().includes(one))
 
+// With no region the partition is unknown: say so rather than name the commercial one.
 const partitionOf = (region: string) =>
-  region.startsWith('us-gov-') ? 'aws-us-gov' : region.startsWith('cn-') ? 'aws-cn' : 'aws'
+  region === '' ? 'partition unknown' : region.startsWith('us-gov-') ? 'aws-us-gov' : region.startsWith('cn-') ? 'aws-cn' : 'aws'
+
+// A profile named for GovCloud is sensitive before its region is known: gov, govcloud, gov.admin, not government.
+const GOV_NAME = /gov(cloud)?(?![a-z])/i
 
 /** The `region` of a profile's section in an AWS config file's text, or '' when it sets none. */
 export const regionIn = (config: string, profile: string) => {
@@ -89,15 +93,16 @@ export const register: Register = on => {
       last.region ||
       (await $.env.get('AWS_REGION')) ||
       (await $.env.get('AWS_DEFAULT_REGION')) ||
-      // Last, what a known profile's own section in the config file sets.
-      (profile === '' ? '' : await configRegion($, profile))
+      // Last, what the profile's own section in the config file sets; with no profile, the CLI uses [default].
+      (await configRegion($, profile || 'default'))
 
     if (profile === '' && region === '') {
       return next(e)
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const isSensitive = region.startsWith('us-gov-') || isHighlighted(profile, await $.env.get('AWS_CONTEXT_HIGHLIGHT'))
+    const isSensitive =
+      region.startsWith('us-gov-') || GOV_NAME.test(profile) || isHighlighted(profile, await $.env.get('AWS_CONTEXT_HIGHLIGHT'))
 
     return (
       <Box flexDirection="column">
