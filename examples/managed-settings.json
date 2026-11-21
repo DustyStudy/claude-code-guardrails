@@ -23,13 +23,15 @@
     "terraform-guard@claude-code-guardrails": true,
     "aws-guard@claude-code-guardrails": true,
     "tf-lint@claude-code-guardrails": true,
-    "secret-allow-guard@claude-code-guardrails": true
+    "secret-allow-guard@claude-code-guardrails": true,
+    "secret-read-guard@claude-code-guardrails": true
   },
   "prependPlugins": [
     "terraform-guard@claude-code-guardrails",
     "aws-guard@claude-code-guardrails",
     "tf-lint@claude-code-guardrails",
     "secret-allow-guard@claude-code-guardrails",
+    "secret-read-guard@claude-code-guardrails",
     "sec-default@builtin"
   ],
 
@@ -47,6 +49,31 @@
       "Read(//**/*.tfvars)",
       "Read(//**/*.tfvars.json)",
       "Read(//**/*.pem)",
+      "Read(~/.kube/**)",
+      "Read(~/.docker/config.json)",
+      "Read(~/.azure/**)",
+      "Read(~/.identityservice/**)",
+      "Read(~/.config/gcloud/**)",
+      "Read(~/AppData/Roaming/gcloud/**)",
+      "Read(~/.git-credentials)",
+      "Read(~/.config/git/credentials)",
+      "Read(~/.netrc)",
+      "Read(~/_netrc)",
+      "Read(~/.npmrc)",
+      "Read(~/.pypirc)",
+      "Read(~/.pgpass)",
+      "Read(~/.vault-token)",
+      "Read(~/.terraformrc)",
+      "Read(~/AppData/Roaming/terraform.rc)",
+      "Read(~/.terraform.d/credentials.tfrc.json)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.codex/auth.json)",
+      "Read(//**/*.key)",
+      "Read(//**/*.p12)",
+      "Read(//**/*.pfx)",
+      "Read(//**/*.ppk)",
+      "Read(//**/*.jks)",
+      "Read(//**/*.keystore)",
       "mcp__terminal__run_in_terminal",
       "Bash(git push --force)",
       "Bash(git push --force *)",
@@ -79,6 +106,12 @@
     ]
   },
 
+  "allowManagedMcpServersOnly": true,
+  "allowedMcpServers": [],
+
+  "forceLoginMethod": "claudeai",
+  "forceLoginOrgUUID": "REPLACE-WITH-YOUR-ORG-UUID",
+
   "sandbox": {
     "enabled": true,
     "allowUnsandboxedCommands": false,
@@ -92,6 +125,20 @@
         "registry.terraform.io",
         "releases.hashicorp.com",
         "*.amazonaws.com"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        { "name": "AWS_SECRET_ACCESS_KEY", "mode": "deny" },
+        { "name": "AWS_SESSION_TOKEN", "mode": "deny" },
+        { "name": "GITHUB_TOKEN", "mode": "deny" },
+        { "name": "GH_TOKEN", "mode": "deny" },
+        { "name": "NPM_TOKEN", "mode": "deny" },
+        { "name": "ANTHROPIC_API_KEY", "mode": "deny" },
+        { "name": "OPENAI_API_KEY", "mode": "deny" },
+        { "name": "VAULT_TOKEN", "mode": "deny" },
+        { "name": "AZURE_CLIENT_SECRET", "mode": "deny" },
+        { "name": "GOOGLE_APPLICATION_CREDENTIALS", "mode": "deny" }
       ]
     }
   },

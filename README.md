@@ -140,10 +140,10 @@ The snippet above only switches the mods on. The mods catch an agent's
 mistakes; the controls a security team needs are Claude Code's own settings,
 and each is off until you set it.
 [`examples/managed-settings.json`](examples/managed-settings.json) sets them
-together. Replace `YOUR-GITHUB-ORG`, the commit SHA and the collector URL,
-then deploy it as the managed settings file at one of the three paths above.
-That folder, and every folder above it, must be writable only by
-administrators: anyone who can write there can rewrite the policy. Each
+together. Replace `YOUR-GITHUB-ORG`, the commit SHA, the organization UUID
+and the collector URL, then deploy it as the managed settings file at one
+of the three paths above. That folder, and every folder above it, must be
+writable only by administrators: anyone who can write there can rewrite the policy. Each
 block, in file order:
 
 - **`requiredMinimumVersion`** refuses to start a Claude Code older than
@@ -159,8 +159,7 @@ block, in file order:
   controls, or at `DustyStudy/claude-code-guardrails`.
 - **`enabledPlugins`, `prependPlugins`** lock on the mods that deny or flag
   a mistake whoever is at the keyboard: terraform-guard, aws-guard,
-  tf-lint and secret-allow-guard. Add
-  secret-read-guard to both lists once a release ships it. `prependPlugins`
+  tf-lint, secret-allow-guard and secret-read-guard. `prependPlugins`
   is what makes each one count as the organization's mod, and it must keep
   `sec-default@builtin`, Claude Code's own guard, in the list.
 - **Left to each engineer**: jev-guard and model-guard enforce one person's
@@ -179,12 +178,20 @@ block, in file order:
   again", so put the allow rules your teams need in this file.
 - **`permissions.deny`** blocks Claude's file tools, and the `cat`, `head`
   and redirections Claude Code recognizes in Bash, from `.env` files,
-  `~/.aws/credentials`, `~/.ssh`, Terraform state, `*.tfvars` and `*.pem`. A
+  `~/.aws/credentials`, `~/.ssh`, Terraform state, `*.tfvars` and `*.pem`.
+  It also covers the Azure and Google Cloud CLI token caches, the kube,
+  docker, git, npm, PyPI, Vault and Terraform credential files, Claude's and
+  Codex's own sign-ins, and private-key formats (`*.key`, `*.p12`, `*.pfx`,
+  `*.ppk`, `*.jks`, `*.keystore`), with the Windows `AppData` paths for
+  gcloud and Terraform. The AWS SSO and CLI caches and gh's sign-in are left
+  readable so Claude can run `aws` and `gh` from the sandbox on short-lived
+  credentials; secret-read-guard keeps their contents out of the
+  conversation. A
   Read deny also blocks Edit and Write (not NotebookEdit), so Claude cannot
   write a `.tfvars` or `.env.example` either; drop a rule you cannot live
   with. A script that
   opens the file itself is not stopped except by the sandbox, and on Linux
-  the sandbox enforces only the two home-directory rules, not the `**`
+  the sandbox enforces only the home-directory rules, not the `**`
   ones. `mcp__terminal__run_in_terminal` is the desktop app's tool that runs
   a command outside Bash, where no shell guard sees it; add a rule for every
   MCP tool of yours that runs commands (`mcp__<server>__<tool>`), or allow
@@ -198,6 +205,15 @@ block, in file order:
   would also block Claude's memory and plan writes, so the list names
   `settings`, `CLAUDE.md`, `agents`, `skills`, `commands` and `plugins`
   instead. A combined flag such as `-fu` and a `+branch` refspec still pass.
+- **`allowManagedMcpServersOnly`, `allowedMcpServers`** load only the MCP
+  servers this file lists. An MCP server holds a token for the service it
+  reaches, so list each server after you review it, by `serverName`,
+  `serverUrl` or `serverCommand`. The list is empty, so no MCP server loads
+  until you add one.
+- **`forceLoginMethod`, `forceLoginOrgUUID`** require a claude.ai sign-in to
+  your organization, so every session runs under its terms and its admin
+  controls. Replace the UUID with your organization's. A fleet that uses
+  Bedrock, Vertex or an API key instead drops both keys.
 - **`sandbox`** runs Bash commands in the OS sandbox with no unsandboxed
   retry, and lets them reach only the listed hosts, which keeps a prompt injection from sending data out. `allowManagedReadPathsOnly`
   stops an engineer re-opening a path the deny rules close. Trim the list: a broad host
@@ -209,6 +225,16 @@ block, in file order:
   `WebFetch(domain:*)`, which also empties the sandbox allowlist). On a
   macOS and Linux fleet add `"failIfUnavailable": true`, which is left out
   because it stops Claude Code starting on Windows.
+  `credentials.envVars` removes static keys and token variables from
+  sandboxed commands' environment, so a script that reads one itself, which
+  no command-line guard sees, gets nothing; `aws` then signs in through an
+  SSO profile, not keys in the environment. The home-folder `Read` denies
+  above already reach the sandbox, so `credentials.files` is not repeated.
+  kubectl, docker and az cannot sign in from a sandboxed command; drop the
+  rules your teams need. This applies to sandboxed Bash only, not native
+  Windows. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`
+  is not set: it also forces the default permission mode, and is meant for
+  CI.
 - **`env`, telemetry** sends OpenTelemetry metrics and events to your
   collector, and managed settings pin the destination. `OTEL_LOG_TOOL_DETAILS`
   adds each tool call's input to tool events, so treat the collector as
@@ -232,9 +258,9 @@ block, in file order:
   that send a conversation with code to Anthropic. No setting governs
   training: under Team, Enterprise and API terms Anthropic does not train on
   Claude Code prompts or code unless the organization opts in. That holds
-  only for sessions signed in under the organization, which this file does
-  not force; `forceLoginOrgUUID` with `forceLoginMethod` does, and a
-  personal Pro or Max sign-in is under consumer terms.
+  only for sessions signed in under the organization, which
+  `forceLoginOrgUUID` with `forceLoginMethod` above forces; a personal Pro
+  or Max sign-in is under consumer terms.
 
 Check the result on one machine with `/status` and `claude doctor`, and
 with `claude --debug`, where each locked mod's `hooks module` line should
