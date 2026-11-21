@@ -43,7 +43,7 @@ const SECRET_FILE = new RegExp(
     String.raw`(^|/)[^/]*\.env(rc|[._-][^/]*)?$`,
     // Every variable of a process, as a file.
     String.raw`^/proc/[^/]+/environ$`,
-    String.raw`/\.aws/(credentials|(sso|cli)/cache/[^/]+)$`,
+    String.raw`/\.aws/(credentials|(sso|cli|login)/cache/[^/]+)$`,
     // A private key in ~/.ssh can have any name; the files beside it that hold none are known.
     String.raw`(^|/)(\.ssh/(?!(config|known_hosts[^/]*|authorized_keys)$)[^/]+|id_(rsa|dsa|ecdsa|ed25519)[^/]*)$`,
     String.raw`\.(pem|key|p12|pfx|ppk|jks|keystore)$`,
@@ -51,18 +51,27 @@ const SECRET_FILE = new RegExp(
     String.raw`\.tfvars(\.json)?$`,
     String.raw`(^|/)(\.npmrc|\.netrc|_netrc|\.pypirc|\.pgpass|\.git-credentials|\.terraformrc|terraform\.rc|credentials\.tfrc\.json|\.vault-token)$`,
     String.raw`/\.docker/config\.json$`,
-    String.raw`/\.kube/config$`,
+    // kubeconfigs under any name, and the exec plugins' token caches.
+    String.raw`/\.kube/.`,
     String.raw`/(gh|github cli)/hosts\.yml$`,
-    String.raw`/\.azure/(msal_token_cache[^/]*|accesstokens\.json|service_principal_entries[^/]*)$`,
+    String.raw`/\.config/git/credentials$`,
+    String.raw`/\.azure/(msal_token_cache[^/]*|accesstokens\.json|service_principal_entries[^/]*|azurermcontext\.json|tokencache\.dat)$`,
+    String.raw`/\.identityservice/msal\.cache[^/]*$`,
     String.raw`/gcloud/(credentials\.db|access_tokens\.db|application_default_credentials\.json|legacy_credentials/.*)$`,
+    // Service-account keys: by name, or as the console names them (project-0123456789ab.json).
+    String.raw`(^|/)([^/]*service[-_]?account|([^/]*[-_.])?sa[-_]key)[^/]*\.json$`,
+    String.raw`-[0-9a-f]{12}\.json$`,
     String.raw`/\.codex/auth\.json$`,
     String.raw`/\.claude/\.credentials\.json$`,
+    // MCP servers' tokens and the account's own; a project's .mcp.json is left readable, as projects commit it.
+    String.raw`(^|/)\.claude\.json(\.backup[^/]*)?$`,
   ].join('|'),
 )
 // A public key, and the committed stand-ins that hold names but no values.
 const NOT_SECRET = /\.(pub|example|sample|template)$/
 // Folders that hold little else: a search or copy of the whole folder reads the credential.
-const SECRET_DIR = /\/(\.ssh|\.aws|\.aws\/sso|\.aws\/(sso|cli)\/cache|\.azure|\.kube|\.docker|\.config|\.config\/gcloud|\.config\/gh|appdata\/roaming|appdata\/roaming\/(gcloud|github cli))$/
+const SECRET_DIR =
+  /\/(\.ssh|\.aws|\.aws\/(sso|login)|\.aws\/(sso|cli|login)\/cache|\.azure|\.identityservice|\.kube|\.docker|\.config|\.config\/(gcloud|gh|git)|appdata\/roaming|appdata\/roaming\/(gcloud|github cli))$/
 
 // What a wildcard is tried against: the credential files of a home folder, and the ones a project folder usually holds.
 const HOME_FILES = [
@@ -79,6 +88,8 @@ const HOME_FILES = [
   '.config/gh/hosts.yml',
   '.codex/auth.json',
   '.claude/.credentials.json',
+  '.claude.json',
+  '.config/git/credentials',
 ]
 const PROJECT_FILES = ['.env', '.env.local', '.envrc', '.npmrc', 'terraform.tfstate', 'terraform.tfvars', 'id_rsa']
 
@@ -172,7 +183,40 @@ const isNamesOnly = (args: readonly string[]) =>
     NAMES_PATTERN.test(args.find(arg => !arg.startsWith('-')) ?? ''))
 
 // A copy, move or link out of a credential file leaves the content where a later read finds it.
-const COPIER = bin('cp|copy|Copy-Item|cpi|mv|move|Move-Item|mi|ren|Rename-Item|rni|ln|install|rsync|scp|xcopy')
+const COPIER = bin('cp|copy|Copy-Item|cpi|mv|move|Move-Item|mi|ren|Rename-Item|rni|ln|install|rsync|scp|xcopy|Compress-Archive')
+// The copiers whose words come in another order, each put in cp's: sources first, the target last.
+// robocopy src dst [files] /switches copies src\file to dst.
+const robocopied = (args: readonly string[]) => {
+  const [from = '', to = '', ...files] = args.filter(arg => !/^\/[a-z]+(:\S*)?$/i.test(arg))
+
+  return [...(files.length > 0 ? files.map(file => `${from}/${file}`) : [from]), to]
+}
+// mklink [/d|/h|/j] link target names the link first.
+const mklinked = (args: readonly string[]) => args.filter(arg => !/^\/[a-z]$/i.test(arg)).reverse()
+const optionOf = (args: readonly string[], flag: RegExp) => {
+  const at = args.findIndex(arg => flag.test(arg))
+
+  return at < 0 ? undefined : args[at + 1]
+}
+// New-Item -ItemType SymbolicLink -Path link -Target file, or -Value:file.
+const linked = (args: readonly string[]) => {
+  const target = optionOf(args, /^-(target|value)$/i) ?? args.find(arg => /^-(target|value):/i.test(arg))?.replace(/^-\w+:/, '')
+
+  return target !== undefined && args.some(arg => /^(-itemtype:)?(symboliclink|hardlink|junction)$/i.test(arg)) ? [target, optionOf(args, /^-(path|name)$/i) ?? ''] : []
+}
+// tar -czf out.tgz src (or tar czf, or --create --file=out.tgz): a create; - or no file is stdout.
+const tarred = (args: readonly string[]) => {
+  const isFlags = (arg: string, i: number) => arg.startsWith('-') || i === 0
+
+  if (!args.some((arg, i) => isFlags(arg, i) && /^(-?[A-Za-z]*c[A-Za-z]*|--create)$/.test(arg))) {
+    return []
+  }
+
+  const at = args.findIndex((arg, i) => isFlags(arg, i) && /^(-?[A-Za-z]*f|--file)$/.test(arg))
+  const file = args.find(arg => arg.startsWith('--file='))?.slice(7) ?? (at < 0 ? '-' : (args[at + 1] ?? '-'))
+
+  return [...args.filter((arg, i) => !isFlags(arg, i) && (at < 0 || i !== at + 1)), file]
+}
 const copiedOut = (args: readonly string[], world: World) => {
   const flag = args.findIndex(arg => /^(-dest\w*|-t|--target-directory)$/i.test(arg))
   const words = args.filter((arg, i) => !/^-[\w-]+$/.test(arg) && (flag < 0 || i !== flag + 1))
@@ -246,6 +290,101 @@ const ENV_CODE: readonly (readonly [RegExp, RegExp])[] = [
 // shortcut: "names only" is read from the next stage's first words (cut -f1, wc, select Name), not proven; a longer pipeline
 // that puts values back is not followed.
 const NAMES_ONLY = /^(cut (?=.*-d ?=).*-f ?1( |$)|wc( |$)|(select|select-object|%|foreach-object) (-\w+ )*(name|key)$|measure)/i
+// Runners the statement parser leaves at the front: aws-vault exec p -- env, op run -- env, timeout 5 env, xargs env.
+const RUNNER = /^(aws-vault|op|doppler|timeout|xargs)$/
+const unwrapped = (words: readonly string[]): readonly string[] => {
+  if (!RUNNER.test(nameOf(words[0]))) {
+    return words
+  }
+
+  const dashes = words.indexOf('--')
+  const at = dashes > 0 ? dashes + 1 : words.findIndex(word => /^(env|printenv|export|declare|typeset|set)$/.test(nameOf(word)))
+  const rest = at > 0 ? words.slice(at) : []
+
+  return at > 0 ? unwrapped(rest.slice(Math.max(0, rest.findIndex(word => !SKIPPED.test(word))))) : words
+}
+
+// One variable named for a credential: echo $GITHUB_TOKEN, $env:AWS_SECRET_ACCESS_KEY, printenv NPM_TOKEN.
+// One used as another program's argument (curl -H "Authorization: Bearer $GITHUB_TOKEN") runs.
+const SECRET_NAME = String.raw`(?:\w*(?:secret|token|password|passwd|api_?key|access_key)\w*|\w*_key)(?!\w)`
+// The statement parser blanks a brace inside quotes: "${NPM_TOKEN}" reaches it as "$ NPM_TOKEN ".
+const SECRET_VAR = new RegExp(String.raw`\$[{\s]?(?:env:)?${SECRET_NAME}|%${SECRET_NAME}%`, 'i')
+const SECRET_ONLY = new RegExp(`^(env:[\\\\/]?)?${SECRET_NAME}$`, 'i')
+// The variable, or [Environment]::GetEnvironmentVariable('NAME'), alone as a statement: PowerShell prints it, bash runs it and
+// prints the value in its error. Inside parentheses (if ($env:TOKEN)) it is a test.
+const BARE_VAR = new RegExp(
+  String.raw`(?:^|[;\n&{]|\|\|)\s*(?:\$\{?(?:env:)?${SECRET_NAME}\}?|%${SECRET_NAME}%|\[(?:system\.)?environment\]::getenvironmentvariable\(\s*['"]${SECRET_NAME}['"][^)]*\))\s*(?:\|\s*(?<next>[^\s|;&]+)|(?=$|[;\n&}>]|\d>))`,
+  'gi',
+)
+// What prints what is piped into it; a program that takes it as a credential (gh auth login --with-token, docker login
+// --password-stdin) does not.
+const printsInput = (program = '') =>
+  [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|\w+-Object|select|where|\?|%`)].some(prints =>
+    prints.test(program),
+  )
+const printsVar = (stages: readonly (readonly string[])[]) =>
+  stages.some((stage, i) => {
+    const [program, ...args] = unwrapped(stage)
+    const name = nameOf(program)
+    const prints =
+      (/^(echo|printf|write|write-output|write-host|write-information)$/.test(name) && args.some(arg => SECRET_VAR.test(arg))) ||
+      (/^(printenv|gci|ls|dir|get-childitem|get-item|gi|get-content|gc|type|cat)$/.test(name) &&
+        args.some(arg => SECRET_ONLY.test(arg) && (name === 'printenv' || /^env:/i.test(arg))))
+
+    // Write-Host writes to the screen, whatever follows it.
+    return prints && (i === stages.length - 1 || name === 'write-host' || printsInput(stages[i + 1]?.[0]))
+  })
+
+// Calls that send a file out: an upload, a request body, a gist, a commit. Each gives the words that name what it sends.
+// @file, name=@file, file://x and fileb://x attach the file's content.
+// curl's -F 'f=<file' sends the content as the field's value.
+const ATTACHED = /^(--?[\w-]+=)?([\w.-]*=?[@<]|fileb?:\/\/)/i
+const attached = (word: string) => word.replace(ATTACHED, '').replace(/;.*$/, '')
+// The file an option names: -T x, --upload-file=x, -InFile:x.
+const fileOf = (args: readonly string[], flag: RegExp) => args.flatMap((arg, i) => (flag.test(arg) ? [/[=:]/.test(arg) ? arg : (args[i + 1] ?? '')] : []))
+const SENDERS: readonly (readonly [RegExp, (args: readonly string[]) => readonly string[]])[] = [
+  // gist create .env and release upload send their files; issue/pr --body-file and -F, api -F x=@.env and --input send one.
+  [
+    bin('gh'),
+    // A description or notes (-d "why .env is ignored") is no path.
+    args => [...(says(args, / (gist (create|edit)|release (create|upload)) /) ? args.filter(arg => !/\s/.test(arg)) : []), ...fileOf(args, /^(--body-file|-F|--field|--input)([=:]|$)/)].map(attached),
+  ],
+  [
+    bin('curl'),
+    args => [...args.filter(arg => ATTACHED.test(arg)).map(attached), ...fileOf(args, /^(-T|--upload-file)([=:]|$)/), ...args.filter(arg => /^-T./.test(arg)).map(arg => arg.slice(2))],
+  ],
+  [bin('wget'), args => fileOf(args, /^--(post|body)-file([=:]|$)/)],
+  [bin('Invoke-WebRequest|iwr|Invoke-RestMethod|irm'), args => fileOf(args, /^-InFile(:|$)/i)],
+  // s3 cp .env s3://b sends what stands before the bucket; s3 cp s3://b/terraform.tfstate - prints the object.
+  [
+    bin('aws'),
+    args => {
+      const at = args.findIndex(arg => /^s3:\/\//i.test(arg))
+      // --exclude .env names what stays behind.
+      const local = args.slice(0, at).filter((_, i) => !/^--(exclude|include)$/.test(args[i - 1] ?? ''))
+      const s3 = says(args, / s3 (cp|mv|sync) /) && at > 0 ? [...local, ...(args.includes('-') ? [args[at]?.slice(5) ?? ''] : [])] : []
+
+      return [...s3, ...args.filter(arg => /fileb?:\/\//i.test(arg)).map(attached)]
+    },
+  ],
+  // A message (-m wip, -m "never commit .env") is no path; git rm --cached, status and check-ignore are no send.
+  [
+    bin('git'),
+    args =>
+      says(args, / (add|stage|commit) /) ? args.filter((arg, i) => !/\s/.test(arg) && !/^(-[a-zA-Z]*m|--(message|author|date))$/.test(args[i - 1] ?? '')) : [],
+  ],
+]
+const sendDeny = (file: string) =>
+  `this would send ${file} out with the call (an upload, a request body, a gist or a commit), where it is stored beyond your control. If it must go, ask the user to send it.`
+
+// A recursive search from a folder that holds the home folder (C:\Users, C:\, /) walks into its credentials.
+const aboveHome = (words: readonly string[], world: World) => {
+  const home = `${norm(world.home)}/`
+
+  return words.flatMap(word => pathsOf(word, world)).find(path => path === '/' || home.startsWith(`${path}/`))
+}
+const searchDeny = (root: string) =>
+  `this would search every file under ${root}, the credentials in your home folder among them, and put what matches ${WHERE} Search the project or a folder in it instead.`
 
 // Calls that print a stored credential.
 const says = (args: readonly string[], phrase: RegExp) => phrase.test(` ${args.filter(arg => !arg.startsWith('-')).join(' ')} `)
@@ -253,9 +392,25 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
   [
     bin('aws'),
     args =>
-      says(args, / configure export-credentials | sts (get-session-token|get-federation-token|assume-role\S*) /) ||
+      says(
+        args,
+        / configure export-credentials | sts (get-session-token|get-federation-token|assume-role\S*|assume-root) | sso get-role-credentials | sso-oidc create-token | ecr(-public)? (get-login-password|get-authorization-token) | codeartifact get-authorization-token | eks get-token | rds generate-db-auth-token | secretsmanager get-secret-value | kms decrypt /,
+      ) ||
+      (says(args, / ssm get-parameters?(-by-path)? /) && args.includes('--with-decryption')) ||
       (says(args, / configure get /) && args.some(arg => /secret|token/i.test(arg))),
   ],
+  // AWS Tools for PowerShell. EKS and RDS tokens have no cmdlet.
+  [
+    bin(
+      'Get-SECSecretValue|Get-STSSessionToken|Get-STSFederationToken|Use-STSRole|Use-STSRoleWithSAML|Use-STSWebIdentityRole|Use-STSRoot|Get-ECRLoginCommand|Get-ECRAuthorizationToken|Get-CAAuthorizationToken|Get-SSORoleCredential|New-SSOOIDCToken|Invoke-KMSDecrypt',
+    ),
+    () => true,
+  ],
+  [bin('Get-SSMParameter|Get-SSMParameterValue|Get-SSMParametersByPath'), args => args.some(arg => /^-WithDecryption(:\$?true)?$/i.test(arg)) && !args.some(arg => /^\$false$/i.test(arg))],
+  [bin('aws-vault'), args => says(args, /^ export /) || (says(args, /^ exec /) && args.includes('--json'))],
+  [bin('op'), args => says(args, /^ read /) || (says(args, /^ item get /) && args.includes('--reveal'))],
+  [bin('vault'), args => says(args, /^ (read|kv get|print token) /)],
+  [bin('sops'), args => (args.some(arg => /^(-d|--decrypt)$/.test(arg)) || says(args, /^ decrypt /)) && !args.some(arg => /^(-i|--in-place|--output)(=|$)/.test(arg))],
   [
     bin('gh'),
     args => says(args, / auth (token|git-credential) /) || (says(args, / auth status /) && args.some(arg => /^(-t|--show-token)$/.test(arg))),
@@ -263,11 +418,25 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
   [bin(String.raw`docker-credential-[\w-]+`), args => args.includes('get')],
   [bin('gpg|gpg2'), args => args.some(arg => /^--export-secret-(sub)?keys$/.test(arg))],
   [bin('git'), args => says(args, / credential(-[\w-]+)? (fill|get) /)],
-  [bin('terraform|tofu|terragrunt'), args => says(args, / state pull /)],
+  // output -json and -raw print sensitive outputs in full; show -json prints the state or plan with its secrets.
+  [
+    bin('terraform|tofu|terragrunt'),
+    args =>
+      says(args, / state pull /) ||
+      (says(args, / output /) && args.some(arg => /^--?(json|raw)$/.test(arg))) ||
+      (says(args, / show /) && args.some(arg => /^--?json$/.test(arg))),
+  ],
   [bin('gcloud'), args => says(args, / print-(access|identity)-token /)],
   [bin('az'), args => says(args, / account get-access-token /)],
-  [bin('kubectl|oc'), args => says(args, / config view /) && args.some(arg => /^--(raw|flatten)/.test(arg))],
+  [
+    bin('kubectl|oc'),
+    args =>
+      (says(args, / config view /) && args.some(arg => /^--(raw|flatten)/.test(arg))) ||
+      (says(args, / get /) && args.some(arg => /^secrets?(\/|$)/.test(arg)) && / (-o|--output)[= ]?(yaml|json|jsonpath|go-template)| --template/.test(` ${args.join(' ')}`)),
+  ],
 ]
+// aws ecr get-login-password | docker login --password-stdin hands the token to docker, not the conversation.
+const PIPED_LOGIN = /(\S*aws(\.exe)?\s[^|;&\n]*\becr(-public)?\s+get-login-password|Get-ECRLoginCommand)[^|;&\n]*\|\s*\S*(docker|podman|nerdctl|finch|helm|oras)(\.exe)?\s[^|;&\n()]*\blogin\b[^|;&\n()]*--password-stdin/gi
 
 const WHERE = 'into the conversation, where it is sent to the API, saved in transcripts and can end up in a commit or a command.'
 const INSTEAD = String.raw`Ask the user for the one value you need, or read the variable names only: grep -oE '^\w+ *=' <file>, or the file's .example copy.`
@@ -291,7 +460,13 @@ const finding = (command: string, world: World): string | undefined => {
   const statements = statementsOf(command)
   // cat {.env,app.json}, cp .env{,.txt}: the shared parser ends a word at a brace, so brace words are read from the command.
   const braces = command.match(/[^\s;|&()<>`"']*\{[^{}\s]*,[^{}\s]*\}[^\s;|&()<>`"']*/g) ?? []
-  const copies = invocations(command, COPIER)
+  const copies = [
+    ...invocations(command, COPIER),
+    ...invocations(command, bin('robocopy')).map(robocopied),
+    ...invocations(command, bin('mklink')).map(mklinked),
+    ...invocations(command, bin('New-Item|ni')).map(linked),
+    ...invocations(command, bin('tar|bsdtar')).map(tarred),
+  ].filter(args => args.length > 0)
   const read =
     readers.map(args => secretIn(args, world)).find(Boolean) ??
     [...copies, ...(copies.length > 0 ? braces.map(braced) : [])].map(args => copiedOut(args, world)).find(Boolean) ??
@@ -306,7 +481,7 @@ const finding = (command: string, world: World): string | undefined => {
 
   // cat $(find . -name .env), gc (ls *.tfvars): a lister in a substitution puts its names on the reader's command line.
   const substituted = [...command.matchAll(/(?:\$|\s)\(([^()]*)\)|`([^`]*)`/g)].flatMap(([, body, ticked]) => statementsOf(body ?? ticked ?? ''))
-  const fed = [
+  const listers = [
     ...statements
       // The names must be handed on as files: find | sort and ls | grep only read the list.
       .filter(
@@ -315,10 +490,29 @@ const finding = (command: string, world: World): string | undefined => {
           stages.some(([program]) => PIPE_READER.test(nameOf(program))),
       ),
     ...substituted,
-  ]
-    .flatMap(stages => stages.filter(([program]) => LISTER.test(nameOf(program))))
-    .map(words => secretIn(words.slice(1), world))
-    .find(Boolean)
+  ].flatMap(stages => stages.filter(([program]) => LISTER.test(nameOf(program))))
+  const fed = listers.map(words => secretIn(words.slice(1), world)).find(Boolean)
+  // rg x C:\Users, grep -r x /c/Users, gci -Recurse C:\ | sls x: a search from above the home folder.
+  const searched =
+    [
+      ...invocations(command, bin('rg')),
+      ...invocations(command, bin('grep|egrep|fgrep')).filter(args => args.some(arg => /^(-[a-zA-Z]*[rR][a-zA-Z]*|--(dereference-)?recursive)$/.test(arg))),
+    ]
+      // rg -l and --count print names and counts, not lines.
+      .filter(args => !isNamesOnly(args))
+      .map(args => aboveHome(operands(args), world))
+      .find(Boolean) ??
+    (readers.length > 0
+      ? listers
+          .filter(([program, ...args]) => /^(find|fd)$/.test(nameOf(program)) || args.some(arg => /^(-[a-zA-Z]*R[a-zA-Z]*|--recursive)$/.test(arg) || /^(-r|-recurse|\/s)$/i.test(arg)))
+          .map(words => aboveHome(words.slice(1), world))
+          .find(Boolean)
+      : undefined)
+
+  if (searched !== undefined) {
+    return searchDeny(searched)
+  }
+
   // f=.env; cat $f and for f in .env*; do cat "$f": the reader is handed the file through a variable.
   const bound = secretIn(
     [...command.matchAll(/(?:^|[\s;({])\$?\w+\s*=\s*([^\s;|&)]+)|\b(?:for|foreach)\s*\(?\s*\$?\w+\s+in\s+([^;)\n]+)/gi)].flatMap(
@@ -332,15 +526,38 @@ const finding = (command: string, world: World): string | undefined => {
     return fileDeny(handed, 'this hands a program that prints it')
   }
 
+  const sent = SENDERS.flatMap(([program, files]) => invocations(command, program).map(args => secretIn(files(args), world))).find(Boolean)
+
+  if (sent !== undefined) {
+    return sendDeny(sent)
+  }
+
   if (
-    statements.some(stages => stages.some((stage, i) => dumpsEnv(stage) && !NAMES_ONLY.test((stages[i + 1] ?? []).join(' ')))) ||
+    statements.some(stages => stages.some((stage, i) => dumpsEnv(unwrapped(stage)) && !NAMES_ONLY.test((stages[i + 1] ?? []).join(' ')))) ||
     /GetEnvironmentVariables/i.test(command) ||
     ENV_CODE.some(([program, dumps]) => invocations(command, program).some(args => args.some(arg => dumps.test(arg))))
   ) {
     return `this would put every environment variable, tokens and keys among them, ${WHERE} Read one variable by name (printenv NAME, $env:NAME), or list the names only: env | cut -d= -f1.`
   }
 
-  return PRINTERS.some(([program, prints]) => invocations(command, program).some(prints))
+  // echo "TOKEN=$TOKEN" >> .env, one statement, writes it where the guard still covers it.
+  const intoSecret =
+    statements.length === 1 && secretIn([...command.matchAll(/(?<![2-9&])>>?\s*([^\s|;&<>]+)/g)].map(([, file = '']) => file), world) !== undefined
+
+  if (!intoSecret && (statements.some(printsVar) || [...command.matchAll(BARE_VAR)].some(({ groups }) => groups?.next === undefined || printsInput(groups.next)))) {
+    return `this would put the value of a variable named for a credential ${WHERE} Hand it to the program that needs it ("$NAME" as its argument, or piped to its --with-token or --password-stdin) instead of printing it.`
+  }
+
+  const printable = command.replace(PIPED_LOGIN, ' ')
+  // aws-vault and op are wrappers to the shared parser, which hands back only the program they run: their own calls are read
+  // from the statements.
+  const runners = statementsOf(printable)
+    .flat()
+    .filter(([name]) => RUNNER.test(nameOf(name)))
+
+  return PRINTERS.some(
+    ([program, prints]) => invocations(printable, program).some(prints) || runners.some(([name = '', ...args]) => program.test(name) && prints(args)),
+  )
     ? `this would put a stored credential ${WHERE} A program that needs the credential reads it itself; if you need the value, ask the user.`
     : undefined
 }
@@ -371,7 +588,14 @@ export const register: Register = on => {
         : (secretIn([e.path ?? ''].filter(Boolean), world) ??
           secretIn((e.glob ?? '').split(/\s+/).filter(Boolean), { ...world, cwd: resolve(e.path ?? '.', world) }))
 
-    return secret === undefined ? next(e) : { deny: `${$.plugin.name}: ${fileDeny(secret)}` }
+    // Grep searches its whole path: one above the home folder walks into it.
+    const above = e.tool === 'Grep' ? aboveHome([e.path ?? '.'], world) : undefined
+
+    return secret !== undefined
+      ? { deny: `${$.plugin.name}: ${fileDeny(secret)}` }
+      : above !== undefined
+        ? { deny: `${$.plugin.name}: ${searchDeny(above)}` }
+        : next(e)
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))
 
   on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
