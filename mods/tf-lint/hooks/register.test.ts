@@ -130,6 +130,30 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['an IAM access key in .tf.json', 'iam.tf.json', '{ "resource": { "aws_iam_access_key": { "ci": { "user": "ci" } } } }', /static IAM access key/],
   ['an IAM console password', 'iam.tf', 'resource "aws_iam_user_login_profile" "me" {\n  user = aws_iam_user.me.name\n}', /console password/],
   ['an IAM user without keys', 'iam.tf', 'resource "aws_iam_user" "ci" {\n  name = "ci"\n}', null],
+  // Long-lived keys in other clouds.
+  ['a Google service account key', 'gcp.tf', 'resource "google_service_account_key" "ci" {\n  service_account_id = google_service_account.ci.name\n}', /long-lived Google service account key \(google_service_account_key\); use workload identity federation/],
+  ['a Google service account key in .tf.json', 'gcp.tf.json', '{ "resource": { "google_service_account_key": { "ci": { "service_account_id": "ci" } } } }', /long-lived Google service account key/],
+  ['an Azure application password', 'azure.tf', 'resource "azuread_application_password" "ci" {\n  application_id = azuread_application.ci.id\n}', /long-lived Azure application client secret \(azuread_application_password\); use a federated identity credential/],
+  ['an Azure service principal password, unquoted', 'azure.tf', 'resource azuread_service_principal_password ci {\n  service_principal_id = azuread_service_principal.ci.id\n}', /long-lived Azure service principal secret \(azuread_service_principal_password\); use a federated identity credential/],
+  ['a Google service account and its IAM member', 'gcp.tf', 'resource "google_service_account" "ci" {\n  account_id = "ci"\n}\nresource "google_service_account_iam_member" "wif" {\n  role = "roles/iam.workloadIdentityUser"\n}', null],
+  ['a longer type name than the key', 'gcp.tf', 'resource "google_service_account_key_rotation" "ci" {\n  name = "ci"\n}', null],
+  ['an Azure federated identity credential', 'azure.tf', 'resource "azuread_application_federated_identity_credential" "ci" {\n  issuer = "https://token.actions.githubusercontent.com"\n}', null],
+  // Over-broad actions.
+  ['a jsonencode policy granting every action', 'iam.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect   = "Allow"\n    Action   = "*"\n    Resource = "*"\n  }]\n})', /grants every action \(Action "\*"\) in a policy; name the actions the identity needs/],
+  ['a JSON policy with * in its action list', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": ["s3:GetObject", "*"], "Resource": "*" }] }\nEOF', /grants every action/],
+  ['a JSON policy with a bare * action', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": "*", "Resource": "*" }] }\nEOF', /grants every action/],
+  ['a policy document granting every action', 'iam.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}', /grants every action/],
+  ['an HCL action of *', 'iam.tf', 'statement {\n  action = "*"\n}', /grants every action/],
+  ['a policy granting all IAM actions', 'iam.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect   = "Allow"\n    Action   = ["s3:GetObject", "iam:*"]\n    Resource = "*"\n  }]\n})', /grants all IAM or STS actions \(iam:\* or sts:\*\); name the actions it needs/],
+  ['a policy document granting all STS actions', 'iam.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    actions = ["sts:*"]\n  }\n}', /grants all IAM or STS actions/],
+  ['an escaped JSON policy in .tf.json granting every action', 'iam.tf.json', '{"policy":"{\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"*\\",\\"Resource\\":\\"*\\"}]}"}', /grants every action/],
+  ['an escaped JSON policy with one action and a * resource', 'iam.tf.json', '{"policy":"{\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"s3:GetObject\\",\\"Resource\\":\\"*\\"}]}"}', null],
+  ['an action list with all of IAM, then *', 'iam.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    actions = ["iam:*", "*"]\n  }\n}', /grants every action .*; and grants all IAM or STS actions/],
+  ['specific actions on every resource', 'iam.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect   = "Allow"\n    Action   = ["s3:GetObject", "s3:List*"]\n    Resource = "*"\n  }]\n})', null],
+  ['one action and a * resource on one line', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": "s3:GetObject", "Resource": "*" }] }\nEOF', null],
+  ['an action list and a * resource list on one line', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": ["*"] }] }\nEOF', null],
+  ['a KMS key-admin statement', 'kms.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Principal": { "AWS": "${local.root}" }, "Action": "kms:*", "Resource": "*" }] }\nEOF', null],
+  ['a deny of everything but IAM and STS', 'scp.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    effect      = "Deny"\n    not_actions = ["iam:*", "sts:*"]\n    resources   = ["*"]\n  }\n}\nlocals {\n  p = jsonencode({ Effect = "Deny", NotAction = ["iam:*"], Resource = "*" })\n}', null],
   // GitHub OIDC trust.
   ['a GitHub OIDC trust pinned to a branch', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/infra:ref:refs/heads/main"')}`), null],
   ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(repo:acme\/\*\)/],
@@ -151,7 +175,7 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['an AWS "*" principal list in JSON', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Principal": { "AWS": ["*"] }, "Action": "sqs:SendMessage" }] }\nEOF', /Principal "\*"/],
   ['a policy document open to everyone', 'bucket.tf', 'data "aws_iam_policy_document" "p" {\n  statement {\n    actions = ["s3:GetObject"]\n    principals {\n      type        = "AWS"\n      identifiers = ["*"]\n    }\n  }\n}', /Principal "\*"/],
   ['a TLS-only deny to everyone', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect    = "Deny"\n    Principal = "*"\n    Action    = "s3:*"\n    Resource  = "*"\n    Condition = { Bool = { "aws:SecureTransport" = "false" } }\n  }]\n})', null],
-  ['a wildcard resource and action, no principal', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": "s3:ListAllMyBuckets", "Resource": "*" }] }\nEOF\ndata "aws_iam_policy_document" "d" {\n  statement {\n    actions   = ["*"]\n    resources = ["*"]\n  }\n}', null],
+  ['a wildcard resource and action, no principal', 'iam.tf', 'policy = <<EOF\n{ "Statement": [{ "Effect": "Allow", "Action": "s3:ListAllMyBuckets", "Resource": "*" }] }\nEOF\ndata "aws_iam_policy_document" "d" {\n  statement {\n    actions   = ["s3:*"]\n    resources = ["*"]\n  }\n}', null],
   // Secret variables and outputs.
   ['a password variable without sensitive', 'variables.tf', 'variable "db_password" {\n  type = string\n}', /variable "db_password" without sensitive = true/],
   ['a sensitive password variable', 'variables.tf', 'variable "db_password" {\n  type      = string\n  sensitive = true\n  default   = ""\n}', null],
@@ -171,6 +195,16 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a workflow with a bracketed secret in env', '.github/workflows/deploy.yml', "env:\n  AWS_ACCESS_KEY_ID: ${{ secrets['KEY'] }}", /static AWS key/],
   ["a workflow passing on an earlier step's temporary keys", '.github/workflows/deploy.yml', `${OIDC_WORKFLOW}\n      - uses: some/action@v1\n        with:\n          aws-access-key-id: \${{ steps.assume.outputs.aws-access-key-id }}\n          aws-secret-access-key: '\${{ needs.auth.outputs.secret }}'`, null],
   ['a workflow using OIDC', '.github/workflows/deploy.yml', OIDC_WORKFLOW, null],
+  ['a workflow with an Azure client secret in env', '.github/workflows/deploy.yml', 'env:\n  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}', /passes a static Azure or Google credential to the job; use workload identity federation \(id-token: write, with azure\/login client-id, tenant-id and subscription-id, or google-github-actions\/auth with workload_identity_provider\)/],
+  ['a workflow with a Google key file', '.github/workflows/deploy.yml', "steps:\n  - uses: google-github-actions/auth@v2\n    with:\n      credentials_json: '${{ secrets.GCP_SA_KEY }}'", /static Azure or Google credential/],
+  ['a workflow with Azure creds JSON', '.github/workflows/deploy.yml', 'steps:\n  - uses: azure/login@v2\n    with:\n      creds: ${{ secrets.AZURE_CREDENTIALS }}', /static Azure or Google credential/],
+  ['a workflow with static AWS and Azure credentials', '.github/workflows/deploy.yml', `${STATIC_KEYS}\n      - uses: azure/login@v2\n        with:\n          creds: \${{ secrets.AZURE_CREDENTIALS }}`, /static AWS key.*; and passes a static Azure or Google credential/],
+  ['a workflow with a quoted creds key', '.github/workflows/deploy.yml', 'steps:\n  - uses: azure/login@v2\n    with:\n      "creds": ${{ secrets.AZURE_CREDENTIALS }}', /static Azure or Google credential/],
+  ['a workflow with a Google key file in a block scalar', '.github/workflows/deploy.yml', 'steps:\n  - uses: google-github-actions/auth@v2\n    with:\n      credentials_json: >-\n        ${{ secrets.GCP_SA_KEY }}', /static Azure or Google credential/],
+  ['a workflow naming creds only in a trailing comment', '.github/workflows/deploy.yml', 'env:\n  OTHER: value # creds: ${{ secrets.OLD }}', null],
+  ['a workflow using Azure OIDC', '.github/workflows/deploy.yml', 'permissions:\n  id-token: write\nsteps:\n  # creds: ${{ secrets.OLD }}\n  - uses: azure/login@v2\n    with:\n      client-id: ${{ secrets.AZURE_CLIENT_ID }}\n      tenant-id: ${{ secrets.AZURE_TENANT_ID }}\n      subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}', null],
+  ['a workflow using Google workload identity', '.github/workflows/deploy.yml', 'steps:\n  - uses: google-github-actions/auth@v2\n    with:\n      workload_identity_provider: projects/1/locations/global/workloadIdentityPools/gh/providers/gh\n      service_account: ci@p.iam.gserviceaccount.com', null],
+  ["a workflow passing on a step's or job's credential", '.github/workflows/deploy.yml', 'steps:\n  - uses: some/action@v1\n    with:\n      creds: ${{ steps.vault.outputs.creds }}\n      credentials_json: ${{ needs.auth.outputs.json }}\n    env:\n      AZURE_CLIENT_SECRET: ${{ steps.vault.outputs.secret }}', null],
   ['key inputs outside a workflow', 'docs/config.yml', 'aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}', null],
 ]
 
@@ -251,6 +285,8 @@ for (const tool of ['Write', 'Edit'] as const) {
       const context = (ran.context ?? []).join('\n')
 
       expect(hasRun).toBe(expected !== undefined)
+      // A warning or a clean row is never also a deny.
+      expect(ran.deny === undefined).toBe(expected !== undefined)
 
       if (expected === null) {
         expect(context).toBe('')
