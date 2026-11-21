@@ -573,8 +573,32 @@ const worldOf = (cwd: string, home: string, allowed = ''): World => ({
     .map(glob => new RegExp(`(^|/)${globSource(norm(glob.replace(HOME_VAR, home)))}$`)),
 })
 
+// A quoted heredoc handed to cat, tee or git commit/tag is text it writes, not commands: cat > notes.md <<'EOF'. Only when it is
+// the whole command: a plain opening line (no $, \, #, open quote, operator or other <) and nothing after the end line. The rest
+// of heredocs, unquoted ones included, are read as written.
+const PLAIN_WORDS = String.raw`(?:[ \t]+(?:\d?>>?[ \t]*)?(?:[^\s$\\#|&;()<>\x60'"]|'[^'\n]*'|"[^"\n$\x60\\]*")+)*`
+const DATA_HEREDOC = new RegExp(
+  String.raw`^(?:cat|tee|git(?:[ \t]+(?:-[Cc][ \t]+[^\s$\\#|&;()<>\x60'"]+|--[\w-]+))*[ \t]+(?:commit|tag))${PLAIN_WORDS}[ \t]*<<(-?)[ \t]*(?:'(\w+)'|"(\w+)"|\\(\w+))${PLAIN_WORDS}[ \t]*\n`,
+)
+const withoutText = (command: string) => {
+  const [opening = '', dash, ...tags] = DATA_HEREDOC.exec(command) ?? []
+  const tag = tags.find(Boolean)
+  const lines = command.slice(opening.length).split('\n')
+  // The body ends at the first line that is the tag (<<- strips tabs only).
+  const body = lines.map(line => (dash ? line.replace(/^\t+/, '') : line))
+  const end = body.indexOf(tag ?? '')
+  // A line that is the tag but for spaces or control characters (EOF\r ends it in Cygwin's bash) may end it elsewhere: give up.
+  const isUnclear = command.includes('\r') || body.slice(0, end + 1).some(line => line !== tag && line.replace(/^[\s\x00-\x1f]+|[\s\x00-\x1f]+$/g, '') === tag)
+
+  // Written to a device (> /dev/stdin, /proc/self/fd/0) it may reach something that reads it as commands.
+  return tag !== undefined && end >= 0 && !isUnclear && lines.slice(end + 1).join('\n').trim() === '' && !/(dev|proc)\//.test(opening)
+    ? `${opening}${lines[end]}`
+    : command
+}
+// The terminal tool types into the user's own shell, which may not be bash and may run each line.
+const TERMINAL = 'mcp__terminal__run_in_terminal'
 // Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
-const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
+const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', TERMINAL]
 // shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
 
 export const register: Register = on => {
@@ -600,7 +624,8 @@ export const register: Register = on => {
 
   on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
     // A Monitor that opens a WebSocket has no command.
-    const command = String((e as { command?: unknown }).command ?? '')
+    const written = String((e as { command?: unknown }).command ?? '')
+    const command = e.tool === TERMINAL ? written : withoutText(written)
     const world = worldOf(await $.session.cwd(), (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
     // Bash drops a backslash before a letter outside quotes (cat .e\nv is cat .env), so the line is read with and without them;
     // only PowerShell is known not to.

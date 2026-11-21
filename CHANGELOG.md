@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- secret-read-guard 0.3.1: a quoted heredoc that only hands text to `cat`,
+  `tee` or `git commit`/`tag` (`cat > notes.md <<'EOF'`) is no longer read as
+  commands, so notes that mention `env |` or `.env` are not denied. Only when
+  it is the whole command; unquoted heredocs, heredocs fed to any other
+  program, anything after the end line, a carriage return, and the terminal
+  tool are read as before.
 - supply-chain-guard 0.2.0: also checks `Monitor` and the desktop app's
   terminal tool, as the other command guards do, so an unpinned install run
   through either is denied.
