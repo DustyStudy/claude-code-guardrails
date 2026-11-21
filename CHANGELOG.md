@@ -36,6 +36,34 @@
   `~/.claude/plugins/cache`, and `CLEANUP_CHECK_PRUNE_CACHE` is gone.
   Claude Code now deletes an old version itself 14 days after an update
   or uninstall replaces it. The other leftovers it reports are unchanged.
+- secret-read-guard 0.3.0: closes access-key and non-human-identity gaps.
+  Denies sending a credential file out (`gh gist create .env`, `gh issue
+  comment --body-file`, `gh api -F x=@.env`, `curl -F f=@.env`, `curl -T`,
+  `wget --post-file`, `Invoke-WebRequest -InFile`, `aws s3 cp .env s3://…`,
+  `aws … file://.env`, `git add .env`) and printing a remote state file
+  (`aws s3 cp s3://b/terraform.tfstate -`). More printers: `aws sso
+  get-role-credentials`, `sso-oidc create-token`, `sts assume-root`, `ecr
+  get-login-password` (it still runs piped to `docker login
+  --password-stdin`), `codeartifact get-authorization-token`, `eks
+  get-token`, `rds generate-db-auth-token`, `secretsmanager
+  get-secret-value`, `ssm get-parameter --with-decryption`, `kms decrypt`,
+  their AWS Tools for PowerShell cmdlets, `terraform output -json|-raw`,
+  `terraform show -json`, `aws-vault export`, `op read`, `op item get
+  --reveal`, `vault read|kv get|print token`, `sops -d` and `kubectl get
+  secret -o yaml|json|jsonpath`. Printing one variable named for a
+  credential (`echo $GITHUB_TOKEN`, `$env:AWS_SECRET_ACCESS_KEY`, `printenv
+  NPM_TOKEN`, `[Environment]::GetEnvironmentVariable('X_TOKEN')`) is denied,
+  but passing it to a program still runs (`curl -H "Authorization: Bearer
+  $GITHUB_TOKEN"`, `echo $GITHUB_TOKEN | gh auth login --with-token`).
+  `aws-vault exec p -- env`, `op run -- env`, `doppler run -- printenv` and
+  `timeout 5 env` count as dumping the environment. New credential files:
+  service-account JSON keys, `~/.aws/login/cache`, every file under
+  `~/.kube`, `~/.config/git/credentials`, Az PowerShell's
+  `AzureRmContext.json`, `TokenCache.dat` and `.IdentityService/msal.cache*`,
+  and `~/.claude.json`. A project's `.mcp.json` stays readable. A recursive
+  search from above the home folder (`rg x C:\Users`, `grep -r x /`, the
+  Grep tool on `C:\`) is denied, and `robocopy`, `mklink`, `New-Item
+  -ItemType SymbolicLink`, `Compress-Archive` and `tar -c` count as copies.
 - model-guard 0.4.0: with `MODEL_GUARD_FALLBACK_MODEL` set (and optionally
   `MODEL_GUARD_FALLBACK_EFFORT`), a subagent whose run on the pinned model
   ends on a usage or rate-limit error flags that model out until its reset,
