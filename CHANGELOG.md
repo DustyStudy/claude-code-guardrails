@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- usage-band removed: Claude Code now shows your plan usage itself, so the
+  band above the prompt and its Codex warning after a Codex run are gone.
+  Drop `usage-band` from any `enabledPlugins` or `CLAUDE_CODE_PLUGIN_DIRS`
+  that still names it.
 - cleanup-check 0.4.0: no longer counts or prunes old plugin versions in
   `~/.claude/plugins/cache`, and `CLEANUP_CHECK_PRUNE_CACHE` is gone.
   Claude Code now deletes an old version itself 14 days after an update

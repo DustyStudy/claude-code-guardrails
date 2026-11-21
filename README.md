@@ -5,12 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Nineteen mods that stop risky commands
+when it works on AWS and Terraform. Eighteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
-context, keep subagents and Codex on the models you choose, and show how
-much of your Claude and Codex plans is left.
+context, and keep subagents and Codex on the models you choose.
 
 **At a glance**
 
@@ -54,15 +53,13 @@ much of your Claude and Codex plans is left.
 | [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
 | [aws-context](mods/aws-context) | Display | CLI and Desktop | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | CLI and Desktop | A status line after each turn (in Desktop, a line above the prompt, with a Clean up button that drafts the ask into the prompt box for you to read and send): a merged branch still checked out, merged branches to delete, saved plan files left behind, and stray keys, certificates, .env files and Terraform state not in git. Old plugin versions are left to Claude Code, which deletes each one 14 days after an update replaces it. |
-| [usage-band](mods/usage-band) | Display and reminder | Desktop; the Codex warning in both | Your Claude plan's and Codex plan's 5-hour and weekly usage left above the prompt, each with when it resets: green with more than half left, orange at half or less, red at 20% or less, and LOW under 15%. Codex is there for sessions that hand work to it, such as reviews, second opinions and parallel tasks run through the Codex plugin, which spend the Codex plan rather than Claude's. Claude's figures are the ones the session reports; Codex's are read from its session logs, and show once Codex has run in the last seven days. After a Codex run with a window at 20% left or less, it tells the model so the next review can wait, and notifies you once per window. |
 
 **Works in** is where each mod does its job. A mod that only hooks tool
 calls, prompts and turns, or adds a tool, works the same in the CLI and in
 Claude Code Desktop. On screen the two differ: both draw the band above the
 prompt and the tool-call rows, but Desktop does not draw a mod's status
 line under the prompt, so cleanup-check shows its line above the prompt
-there instead. usage-band draws its band in Desktop alone, since in the CLI
-the same figures belong in your own `statusLine` command.
+there instead.
 
 Guards deny rather than ask: in auto mode an "ask" is settled by a
 classifier, not by a person, so a deny is the only answer that reliably
@@ -179,7 +176,7 @@ block, in file order:
   is what makes each one count as the organization's mod, and it must keep
   `sec-default@builtin`, Claude Code's own guard, in the list.
 - **Left to each engineer**: jev-guard and model-guard enforce one person's
-  choice of tools and models, and usage-band, gh-ci-status, aws-context,
+  choice of tools and models, and gh-ci-status, aws-context,
   cleanup-check, output-trimmer and tf-plan-summary only display, remind or
   add a tool. None is a control, so none is locked on.
 - **`allowManagedHooksOnly`** runs only the hooks and mods managed settings
@@ -267,10 +264,6 @@ theirs is set.
 | `TAINT_GUARD_TRUSTED_HOSTS` | taint-guard | Comma-separated hosts whose pages a WebFetch reads without tainting the session, such as `docs.aws.amazon.com,learn.microsoft.com`. A host also covers its subdomains. Name the bare domain, not a `www.` host: WebFetch follows a redirect between the two, so a `www.` host alone is never trusted. Name only sites whose pages no outsider writes: not `github.com` or a forum. `curl` still taints; WebSearch only warns. |
 | `TAINT_GUARD_READ_SERVERS` | taint-guard | Comma-separated MCP tool name prefixes, one per server, whose read tools (named `search`, `get`, `list`, `read` or `query`) stay usable in a tainted session. Their results still taint it, and the server's other tools are still denied. A read's arguments reach that server, so name only servers no outsider runs: first-party connectors such as Gmail, and the desktop app's own `mcp__ccd_session_mgmt__,mcp__ccd_settings__`. |
 | `TAINT_GUARD_BROWSER_HOSTS` | taint-guard | Comma-separated hosts, matched exactly (no subdomains), where the browser tools (Claude in Chrome and the desktop app's built-in browser) work without tainting the session, such as `create.roblox.com,www.roblox.com,roblox.com`. The guard reads each tab's address from the browser's own tab list, fresh before and after the call, never from page text: a call stays clean when its tab is on a listed host both times and any page it opens is listed (a blank new tab counts; a tab list call needs every tab listed). Once tainted, one step on such a tab still runs, and opening and closing tabs always do; page scripts (`javascript_tool`) do not. Any other site, an unknown tab, a call with no tab ID and no single active tab, or a `browser_batch` with more than one page step taints, or once tainted is denied, as before. |
-
-usage-band reads `$CODEX_HOME`, or `~/.codex` when that is not set. The
-usage appears once the [Codex CLI](https://github.com/openai/codex), signed
-in with a ChatGPT plan, has run on this machine in the last seven days.
 
 ## Development
 
@@ -382,10 +375,6 @@ when it would be worth lifting.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
   `$TEMP/claude-output` until you delete that folder.
-- **usage-band** knows Codex's usage as of Codex's last report, so it updates
-  when Codex runs, not as time passes; a window whose reset time has passed
-  reads full. It reads Codex's session log format, which Codex may change, and
-  skips a log over 4 MiB. A Codex run is recognized by its command line.
 - **model-guard** checks Codex runs made through the Codex plugin's
   companion script or the `codex` CLI by name, and reads the flags as
   written: `-m`, `-model` and `--model=` all count as `--model` and the last
