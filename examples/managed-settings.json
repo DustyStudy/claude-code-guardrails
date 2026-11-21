@@ -22,14 +22,12 @@
   "enabledPlugins": {
     "terraform-guard@claude-code-guardrails": true,
     "aws-guard@claude-code-guardrails": true,
-    "taint-guard@claude-code-guardrails": true,
     "tf-lint@claude-code-guardrails": true,
     "secret-allow-guard@claude-code-guardrails": true
   },
   "prependPlugins": [
     "terraform-guard@claude-code-guardrails",
     "aws-guard@claude-code-guardrails",
-    "taint-guard@claude-code-guardrails",
     "tf-lint@claude-code-guardrails",
     "secret-allow-guard@claude-code-guardrails",
     "sec-default@builtin"
