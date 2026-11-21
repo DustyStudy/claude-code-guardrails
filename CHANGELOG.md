@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Removed destructive-guard, self-guard, commit-identity-guard,
+  gh-ci-status and aws-context: Claude Code now does their job. Auto mode
+  blocks force push, `reset --hard`, `clean -fd` and `terraform destroy`, and
+  Claude Code itself refuses `rm -rf` of critical paths; protected paths and
+  `Edit(...)` deny rules cover `~/.claude`; the `attribution` setting drops
+  the Claude trailers; the desktop app shows pull request checks and offers
+  Auto-fix; a status line script can show the AWS profile and region.
+  `examples/managed-settings.json` now carries `permissions.deny` rules for
+  force push, `reset --hard`, `clean -f` and `~/.claude` in place of the
+  mods, and no longer sets `COMMIT_GUARD_OWNERS`. Remove the five mods from
+  `enabledPlugins` and `CLAUDE_CODE_PLUGIN_DIRS`.
+- jev-guard 0.4.0: no longer reads the last region aws-context saw; it takes
+  the region from the command's profile, `AWS_REGION`, `AWS_DEFAULT_REGION`
+  and the AWS config file, as before.
+
 - tf-lint 0.6.0: flags non-human-identity risks. In Terraform: a static
   `aws_iam_access_key` or an `aws_iam_user_login_profile` (also in
   `.tf.json`); a GitHub OIDC trust policy (`jsonencode`, heredoc JSON or

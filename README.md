@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Guardrails for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-when it works on AWS and Terraform. Eighteen mods that stop risky commands
+when it works on AWS and Terraform. Thirteen mods that stop risky commands
 before they run, stop commands that destroy work for good, lock outbound commands once a session has read untrusted
 content, catch secrets before they are written, flag insecure
 Terraform as it is edited, keep long command output out of the model's
@@ -21,7 +21,7 @@ context, and keep subagents and Codex on the models you choose.
   call and tell the model what to do instead, before anything runs. Linters
   add a note the model reads right after the edit. Tools hand the model a
   short summary in place of thousands of lines of raw output.
-- **Result:** over a thousand tests across the nineteen mods, run in CI
+- **Result:** over a thousand tests across the thirteen mods, run in CI
   against a pinned Claude Code release. Each guard's tests pin both what it denies and the
   ordinary commands it must leave alone.
 
@@ -38,20 +38,15 @@ context, and keep subagents and Codex on the models you choose.
 | [terraform-guard](mods/terraform-guard) | Guard | CLI and Desktop | Denies `terraform apply`/`destroy` with `-auto-approve`, and `apply` without a saved plan file. Covers `tofu` and `terragrunt`. |
 | [aws-guard](mods/aws-guard) | Guard | CLI and Desktop | Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities (including SSH public keys, signing certificates, IAM Identity Center permission sets, assignments and directory users and groups, and IAM Roles Anywhere trust anchors and profiles), write static access keys to disk (`aws configure set aws_secret_access_key`, `aws configure import`, `Set-AWSCredential -StoreAs` with keys), change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run. |
 | [supply-chain-guard](mods/supply-chain-guard) | Guard | CLI and Desktop | Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run. |
-| [destructive-guard](mods/destructive-guard) | Guard | CLI and Desktop | Denies what destroys work for good: a recursive delete outside the project or a temp folder, `git push --force` (not `--force-with-lease`), `reset --hard`, `clean -f`, `checkout .`, `stash clear`, `DROP`/`TRUNCATE`/`DELETE` without `WHERE` sent to a database client, and disk formats. |
 | [merged-branch-guard](mods/merged-branch-guard) | Guard | CLI and Desktop | Denies `git push` that continues a branch whose pull request is already merged (and has no open one) and which GitHub has deleted, since the push would recreate it and strand the new commits outside any PR. Long-lived branches still on the remote, such as `develop`, and new branches that reuse an old name run. The deny names the merged PR and gives the commands to move the commits to a new branch cut from the default branch. Asks GitHub through `gh`; when `gh` is missing, signed out, offline or slow, the push runs with a note. |
-| [self-guard](mods/self-guard) | Guard | CLI and Desktop | Denies changes to what Claude Code loads as its own config or code: `~/.claude` (except memory, transcripts and plans), `~/.claude.json`, every folder in `CLAUDE_CODE_PLUGIN_DIRS`, and a project's `.claude/settings*.json`, whether by file tool, shell or `claude plugin`/`mcp`/`config`. Reads still run. |
 | [taint-guard](mods/taint-guard) | Guard | CLI and Desktop | Once the session reads untrusted content (a web page, an MCP result, a `curl`, a `gh` view, diff, run log or `gh api` call), denies what could send data out or publish: network, DNS and ping tools, `git push`, git calls to a URL, installs from a URL or another registry, `gh` and AWS writes, `terraform apply`, package publishes, untrusted MCP tools, a WebFetch whose URL carries data (a query string, userinfo, or an encoded path segment or host label). A plain `gh api` GET to GitHub stays usable, and so does `gh pr merge` without a body, subject, author or `--admin`. You lift the lock with `/taint-clear`, and the session continues where it stopped. A WebSearch only warns: its results are marked untrusted, but it does not lock. |
 | [secret-read-guard](mods/secret-read-guard) | Guard | CLI and Desktop | Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out (`cp`, `robocopy`, `mklink`, `New-Item -ItemType SymbolicLink`, `Compress-Archive`, `tar -c`): `.env` files, AWS (`aws login`/SSO/CLI caches too), SSH, cloud CLI and Az PowerShell, npm, Docker, any file under `~/.kube`, GitHub CLI, git, Codex and Claude credentials (`~/.claude.json` too), service-account JSON keys, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Denies sending one out (`gh gist create .env`, `curl -F f=@.env`, `aws s3 cp .env s3://…`, `Invoke-WebRequest -InFile`, `git add .env`) and a recursive search from above the home folder (`rg x C:\Users`, `grep -r x /`). Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`, through `aws-vault exec`, `op run` or `doppler run` too), printing one variable named for a credential (`echo $GITHUB_TOKEN`, `$env:AWS_SECRET_ACCESS_KEY`), and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`, `aws ecr get-login-password`, `Get-SECSecretValue`, `gh auth token`, `git credential fill`, `terraform state pull`, `terraform output -json`, `op read`, `vault kv get`, `sops -d`, `kubectl get secret -o yaml`). `.env.example`, `*.pub`, a project's `.mcp.json`, existence checks, programs that use a file or variable without printing it (`terraform -var-file`, `ssh -i`, `curl -H "Authorization: Bearer $GITHUB_TOKEN"`, `echo $GITHUB_TOKEN \| gh auth login --with-token`) and `aws ecr get-login-password \| docker login --password-stdin` still run. |
 | [tf-lint](mods/tf-lint) | Guard and linter | CLI and Desktop | Denies edits, file-writing shell commands (`>`, `tee`, heredoc, `Set-Content`) and MCP tool calls (mail, artifacts) that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, sets a GovCloud provider without FIPS endpoints, creates a static `aws_iam_access_key` or an `aws_iam_user_login_profile`, trusts GitHub OIDC without a pinned repo `sub` and an `aud` condition, grants a `*` principal without a condition, or leaves a secret-named variable or output unmarked `sensitive` (or gives such a variable a literal default). Flags GitHub Actions workflows that pass static AWS keys instead of `role-to-assume`. |
-| [commit-identity-guard](mods/commit-identity-guard) | Guard | CLI and Desktop | In the GitHub owners you name, denies commits and PRs carrying a Claude co-author or "Generated with Claude Code" trailer, and commits whose author or committer is not a GitHub noreply address. |
 | [model-guard](mods/model-guard) | Guard | CLI and Desktop | Starts every subagent on the model you name (moving to a fallback model and effort while it is out of usage), denies a `claude` run from the shell that names another, and denies Codex runs that leave out the flags you require, such as `--model` and `--effort`. |
 | [jev-guard](mods/jev-guard) | Guard | CLI and Desktop | Denies Jev (TypeSafe) calls, and direct calls to its API, that would send a secrets, tfvars or state file, a key or token, a secret-named variable, or GovCloud/CUI work (by region, profile or folder name) to the TypeSafe API. |
 | [secret-allow-guard](mods/secret-allow-guard) | Reminder | CLI and Desktop | At session start, warns when a permission rule, an `env` value or an MCP server's `env` or `headers` value holds a literal secret, in the project's or your own `.claude/settings*.json`, `~/.claude.json` (yours and every project's MCP servers) or the project's `.mcp.json` ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value. |
 | [tf-plan-summary](mods/tf-plan-summary) | Tool | CLI and Desktop | A `plan_summary` tool: a saved plan as counts, every destroy and replace, and IAM/KMS/security group/S3 policy changes, by attribute name only. |
 | [output-trimmer](mods/output-trimmer) | Context | CLI and Desktop | Cuts long output of noisy commands (terraform, scanners, installs) to its head, error lines and tail, after saving the whole output to a file. |
-| [gh-ci-status](mods/gh-ci-status) | Display and tool | CLI and Desktop | A band with the checks of your open pull requests, and Dependabot's and your workflows' (release-please) on your repositories, what holds each merge (needs approval, changes requested, a deployment protection rule holding a job, a branch rule, workflow runs waiting for approval), Merge/Rebase/Fix/Approve buttons, and a `checks` tool that returns the tail of a failing Actions log. |
-| [aws-context](mods/aws-context) | Display | CLI and Desktop | The AWS profile, region and partition above the prompt, highlighted for GovCloud and for the profiles you name. |
 | [cleanup-check](mods/cleanup-check) | Reminder | CLI and Desktop | A status line after each turn (in Desktop, a line above the prompt, with a Clean up button that drafts the ask into the prompt box for you to read and send): a merged branch still checked out, merged branches to delete, saved plan files left behind, and stray keys, certificates, .env files and Terraform state not in git. Old plugin versions are left to Claude Code, which deletes each one 14 days after an update replaces it. |
 
 **Works in** is where each mod does its job. A mod that only hooks tool
@@ -69,8 +64,7 @@ reaches you.
 
 Requires `git` and Claude Code at or above the release pinned in
 [package.json](package.json), which is the release CI tests against; older
-releases may lack mod APIs the mods use. gh-ci-status needs the [GitHub CLI](https://cli.github.com/) signed
-in, and merged-branch-guard uses it when present; tf-plan-summary needs `terraform`.
+releases may lack mod APIs the mods use. merged-branch-guard uses the [GitHub CLI](https://cli.github.com/) when present; tf-plan-summary needs `terraform`.
 
 1. Clone the repository:
 
@@ -119,8 +113,6 @@ same JSON through MDM or claude.ai's server-managed settings):
   "enabledPlugins": {
     "terraform-guard@claude-code-guardrails": true,
     "aws-guard@claude-code-guardrails": true,
-    "destructive-guard@claude-code-guardrails": true,
-    "self-guard@claude-code-guardrails": true,
     "taint-guard@claude-code-guardrails": true,
     "tf-lint@claude-code-guardrails": true
   }
@@ -134,7 +126,7 @@ same JSON through MDM or claude.ai's server-managed settings):
   [changelog](CHANGELOG.md).
 - **A plugin enabled in managed settings cannot be turned off** by a user:
   disabling it at their own scope leaves it loading. Settings such as
-  `COMMIT_GUARD_OWNERS` go in the same file's `env` block, which also
+  `MODEL_GUARD_SUBAGENT_MODEL` go in the same file's `env` block, which also
   overrides the user's.
 - **To stop users loading other plugins**, managed settings also take
   `strictKnownMarketplaces` (an allowlist of marketplace sources) and
@@ -170,14 +162,12 @@ block, in file order:
   controls, or at `DustyStudy/claude-code-guardrails`.
 - **`enabledPlugins`, `prependPlugins`** lock on the mods that deny or flag
   a mistake whoever is at the keyboard: terraform-guard, aws-guard,
-  destructive-guard, self-guard, taint-guard, tf-lint, secret-allow-guard
-  and commit-identity-guard (it reads `COMMIT_GUARD_OWNERS` from `env`). Add
+  taint-guard, tf-lint and secret-allow-guard. Add
   secret-read-guard to both lists once a release ships it. `prependPlugins`
   is what makes each one count as the organization's mod, and it must keep
   `sec-default@builtin`, Claude Code's own guard, in the list.
 - **Left to each engineer**: jev-guard and model-guard enforce one person's
-  choice of tools and models, and gh-ci-status, aws-context,
-  cleanup-check, output-trimmer and tf-plan-summary only display, remind or
+  choice of tools and models, and cleanup-check, output-trimmer and tf-plan-summary only display, remind or
   add a tool. None is a control, so none is locked on.
 - **`allowManagedHooksOnly`** runs only the hooks and mods managed settings
   deploy, so nobody adds a hook that approves what a guard denies. It also
@@ -221,7 +211,7 @@ block, in file order:
   collector token, use `otelHeadersHelper` rather than a header in this
   file. **A mod's deny is not in this telemetry.** Tested on Claude Code
   2.1.317 with the console exporter, and not re-tested on 2.1.324: a command
-  destructive-guard denied produced no `tool_decision`, `tool_result` or
+  a mod denied produced no `tool_decision`, `tool_result` or
   hook event, while an allowed command produced the first two. (A settings
   `PreToolUse` hook's refusal is documented as a `tool_decision` with source
   `hook`; a mod's is not that.) The audit trail shows which guards were
@@ -247,14 +237,11 @@ read `tier prepend`.
 
 ### Settings
 
-Five mods read a setting from the same `env` block. Each is optional.
-commit-identity-guard, aws-context and model-guard do nothing extra until
-theirs is set.
+Some mods read a setting from the same `env` block. Each is optional.
+model-guard does nothing extra until its is set.
 
 | Variable | Mod | Value |
 |---|---|---|
-| `COMMIT_GUARD_OWNERS` | commit-identity-guard | Comma-separated GitHub owners whose repos the rules cover, such as `my-user,my-org`. |
-| `AWS_CONTEXT_HIGHLIGHT` | aws-context | Comma-separated text that marks a sensitive profile name, such as `security,111122223333`. |
 | `MODEL_GUARD_SUBAGENT_MODEL` | model-guard | The model every subagent starts on, such as `opus`. A fork always runs on the session's own model, as does a session started from this one; a `claude` run from the shell may name no other. |
 | `MODEL_GUARD_FALLBACK_MODEL` | model-guard | The model subagents move to while `MODEL_GUARD_SUBAGENT_MODEL` is out of usage, such as `opus`. A subagent whose run on the pinned model dies on a usage or rate-limit error flags it out until the reset the error or the account's rate-limit window gives (five hours when neither does); until then every subagent request on the pinned model goes to this one, and they move back on their own after it. Forks and the main loop are left alone. Unset: no fallback. |
 | `MODEL_GUARD_FALLBACK_EFFORT` | model-guard | The effort subagents run at on the fallback model: `low`, `medium`, `high`, `xhigh` or `max`. It applies to every agent type, built-in ones included. Unset: the agent's own effort. |
@@ -277,7 +264,7 @@ mod, open it once in a Claude Code session so the engine writes its
 `.claude-plugin/types` folder (ignored by git), then run
 `npx -p typescript tsc -p mods/<name>`.
 
-terraform-guard, aws-guard, supply-chain-guard, destructive-guard, merged-branch-guard, taint-guard, model-guard, self-guard and secret-read-guard each carry the same
+terraform-guard, aws-guard, supply-chain-guard, merged-branch-guard, taint-guard, model-guard and secret-read-guard each carry the same
 `hooks/shell.ts`, which finds where a command line really runs a program
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
@@ -311,7 +298,7 @@ fails if the copies drift apart.
 Each limit is also marked in the code with a `shortcut:` comment that says
 when it would be worth lifting.
 
-- **Command-line guards** (terraform-guard, aws-guard, commit-identity-guard)
+- **Command-line guards** (terraform-guard, aws-guard)
   read the command as written. They do not expand shell variables or
   aliases, and a script file that runs the command itself is not read.
 - **Every command guard** checks the four tools that hand a command line
@@ -389,9 +376,6 @@ when it would be worth lifting.
   `Out-File`); a key built from pieces, or written by a script the command
   runs, passes. Every other MCP tool call is checked whole, so one that
   looks up a real key by its value is denied too.
-- **commit-identity-guard** reads a message file given with `-F`, `--file` or
-  `--body-file`, but not a message piped in with `-F -`. It identifies a repo
-  by its `origin` remote.
 - **secret-allow-guard** checks at session start, so a rule approved during
   a session is caught by the next one. It matches known key formats and
   secrets typed after a flag or variable name, so a bare password with no
@@ -404,13 +388,6 @@ when it would be worth lifting.
   file in every repo on the machine, including ones cloned later, with
   `git config --global core.excludesfile ~/.gitignore_global` and
   `.claude/settings.local.json` as a line in that file.
-- **aws-context** takes a profile's region from the command, then the
-  environment, then the profile's section of `~/.aws/config` (or
-  `AWS_CONFIG_FILE`), which it rereads at most every 30 seconds. With no
-  profile set, it reads `[default]`. A profile whose name says `gov` or
-  `govcloud` is highlighted even before its region is known, and with no
-  region the partition reads "partition unknown". It does not follow
-  `source_profile` or SSO session settings.
 - **output-trimmer** empties saved logs older than seven days each time it
   saves one. The mod API has no file delete, so the empty files stay in
   `$TEMP/claude-output` until you delete that folder.
@@ -426,14 +403,6 @@ when it would be worth lifting.
   interactive CLI when it has a plain word, so `find . -name codex -type f`
   is denied too. A `claude` run from the shell is checked for the model it
   names, not for one set in a settings file or `ANTHROPIC_MODEL`.
-- **destructive-guard** reads a delete's targets as written: a path built
-  at run time, `find -delete`, a script file, or SQL in a file given with
-  `-f` is not read. The project is the session's folder unless that is home
-  or a drive root, where only temp folders count. A `cd` in the command adds
-  its folder as a base for relative targets, in any order. Paths are compared
-  as written, so a symlink or junction inside the project that points out of
-  it is followed by `rm` but not by the guard. Cloud deletes
-  (`aws s3 rb`, `terminate-instances`) are left to aws-guard and IAM.
 - **merged-branch-guard** asks `gh pr list --head <branch>` with a 5-second
   timeout, and lets the push run with a note when `gh` is missing, signed
   out, offline or slow, so it stops a mistake only while GitHub answers. It
@@ -475,11 +444,6 @@ when it would be worth lifting.
   clean.
 - **cleanup-check** does not fetch, so a branch merged on GitHub shows once
   something runs `git fetch --prune`.
-- **gh-ci-status** lists the 20 most recently updated open pull requests of
-  yours and 20 of Dependabot's (on repositories you own, not an org's). A
-  failing log over 4 MiB is cut by the host before the tail is taken; the
-  `checks` tool says so when it happens.
-
 ## Security
 
 See [SECURITY.md](SECURITY.md) to report a way past a guard.

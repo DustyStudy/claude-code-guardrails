@@ -7,28 +7,12 @@
   "description": "Guardrails for Claude Code working on AWS and Terraform",
   "plugins": [
     {
-      "name": "aws-context",
-      "source": "./mods/aws-context"
-    },
-    {
       "name": "aws-guard",
       "source": "./mods/aws-guard"
     },
     {
       "name": "cleanup-check",
       "source": "./mods/cleanup-check"
-    },
-    {
-      "name": "commit-identity-guard",
-      "source": "./mods/commit-identity-guard"
-    },
-    {
-      "name": "destructive-guard",
-      "source": "./mods/destructive-guard"
-    },
-    {
-      "name": "gh-ci-status",
-      "source": "./mods/gh-ci-status"
     },
     {
       "name": "jev-guard",
@@ -53,10 +37,6 @@
     {
       "name": "secret-read-guard",
       "source": "./mods/secret-read-guard"
-    },
-    {
-      "name": "self-guard",
-      "source": "./mods/self-guard"
     },
     {
       "name": "supply-chain-guard",

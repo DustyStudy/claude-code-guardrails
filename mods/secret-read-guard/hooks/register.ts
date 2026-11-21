@@ -4,7 +4,7 @@ import { invocations } from './shell'
 
 const bin = (names: string) => new RegExp(String.raw`^(.*[\\/])?(${names})(\.exe|\.cmd|\.ps1)?$`, 'i')
 
-// One spelling per path, as in self-guard: forward slashes, lower case, Git Bash's /c/ as c:/, . and .. resolved, and Windows'
+// One spelling per path: forward slashes, lower case, Git Bash's /c/ as c:/, . and .. resolved, and Windows'
 // \\?\ prefix, trailing dots and spaces, and name:stream forms folded into the file they open.
 const norm = (path: string) => {
   const parts: string[] = []

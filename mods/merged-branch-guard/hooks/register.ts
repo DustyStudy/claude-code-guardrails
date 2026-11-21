@@ -52,7 +52,7 @@ export const register: Register = on => {
         continue
       }
 
-      // shortcut: the repo is the session's folder plus git's own -C options, a `cd` earlier in the command is not followed; read the cds as destructive-guard does if pushes after a cd get missed.
+      // shortcut: the repo is the session's folder plus git's own -C options, a `cd` earlier in the command is not followed; follow the cds if pushes after a cd get missed.
       const cwd = await $.session.cwd().catch(() => undefined)
 
       if (cwd === undefined) {
