@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 const TERRAFORM = /\.(tf|tfvars|hcl|tofu)(\.json)?$/i
 // AWS's documented sample keys pass, so docs and tests can quote them: an access key id ending EXAMPLE, and these two secret
 // keys exactly (a value that only holds EXAMPLE does not). Built in parts, so no secret scanner takes them for real ones.
-const SAMPLE_SECRETS = ['wJalrXUtnFEMI/K7MDENG/' + 'bPxRfiCYEXAMPLEKEY', 'je7MtGbClwBF/2Zp9Utk/' + 'h3yCo8nvbEXAMPLEKEY'].join('|')
+const SAMPLE_BODIES = ['wJalrXUtnFEMI/K7MDENG/' + 'bPxRfiCYEXAMPLEKEY', 'je7MtGbClwBF/2Zp9Utk/' + 'h3yCo8nvbEXAMPLEKEY'].join('|')
 // A quote, plain or escaped for JSON, a shell or PowerShell: " \" \\\" `"
 const QUOTE = String.raw`(?:[\\\x60]{0,8}["'])?`
 // The key id with no letter or digit on either side (KEY_AKIA... is one). The secret key by each of its names: the provider's
@@ -11,7 +11,7 @@ const QUOTE = String.raw`(?:[\\\x60]{0,8}["'])?`
 // aws.secret.key; then =, :, the > of an XML tag or the space of aws configure set.
 const SECRET = new RegExp(
   String.raw`(?<![A-Z0-9])(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}(?![A-Z0-9])|` +
-    String.raw`secret[_.-]?(?:access[_.-]?)?key${QUOTE}(?:\s*[=:>]+|\s)\s*${QUOTE}(?!(?:${SAMPLE_SECRETS})(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
+    String.raw`secret[_.-]?(?:access[_.-]?)?key${QUOTE}(?:\s*[=:>]+|\s)\s*${QUOTE}(?!(?:${SAMPLE_BODIES})(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
   'i',
 )
 // The other secrets the rule names: private keys and the API tokens with a fixed shape. This is secret-allow-guard's list of
