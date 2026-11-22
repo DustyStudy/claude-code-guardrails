@@ -1,13 +1,25 @@
 import type { Register } from 'claude-code'
 
-import { invocations } from './shell'
+import { DYNAMIC, invocations, unreadable } from './shell'
 
 const BINARY = /^(.*[\\/])?aws(\.exe|\.cmd)?$/i
-// pip's AWS CLI also runs as a module: python -m awscli iam delete-role.
-const PYTHON = /^(.*[\\/])?py(thon[\d.]*)?(\.exe)?$/i
+// The AWS CLI's container image, which takes the call as the binary does: docker run amazon/aws-cli iam delete-role.
+const IMAGE = /(^|\/)aws-cli(:[\w.-]+)?(@sha256:\w+)?$/i
+// Programs that run aws from their own arguments and are not among the shared parser's wrappers: python (-m awscli is pip's AWS CLI),
+// the package and environment runners, the credential helpers, ssh and the container tools.
+// shortcut: a list of names, so a runner not named here hides the call; add it when one is seen in use.
+const RUNNER =
+  /^(.*[\\/])?(py(thon[\d.]*)?|uvx?|poetry|pipx|pipenv|pdm|hatch|rye|conda|mamba|micromamba|pixi|npx|bunx|saml2aws|aws-okta|awsume|granted|assume|gimme-aws-creds|chamber|ssh|sshpass|docker|podman|nerdctl|kubectl)(\.exe|\.cmd)?$/i
 // Global options that take a value, which is not the service or the operation.
 const VALUE_OPTION =
   /^--(profile|region|output|endpoint-url|query|color|ca-bundle|cli-read-timeout|cli-connect-timeout|cli-binary-format)$/
+// Global options that take none, and an option written with its value (--endpoint-url=x): the word after one is not its value.
+const NO_VALUE = /^--(debug|no-verify-ssl|no-paginate|no-sign-request|no-cli-pager|(no-)?cli-auto-prompt|version)$|=/
+// More option-led words before the operation, or more aws calls in one runner or cmdlet calls in one command, than any real
+// command has: denied, not read on, so the work stays linear in the command's length.
+const MOST = 64
+const TOO_LONG = 'with more options than the guard reads'
+const UNREAD = 'with an operation the shell fills in'
 const r = String.raw
 // The operations denied, by AWS CLI service: what turns off logging or detection, opens S3 to the public, changes who can do what
 // in IAM or KMS, or destroys data that IAM often allows. Creating and deploying (create-role, put-object, run-instances) pass.
@@ -30,7 +42,7 @@ const OPERATIONS: Readonly<Record<string, readonly string[]>> = {
     'deactivate-mfa-device',
     'update-account-password-policy',
     // Any change to a federation provider: create, update, add or remove a client ID or thumbprint.
-    r`(?!get-|list-)[\w-]*(saml|open-id-connect)-provider[\w-]*`,
+    r`(?!get-|list-)[\w-]{0,40}(saml|open-id-connect)-provider[\w-]{0,40}`,
   ],
   // IAM Identity Center: any call but a read hands out account access; its directory's users and groups are who gets it.
   'sso-admin': [r`(?!describe-|list-|get-|help$)[a-z][\w-]*`],
@@ -97,6 +109,8 @@ const OPERATIONS: Readonly<Record<string, readonly string[]>> = {
 const DENIED = new Map(
   Object.entries(OPERATIONS).map(([service, operations]) => [service, new RegExp(`^(${operations.join('|')})$`)]),
 )
+// Services whose every call but a read is denied: any word is an operation of theirs.
+const ANY_WRITE = new Set(['organizations', 'sso-admin'])
 // Calls denied only with the option that makes them destroy: one `s3 rm` and a secret deleted with its recovery window still run.
 // The CLI takes an option by any unambiguous prefix, so the shortest one is matched.
 const DENIED_WITH = new Map([
@@ -104,8 +118,10 @@ const DENIED_WITH = new Map([
   // Its JSON input can carry ForceDeleteWithoutRecovery, and is not read.
   ['secretsmanager delete-secret', /^--(f|cli-input)/],
   // A static key written to disk; `profile.dev.aws_secret_access_key` names one profile's. Setting the region still runs.
-  ['configure set', /(^|\.)aws_(access_key_id|secret_access_key|session_token)$/],
+  // The CLI reads a config file's key names in any case, so AWS_SECRET_ACCESS_KEY is the same key.
+  ['configure set', /(^|\.)aws_(access_key_id|secret_access_key|session_token)$/i],
 ])
+const GUARDED = new Set([...DENIED.keys(), ...[...DENIED_WITH.keys()].map(call => call.split(' ')[0] ?? '')])
 // The option that makes a call only say what it would do, for the services that have one.
 const DRY_RUN = new Map([
   ['ec2', '--dry-run'],
@@ -124,7 +140,7 @@ const CMDLET_NAME = [
   // Identity Center's admin cmdlets but Get; the identity store's writes, by full noun (Find- and Assert-IDS* are reads).
   r`(?!Get-)[a-z]+-SSOADMN\w+|(New|Update|Remove)-IDS(User|Group(Membership)?|IdentityStore)`,
   r`(New|Update|Enable)-IAMRA(TrustAnchor|Profile)`,
-  r`Update-IAMAccountPasswordPolicy|(?!Get-)[a-z]+-IAM\w*(SAML|OpenIDConnect)Provider\w*`,
+  r`Update-IAMAccountPasswordPolicy|(?!Get-)[a-z]+-IAM\w{0,40}(SAML|OpenIDConnect)Provider\w{0,40}`,
   r`Request-KMSKeyDeletion|Remove-KMSImportedKeyMaterial|Disable-KMSKey(Rotation)?|Write-KMSKeyPolicy`,
   r`(New|Revoke|Disable)-KMSGrant|(Remove|Disconnect)-KMSCustomKeyStore`,
   r`Stop-CT(Logging|EventDataStoreIngestion)|(Remove|Update)-CT(Trail|EventDataStore)|Write-CT(Event|Insight)Selector`,
@@ -157,64 +173,223 @@ const CMDLET_WITH: readonly (readonly [string, string, (args: readonly string[])
 ]
 
 // The service and operation are the first two bare words, wherever the global options sit.
-const mutation = (args: readonly string[]): string | undefined => {
-  const bare = args.flatMap((word, i) => (word.startsWith('-') || VALUE_OPTION.test(args[i - 1] ?? '') ? [] : [i]))
+// `valued` holds the options the command's text gives a substitution for a value (--region $(...)).
+const mutation = (written: readonly string[], valued: ReadonlySet<string>): string | undefined => {
+  // A shell drops an escape inside a word: delete\-role (bash), delete`-role (PowerShell), delete^-role (cmd).
+  const args = written.map(word => word.replace(/[\\^`]/g, ''))
+  const isSkeleton = args.includes('--generate-cli-skeleton')
+  // A $( ), ` ` or PowerShell ( ) stood among the arguments: the shell can put any word there, the operation or an option.
+  const isDynamic = args.includes(DYNAMIC)
+  // The parser leaves no word where a substitution stood, so an option whose value was one takes no word after it here:
+  // in `--region $(...) ec2 describe-instances`, ec2 is the service. The text may show that option in another call, so each
+  // reading is still checked: the word after it is a service that may be a value.
+  const isValued = isDynamic && args.some(word => valued.has(word))
+  const bare = args.flatMap((word, i) => {
+    const before = args[i - 1] ?? ''
+
+    return word.startsWith('-') || (VALUE_OPTION.test(before) && !(isDynamic && valued.has(before))) ? [] : [i]
+  })
+  // With the substitution placed as an option's value, only what a guarded service could be handed is denied: no words at all, a
+  // first word that is a denied operation (the service filled in), or a guarded service with no operation written. Otherwise it
+  // can stand anywhere, and any call with no operation written is denied.
+  const first = args[bare[0] ?? -1]
+  let unread = isDynamic && !isValued ? UNREAD : undefined
+  let pairs = 0
+
+  if (isValued && (first === undefined || [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(first)))) {
+    return UNREAD
+  }
 
   for (const [nth, serviceAt] of bare.entries()) {
-    const operationAt = bare[nth + 1] ?? args.length
-    const [service = '', operation] = [args[serviceAt], args[operationAt]]
-
-    if (operation === undefined) {
-      return undefined
-    }
-
-    const call = `${service} ${operation}`
+    const service = args[serviceAt] ?? ''
     const dryRun = DRY_RUN.get(service)
-    // `help` right after the operation, a skeleton and a dry run only print: nothing is called. `--role-name help` is a value.
     // --no-dry-run after --dry-run takes it back.
-    const isDryRun =
-      args[operationAt + 1] === 'help' ||
-      args.includes('--generate-cli-skeleton') ||
-      (dryRun !== undefined && args.includes(dryRun) && !args.includes('--no-dry-run'))
-    const option = DENIED_WITH.get(call)
-    const isDenied = option === undefined ? DENIED.get(service)?.test(operation) : has(option)(args)
+    const isDryRun = dryRun !== undefined && args.includes(dryRun) && !args.includes('--no-dry-run')
 
-    if (!isDryRun && isDenied) {
-      return call
+    let isWritten = false
+
+    for (const operationAt of bare.slice(nth + 1, nth + 1 + MOST)) {
+      if (++pairs > MOST) {
+        return TOO_LONG
+      }
+
+      const operation = args[operationAt] ?? ''
+      const call = `${service} ${operation}`
+      const option = DENIED_WITH.get(call)
+      const isDenied = option === undefined ? DENIED.get(service)?.test(operation) : isDynamic || has(option)(args)
+
+      // `help` right after the operation, a skeleton and a dry run only print: nothing is called. `--role-name help` is a value.
+      if (isDenied && args[operationAt + 1] !== 'help' && !isSkeleton && !isDryRun) {
+        return call
+      }
+
+      // A word after an option may be its value and the operation the next one: the CLI takes a global option anywhere, by any
+      // unambiguous prefix (iam --prof dev delete-role, iam --endpoint http://x delete-role).
+      const before = args[operationAt - 1] ?? ''
+
+      // An operation written out: no word the shell adds can take its place.
+      if (!before.startsWith('-') || NO_VALUE.test(before)) {
+        unread = undefined
+        isWritten = true
+        break
+      }
     }
 
-    // A word after an option may be its value, not the service: VALUE_OPTION misses abbreviations (--prof x) and new options.
+    if (isValued && !isWritten && GUARDED.has(service)) {
+      return UNREAD
+    }
+
+    // The same before the service: VALUE_OPTION misses abbreviations (--prof x) and new options.
     if (!(args[serviceAt - 1] ?? '').startsWith('-')) {
-      return undefined
+      return unread
+    }
+  }
+
+  return unread
+}
+
+// The aws calls a runner's arguments start: after the binary or its image, or after -m awscli (python, uv run). A quoted argument
+// is a command line of its own (ssh host "aws ...", docker run image sh -c "aws ...").
+const inRunner = (args: readonly string[], depth: number, valued: ReadonlySet<string>): string | undefined => {
+  let starts = 0
+
+  for (const [i, word] of args.entries()) {
+    const from =
+      BINARY.test(word) || IMAGE.test(word) || /^-\w*mawscli$/.test(word) ? i + 1 : /^-\w*m$/.test(word) && args[i + 1] === 'awscli' ? i + 2 : -1
+    const cli = from < 0 ? undefined : ++starts > MOST ? TOO_LONG : mutation(args.slice(from), valued)
+    const call = cli === undefined ? (/\s/.test(word) ? denied(word, depth + 1) : undefined) : `aws ${cli}`
+
+    if (call !== undefined) {
+      return call
     }
   }
 
   return undefined
 }
 
-// -WhatIf only says what the cmdlet would do.
-const isWhatIf = (args: readonly string[]) => args.some(arg => /^-WhatIf(:\$true)?$/i.test(arg))
+// -WhatIf only says what the cmdlet would do. After -- or --% every word is a value, and so is one a comma joins to the value before it.
+const isWhatIf = (args: readonly string[]) => {
+  const end = args.findIndex(arg => /^--%?$/.test(arg))
+
+  return args.slice(0, end < 0 ? args.length : end).some((arg, i) => /^-WhatIf(:\$true)?$/i.test(arg) && !(args[i - 1] ?? '').endsWith(','))
+}
+
+// Each call's arguments twice: as the parser hands them, quotes gone, and with a quoted or escaped -Word kept from reading as a
+// parameter, since PowerShell passes one as a value (-OutVariable '-WhatIf'). What denies is read from both, what allows from the second.
+const cmdletCalls = (command: string, name: RegExp): (readonly [readonly string[], readonly string[]])[] => {
+  const read = invocations(command, name)
+  const strict = read.length > 0 ? invocations(command.replace(/(["'`])-/g, '$1‐'), name) : []
+
+  return read.map((args, i) => [args, (strict.length === read.length ? strict[i] : undefined) ?? []])
+}
+
+const HERE_STRING = /@(["'])[ \t]*\r?\n/y
+
+// Where a block comment or a here-string that starts at `at` ends: neither closes at a quote, bracket or line's end inside it.
+const spanEnd = (text: string, at: number): number | undefined => {
+  const close = (found: number, length: number) => (found < 0 ? text.length : found + length)
+
+  if (text.startsWith('<#', at)) {
+    return close(text.indexOf('#>', at + 2), 2)
+  }
+
+  HERE_STRING.lastIndex = at
+  const here = text[at] === '@' ? HERE_STRING.exec(text) : null
+
+  return here === null ? undefined : close(text.indexOf(`\n${here[1]}@`, at), 3)
+}
+
+// A call's own words from the end of its name, read on where the parser stops: PowerShell carries a call through ( ) and { }, over
+// a line's end after a backtick, and through a here-string or block comment. A quote or backtick stays in its word, so a quoted
+// -Word is no parameter here either. With `quotes` off a quote is a plain character: the name may itself sit inside quotes
+// (pwsh -c "..."), where the pairs are not known.
+const ownWords = (text: string, from: number, quotes: boolean): string[] => {
+  let words = ''
+  let depth = 0
+  let quote = ''
+
+  // A quote right after the name closes the name's own: & "Stop-EC2Instance" -Terminate.
+  for (let i = from + (/["']/.test(text[from] ?? '') ? 1 : 0); i < text.length; i++) {
+    const c = text[i] ?? ''
+    const end = quote === '' ? spanEnd(text, i) : undefined
+    let own = c
+
+    if (end !== undefined) {
+      i = end - 1
+      own = " ' "
+    } else if (c === '`' && quote !== "'") {
+      // It escapes the next character: a line's end carries the call on, anything else is part of a value.
+      i += text.startsWith('\r\n', i + 1) ? 2 : 1
+      own = quote !== '' ? '' : /\s/.test(text[i] ?? '') ? ' ' : '`'
+    } else if (quote !== '') {
+      quote = c === quote ? '' : quote
+      own = ''
+    } else if (quotes && (c === '"' || c === "'")) {
+      quote = c
+    } else if (c === '(' || c === '{') {
+      words += depth++ === 0 ? ' ' : ''
+      own = ''
+    } else if (c === ')' || c === '}') {
+      if (depth-- === 0) {
+        break
+      }
+
+      own = ''
+    } else if (depth === 0 && /[;|&\n]/.test(c)) {
+      break
+    }
+
+    words += depth === 0 ? own : ''
+  }
+
+  return words.split(/\s+/)
+}
 
 // The call to name in the deny: the CLI's service and operation, or the cmdlet as written.
-const denied = (command: string): string | undefined => {
-  const viaPython = invocations(command, PYTHON).filter(args => args[0] === '-m' && args[1] === 'awscli').map(args => args.slice(2))
-  const cli = [...invocations(command, BINARY), ...viaPython].map(mutation).find(Boolean)
+const denied = (command: string, depth = 0): string | undefined => {
+  if (depth > 4) {
+    return 'a command nested deeper than the guard reads'
+  }
+
+  const valued = new Set([...command.matchAll(/(--[\w-]+)\s+["']?(?:\$\(|`|\()/g)].map(([, option = '']) => option))
+  const cli = invocations(command, BINARY).map(args => mutation(args, valued)).find(Boolean)
   if (cli !== undefined) {
     return `aws ${cli}`
   }
+
+  const viaRunner = invocations(command, RUNNER).map(args => inRunner(args, depth, valued)).find(Boolean)
+  if (viaRunner !== undefined) {
+    return viaRunner
+  }
+
   // The parser hands back a call's arguments, not its name, so the name is found in the text.
-  if (invocations(command, CMDLET).some(args => !isWhatIf(args))) {
+  if (cmdletCalls(command, CMDLET).some(([, strict]) => !isWhatIf(strict))) {
     return command.match(CMDLET_IN_TEXT)?.[0] ?? 'an AWS Tools for PowerShell call'
   }
 
   return CMDLET_WITH.find(([name, , isDenied]) => {
-    const calls = invocations(command, named(name))
-    // The parser ends a call at a parenthesis (-InstanceId ($x) -Terminate), so each statement it starts in the text counts too.
-    const written = [...command.matchAll(new RegExp(r`(?<![\w-])(${name})(?![\w-])[^;|\n]*`, 'gi'))].map(([statement]) =>
-      statement.split(/[\s(){}]+/),
-    )
+    const calls = cmdletCalls(command, named(name))
 
-    return calls.length > 0 && [...calls, ...written].some(args => !isWhatIf(args) && isDenied(args))
+    if (calls.length === 0) {
+      return false
+    }
+
+    // The parser ends a call at a parenthesis (-InstanceId ($x) -Terminate), so each call the text starts is read too: every word to
+    // the statement's end, and the call's own words with quotes paired and not.
+    const statements = [...command.replace(/`\r?\n/g, ' ').matchAll(new RegExp(r`(?<![\w-])(${name})(?![\w-])[^;|\n]*`, 'gi'))].map(
+      ([statement]) => statement.split(/[\s(){}]+/),
+    )
+    const starts = [...command.matchAll(new RegExp(r`(?<![\w-])(${name})(?![\w-])`, 'gi'))].map(match => (match.index ?? 0) + match[0].length)
+    const written = [...statements, ...starts.slice(0, MOST).flatMap(from => [true, false].map(quotes => ownWords(command, from, quotes)))]
+
+    // A call the text does not show by name (Stop-EC2"Instance"), or more of them than are read, is denied unread.
+    return (
+      starts.length === 0 ||
+      starts.length > MOST ||
+      [...calls, ...written.map(words => [words, words] as const)].some(
+        ([args, strict]) => !isWhatIf(strict) && (isDenied(args) || isDenied(strict)),
+      )
+    )
   })?.[1]
 }
 
@@ -227,6 +402,13 @@ export const register: Register = on => {
   on('tool.call', { tool: SHELL_TOOLS }, ($, e, next) => {
     // A Monitor that opens a WebSocket has no command.
     const command = String((e as { command?: unknown }).command ?? '')
+    // Too long or too nested to read: denied with the parser's reason, not as a guard that failed.
+    const why = unreadable(command)
+
+    if (why !== undefined) {
+      return { deny: `${$.plugin.name}: ${why}, so it is not run unread. Give the user the exact command to run themselves with the \`!\` prefix.` }
+    }
+
     const call = denied(command)
 
     return call === undefined

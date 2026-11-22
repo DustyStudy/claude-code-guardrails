@@ -6,6 +6,10 @@ const AWS = `AKIA${'X'.repeat(16)}`
 const GITHUB = `ghp_${'a1'.repeat(18)}`
 const OPENAI = `sk-${'z9'.repeat(12)}`
 const AUTH = ['Author', 'ization: Bearer'].join('')
+const SLACK_APP = ['xapp', '1', 'A0'.repeat(8)].join('-')
+const SLACK_HOOK = `${['hooks', 'slack', 'com'].join('.')}/services/T${'A1'.repeat(4)}/B${'C2'.repeat(4)}/${'d3'.repeat(12)}`
+const AZURE = `Account${'Key'}=${'Ab1+'.repeat(21)}Ab==`
+const PGP = `-----BEGIN ${'PGP PRIVATE'} KEY BLOCK-----`
 
 const settings = (...allow: string[]) => JSON.stringify({ permissions: { allow } })
 
@@ -80,6 +84,19 @@ const RULES: readonly (readonly [string, boolean])[] = [
   ['Bash(DB_PASSWORD=pa$$word1 ./migrate)', true],
   [`Bash(curl -H "X-Session: ${'eyJ'}${'hbGciOiJIUzI1NiJ9'}.${'eyJ'}${'zdWIiOiIxIn0abc'}.${'c2ln'.repeat(6)}" https://api.example.com)`, true],
   [`Bash(echo ${'sk_live'}_${'aB3d'.repeat(6)})`, true],
+  // The formats tf-lint also knows.
+  [`Bash(echo ${SLACK_APP})`, true],
+  [`Bash(curl -d hi https://${SLACK_HOOK})`, true],
+  [`Bash(az storage blob list --connection-string "AccountName=a;${AZURE}")`, true],
+  [`Bash(echo "${PGP}")`, true],
+  // A secret after a long run of arguments, inside the bounded window.
+  [`Bash(docker --config ${'/a'.repeat(60)} login -u me -p hunter2 registry.example.com)`, true],
+  [`Bash(curl ${'-H "X-A: b" '.repeat(20)}-u admin:${'hunter'}2 https://api.example.com)`, true],
+  ['Bash(DB_PASS_WORD_FOR_THE_APP=hunter2pw ./migrate)', true],
+  ['Bash(curl https://hooks.slack.com/services)', false],
+  ['Bash(echo AccountKey=$STORAGE_KEY)', false],
+  ['Bash(echo "-----BEGIN PGP PUBLIC KEY BLOCK-----")', false],
+  ['Bash(./xapp-1-up)', false],
   ['Bash(curl -u $API_USER:$API_PASS https://api.example.com)', false],
   ['Bash(curl -u admin https://api.example.com)', false],
   ['Bash(curl -u admin:*)', false],
@@ -139,7 +156,7 @@ test('flags a literal secret in settings env', async ($, on) => {
   const toast = await start($, on, {
     '/repo/.claude/settings.json': JSON.stringify({ env: { GITHUB_TOKEN: GITHUB, AWS_REGION: 'us-gov-west-1' } }),
   })
-  expect(toast.includes('/repo/.claude/settings.json: 1 entry looks like a literal secret (permission rules, env, MCP env or headers)')).toBe(true)
+  expect(toast.includes("/repo/.claude/settings.json: 1 entry looks like a literal secret (permission rules, env, or an MCP server's env, headers, args, url or command)")).toBe(true)
 })
 
 test('flags a literal secret in settings MCP env and headers, and counts both', async ($, on) => {
@@ -217,6 +234,98 @@ test('scans a file that does not parse, whole', async ($, on) => {
   const toast = await start($, on, { [LOCAL]: `{ "permissions": { "allow": ["Bash(echo ${AWS})", ] } }` }, IGNORED)
   expect(/literal secret/.test(toast)).toBe(true)
 })
+
+const PASSWORD = ['hunter2', 'hunter2'].join('')
+const MCP = '/repo/.mcp.json'
+
+// a file strict JSON rejects, or a name-based secret in one; then whether it is flagged
+const BROKEN: readonly (readonly [string, string, boolean])[] = [
+  ['a BOM', `﻿{"env":{"DB_PASSWORD":"${PASSWORD}"}}`, true],
+  ['a trailing comma', `{"env":{"DB_PASSWORD":"${PASSWORD}",}}`, true],
+  ['a BOM and a trailing comma', `﻿{"env":{"MYSQL_PWD":"${PASSWORD}"},}`, true],
+  ['a trailing comma and a header', `{"mcpServers":{"a":{"headers":{"X-API-Key":"${API_KEY}"},}}}`, true],
+  ['a comment and an env password', `{ // local\n "env": { "DB_PASSWORD": "${PASSWORD}" } }`, true],
+  ['a comment and MYSQL_PWD', `{ // local\n "env": {"MYSQL_PWD":"${PASSWORD}"} }`, true],
+  ['a cut-off file and a header', `{"mcpServers":{"a":{"headers":{"X-API-Key":"${API_KEY}"`, true],
+  ['a BOM and no secret', '﻿{"env":{"AWS_REGION":"us-gov-west-1","DB_PASSWORD":"$DB_PASSWORD"}}', false],
+  ['a trailing comma and no secret', '{"env":{"MAX_THINKING_TOKENS":"8000","API_KEY":"${API_KEY}",}}', false],
+  ['a comment and no secret', '{ // local\n "env": {"AWS_REGION":"us-gov-west-1","DB_PASSWORD":"$DB_PASSWORD","MAX_THINKING_TOKENS":"8000"} }', false],
+]
+
+for (const [name, text, isSecret] of BROKEN) {
+  test(`${isSecret ? 'flags' : 'passes'} a file with ${name}`, async ($, on) => {
+    const toast = await start($, on, { [MCP]: text })
+    expect(toast.includes('/repo/.mcp.json: 1 entry looks')).toBe(isSecret)
+    expect(toast.includes(PASSWORD) || toast.includes(API_KEY)).toBe(false)
+  })
+}
+
+// an MCP server, then how many of its entries read as a literal secret
+const SERVERS: readonly (readonly [string, Record<string, unknown>, number])[] = [
+  ['a key after a flag in args', { command: 'npx', args: ['-y', 'server', '--api-key', `${API_KEY}7890`] }, 1],
+  ['a token in args', { command: 'npx', args: ['server', GITHUB] }, 1],
+  ['NAME=value in args', { command: 'docker', args: ['run', '-e', `DB_PASSWORD=${PASSWORD}`, 'image'] }, 1],
+  ['a password in the url', { type: 'http', url: `https://user:${PASSWORD}@mcp.example.com/mcp` }, 1],
+  ['a key in the url query', { type: 'http', url: `https://mcp.example.com/mcp?api_key=${API_KEY}` }, 1],
+  ['a secret in the command', { command: `PGPASSWORD=${PASSWORD} psql-mcp` }, 1],
+  ['secrets in args, url, env and headers', { command: 'npx', args: [OPENAI], url: `https://${SLACK_HOOK}`, env: { API_KEY }, headers: { Authorization: BEARER } }, 4],
+  ['variables in args and url', { command: 'npx', args: ['--api-key', '${API_KEY}', '--token', '$TOKEN'], url: 'https://${USER}:${PASS}@mcp.example.com/mcp?api_key=${KEY}' }, 0],
+  ['ordinary args and url', { command: 'docker', args: ['run', '-p', '8080:80', '--rm', 'mcp/server', '--port', '8080', 12, null], url: 'https://mcp.example.com/mcp?mode=read' }, 0],
+  ['args, url and command of the wrong type', { command: 7, args: 'npx', url: ['x'] }, 0],
+]
+
+for (const [name, server, count] of SERVERS) {
+  test(`${count > 0 ? 'flags' : 'passes'} an MCP server with ${name}`, async ($, on) => {
+    const toast = await start($, on, {
+      [MCP]: JSON.stringify({ mcpServers: { a: server } }),
+      '/home/me/.claude.json': JSON.stringify({ projects: { '/repo': { mcpServers: { a: server } } } }),
+    })
+    const expected = `${count} ${count === 1 ? 'entry looks' : 'entries look'}`
+    expect(toast.includes(`/repo/.mcp.json: ${expected}`)).toBe(count > 0)
+    expect(toast.includes(`/home/me/.claude.json: ${expected}`)).toBe(count > 0)
+    expect(count > 0 || toast === '').toBe(true)
+  })
+}
+
+test('never shows a secret from any place it reads, well-formed or not', async ($, on) => {
+  const secrets = [AWS, GITHUB, OPENAI, API_KEY, PASSWORD, SLACK_APP, SLACK_HOOK, AZURE, 'ab'.repeat(10)]
+  const server = {
+    command: `PGPASSWORD=${PASSWORD} npx`,
+    args: ['--api-key', API_KEY, GITHUB, SLACK_APP],
+    url: `https://user:${PASSWORD}@mcp.example.com/mcp?api_key=${API_KEY}`,
+    env: { OPENAI_API_KEY: OPENAI, STORAGE: AZURE },
+    headers: { Authorization: BEARER },
+  }
+  const whole = JSON.stringify({ permissions: { allow: [`Bash(echo ${AWS})`, `Bash(curl https://${SLACK_HOOK})`] }, env: server.env, mcpServers: { a: server } })
+  const toast = await start(
+    $,
+    on,
+    {
+      [LOCAL]: whole,
+      [MCP]: `﻿${whole.slice(0, -1)},}`,
+      '/home/me/.claude.json': `// broken\n${whole}`,
+      '/home/me/.claude/settings.json': whole.slice(0, -3),
+    },
+    { 'ls-files': 0 },
+  )
+  expect(toast.includes('/repo/.claude/settings.local.json: 9 entries look')).toBe(true)
+  expect(toast.includes('/repo/.mcp.json: 9 entries look')).toBe(true)
+  expect(toast.includes('/home/me/.claude.json: 1 entry looks')).toBe(true)
+  expect(toast.includes('/home/me/.claude/settings.json: 1 entry looks')).toBe(true)
+  for (const secret of secrets) {
+    expect(toast.includes(secret)).toBe(false)
+  }
+})
+
+// Each took seconds, or never ended, while a run before a later literal was unbounded.
+for (const fragment of ['docker login ', 'a', '-', 'sshpass ', 'mysql ', 'redis-cli ', 'eyJ-', 'token_a']) {
+  test(`reads 100 KB of ${JSON.stringify(fragment)} without holding session start`, async ($, on) => {
+    const big = fragment.repeat(Math.ceil(100_000 / fragment.length))
+    const began = Date.now()
+    expect(await start($, on, { [MCP]: JSON.stringify({ mcpServers: { a: { command: big, env: { A: big } } } }), [LOCAL]: big }, IGNORED)).toBe('')
+    expect(Date.now() - began < 3_000).toBe(true)
+  })
+}
 
 test('flags a local settings file tracked by git', async ($, on) => {
   const toast = await start($, on, { [LOCAL]: settings('Bash(ls)') }, { 'ls-files': 0 })

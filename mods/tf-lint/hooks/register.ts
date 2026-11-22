@@ -1,12 +1,22 @@
 import type { Register } from 'claude-code'
 
 const TERRAFORM = /\.(tf|tfvars|hcl|tofu)(\.json)?$/i
-// AWS's documented sample keys (…EXAMPLE) pass, so docs and tests can quote them. The secret key by each of its names: the
-// provider's secret_key, the CLI's aws_secret_access_key, the API's SecretAccessKey.
-const SECRET =
-  /\b(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}\b|secret_?(?:access_?)?key["']?\s*[=:]\s*["']?(?![^"'\s]*EXAMPLE)[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/i
+// AWS's documented sample keys pass, so docs and tests can quote them: an access key id ending EXAMPLE, and these two secret
+// keys exactly (a value that only holds EXAMPLE does not). Built in parts, so no secret scanner takes them for real ones.
+const SAMPLE_BODIES = ['wJalrXUtnFEMI/K7MDENG/' + 'bPxRfiCYEXAMPLEKEY', 'je7MtGbClwBF/2Zp9Utk/' + 'h3yCo8nvbEXAMPLEKEY'].join('|')
+// A quote, plain or escaped for JSON, a shell or PowerShell: " \" \\\" `"
+const QUOTE = String.raw`(?:[\\\x60]{0,8}["'])?`
+// The key id with no letter or digit on either side (KEY_AKIA... is one). The secret key by each of its names: the provider's
+// secret_key, the CLI's aws_secret_access_key, the API's SecretAccessKey, an action's aws-secret-access-key and Java's
+// aws.secret.key; then =, :, the > of an XML tag or the space of aws configure set.
+const SECRET = new RegExp(
+  String.raw`(?<![A-Z0-9])(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}(?![A-Z0-9])|` +
+    String.raw`secret[_.-]?(?:access[_.-]?)?key${QUOTE}(?:\s*[=:>]+|\s)\s*${QUOTE}(?!(?:${SAMPLE_BODIES})(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
+  'i',
+)
 // The other secrets the rule names: private keys and the API tokens with a fixed shape. This is secret-allow-guard's list of
-// formats and more; mods load folder by folder, so each keeps its own. A value holding EXAMPLE passes, as AWS's samples do.
+// formats and more; mods load folder by folder, so each keeps its own. A placeholder made of EXAMPLE passes; a token with
+// EXAMPLE added to it does not, since it is still a token once each EXAMPLE is cut to one letter.
 // shortcut: no JWTs, bearer values, password= or user:pass@host: in source files those are mostly fixtures and local defaults,
 // so they would deny ordinary edits; run gitleaks or trufflehog in CI for those.
 const TOKENS = new RegExp(
@@ -30,48 +40,110 @@ const TOKENS = new RegExp(
   ].join('|'),
   'g',
 )
-const hasToken = (text: string) => (text.match(TOKENS) ?? []).some(found => !found.includes('EXAMPLE'))
+const hasToken = (text: string) =>
+  (text.match(TOKENS) ?? []).some(found => found.replace(/EXAMPLE/g, 'X').match(TOKENS) !== null)
 const secretIn = (text: string) =>
   SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
-// Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too.
-const WORKFLOW = /(^|[\\/])\.github[\\/]workflows[\\/][^\\/]+\.ya?ml$/i
+// Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too. A composite action under .github/actions is read the same way.
+const WORKFLOW = /(^|[\\/])\.github[\\/](?:workflows[\\/][^\\/]+|actions[\\/](?:[^\\/]+[\\/])*action)\.ya?ml$/i
 // The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, >&-, -> and >= are not
 // redirections; >&file and =>file are. tee counts only as a command after a pipe, not in a filename like tee.log.
+// aws configure set and npm config set write a credentials file with no redirection.
 const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
-const WRITES = /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b/i
+const WRITES = /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b|\bconfig(?:ure)?\s+set\b/i
 const WORLD = /0\.0\.0\.0\/0|::\/0/
 const MANAGEMENT_PORTS = [22, 3389]
 
 const port = (body: string, name: string) =>
   Number(new RegExp(`\\b${name}\\s*=\\s*"?(-?\\d+)`).exec(body)?.[1] ?? Number.NaN)
 
-// The body of each block whose header matches, with its nested blocks and maps emptied so a setting is read at the block's own level; a block the text cuts off is skipped.
-const bodiesOf = (text: string, header: RegExp) =>
-  [...text.matchAll(new RegExp(`${header.source}\\s*\\{`, 'g'))].flatMap(match => {
-    const start = (match.index ?? 0) + match[0].length
-    let depth = 1
+type Block = { start: number; open: number; close: number; kids: Block[] }
 
-    for (let i = start; i < text.length; i += 1) {
-      depth += text[i] === '{' ? 1 : text[i] === '}' ? -1 : 0
+// Every { paired with its }, by the place of its {, in one pass: where its head starts (after the line break or brace before
+// it) and the blocks directly inside it. A block the text cuts off is left out.
+const blocksIn = (text: string) => {
+  const closed = new Map<number, Block>()
+  const stack: Block[] = []
+  let start = 0
 
-      if (depth === 0) {
-        let body = text.slice(start, i)
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]
 
-        while (/\{[^{}]*[^{}\s][^{}]*\}/.test(body)) {
-          body = body.replace(/\{[^{}]*\}/g, '{}')
-        }
+    if (char === '{') {
+      stack.push({ start, open: i, close: -1, kids: [] })
+    } else if (char === '}') {
+      const block = stack.pop()
 
-        return [body]
+      if (block !== undefined) {
+        block.close = i
+        closed.set(block.open, block)
+        stack[stack.length - 1]?.kids.push(block)
       }
     }
 
-    return []
-  })
+    if (char === '{' || char === '}' || char === '\n') {
+      start = i + 1
+    }
+  }
 
-// The NIST rules for KMS keys, GovCloud providers and secret variables and outputs, read from whole blocks.
-const blockFindings = (source: string): string[] => {
-  // A brace inside a string ("closing }") is text, not a block.
-  const text = source.replace(/"(?:\\.|[^"\\])*"/g, quoted => quoted.replace(/[{}]/g, ''))
+  return closed
+}
+
+// A block's text at its own level, each nested block cut down to filler.
+const ownText = (text: string, block: Block, filler: string) => {
+  let body = ''
+  let from = block.open + 1
+
+  for (const kid of block.kids) {
+    body += text.slice(from, kid.open) + filler
+    from = kid.close + 1
+  }
+
+  return body + text.slice(from, block.close)
+}
+
+// Each block whose header matches, with its nested blocks and maps emptied so a setting is read at the block's own level; a block the text cuts off is skipped.
+const blocksOf = (text: string, header: RegExp) => {
+  const closed = blocksIn(text)
+
+  return [...text.matchAll(new RegExp(`${header.source}\\s*\\{`, 'g'))].flatMap(match => {
+    const block = closed.get((match.index ?? 0) + match[0].length - 1)
+
+    return block === undefined ? [] : [{ match, body: ownText(text, block, '{}') }]
+  })
+}
+
+const bodiesOf = (text: string, header: RegExp) => blocksOf(text, header).map(({ body }) => body)
+
+// Each quoted string swapped for what `to` gives; one the text cuts off stays. The optional closing quote keeps the scan
+// linear: a failed match would otherwise start again at every quote after it.
+const eachString = (text: string, to: (quoted: string) => string) =>
+  text.replace(/"(?:\\.|[^"\\])*("?)/g, (quoted: string, end: string) => (end === '' ? quoted : to(quoted)))
+
+// The text without each span from a match of open to the next close; a span never closed stays. Linear, where a regex
+// from open to close starts over at every open.
+const cut = (text: string, open: RegExp, close: string) => {
+  let out = ''
+  let from = 0
+
+  for (;;) {
+    open.lastIndex = from
+
+    const match = open.exec(text)
+    const end = match === null ? -1 : text.indexOf(close, match.index + match[0].length)
+
+    if (match === null || end === -1) {
+      return out + text.slice(from)
+    }
+
+    out += text.slice(from, match.index)
+    from = end + close.length
+  }
+}
+
+// The NIST rules for KMS keys, GovCloud providers and secret variables and outputs, read from whole blocks. Each takes the
+// text with the braces inside strings gone: a brace in "closing }" is text, not a block.
+const kmsFindings = (text: string): string[] => {
   const found: string[] = []
 
   // Terraform reads a label without its quotes too: resource aws_kms_key logs {.
@@ -92,50 +164,75 @@ const blockFindings = (source: string): string[] => {
     }
   }
 
-  for (const body of bodiesOf(text, /provider\s+"?aws"?/)) {
-    if (/\bregion\s*=\s*"us-gov-/.test(body) && !/\buse_fips_endpoint\s*=\s*true\b/.test(body)) {
-      found.push('configures a GovCloud provider without use_fips_endpoint = true')
-    }
-  }
+  return found
+}
 
-  // A name that holds a secret; one ending in what only describes it (secret_arn, password_length, token_ttl) does not.
-  for (const [, kind = '', name = ''] of text.matchAll(/\b(variable|output)\s+"?([\w-]+)"?\s*\{/g)) {
+const providerFindings = (text: string): string[] =>
+  bodiesOf(text, /provider\s+"?aws"?/).some(
+    body => /\bregion\s*=\s*"us-gov-/.test(body) && !/\buse_fips_endpoint\s*=\s*true\b/.test(body),
+  )
+    ? ['configures a GovCloud provider without use_fips_endpoint = true']
+    : []
+
+// A name that holds a secret; one ending in what only describes it (secret_arn, password_length, token_ttl, api_key_source)
+// does not, nor does a switch (type = bool, default = true).
+const secretNameFindings = (text: string): string[] => {
+  const found: string[] = []
+
+  for (const { match, body } of blocksOf(text, /\b(variable|output)\s+"?([\w-]+)"?/)) {
+    const [, kind = '', name = ''] = match
+
     if (
-      !/secret|password|token|private_key|access_key/i.test(name) ||
-      /_(arn|ids?|names?|length|ttl|path|version|policy|enabled|count|days)$/i.test(name)
+      !/secret|password|token|private_key|access_key|api[_-]?key/i.test(name) ||
+      /_(arn|ids?|names?|length|ttl|path|files?|source|types?|required|version|policy|enabled|count|days)$/i.test(name) ||
+      /\btype\s*=\s*bool\b|\bdefault\s*=\s*(?:true|false)\b/.test(body)
     ) {
       continue
     }
 
-    for (const body of bodiesOf(text, new RegExp(`\\b${kind}\\s+"?${name}"?`))) {
-      // A description that says "sensitive = true" is not the setting.
-      if (!/\bsensitive\s*=\s*true\b/.test(body.replace(/"(?:\\.|[^"\\])*"/g, '""'))) {
-        found.push(`declares ${kind} "${name}" without sensitive = true`)
-      }
+    // A description that says "sensitive = true" is not the setting.
+    if (!/\bsensitive\s*=\s*true\b/.test(eachString(body, () => '""'))) {
+      found.push(`declares ${kind} "${name}" without sensitive = true`)
+    }
 
-      if (kind === 'variable' && /\bdefault\s*=\s*(?:"[^"\n]+"|<<)/.test(body)) {
-        found.push(`gives variable "${name}" a literal default; pass it in from a secret store or TF_VAR_${name}`)
-      }
+    if (kind === 'variable' && /\bdefault\s*=\s*(?:"[^"\n]+"|<<)/.test(body)) {
+      found.push(`gives variable "${name}" a literal default; pass it in from a secret store or TF_VAR_${name}`)
     }
   }
 
   return found
 }
 
-// GitHub's OIDC trust, as a jsonencode map, heredoc JSON or aws_iam_policy_document condition blocks. A key is read as :sub or
-// :aud alone, since an interpolated host ("${local.gh}:sub") is stripped before this runs.
-const oidcFindings = (text: string): string[] => {
-  const found: string[] = []
-  const values = [
-    ...[...text.matchAll(/:sub"\s*[=:]\s*(\[[^\]]*\]|"[^"]*")/g)].map(([, value = '']) => value),
+// The values a trust's conditions give a :sub or :aud key, in a jsonencode map, heredoc JSON or aws_iam_policy_document
+// condition blocks. A key is read as :sub or :aud alone, since an interpolated host ("${local.gh}:sub") is stripped before
+// this runs.
+// shortcut: only the first 2000 characters of a list are read, which keeps the scan linear; a longer list's tail is missed.
+const conditionValues = (text: string, key: 'sub' | 'aud') =>
+  [
+    ...[...text.matchAll(new RegExp(`:${key}"\\s*[=:]\\s*(\\[[^\\]]{0,2000}\\]|"[^"]*")`, 'g'))].map(([, value = '']) => value),
     ...bodiesOf(text, /\bcondition/)
-      .filter(body => /\bvariable\s*=\s*"[^"]*:sub"/.test(body))
-      .map(body => /\bvalues\s*=\s*(\[[^\]]*\])/.exec(body)?.[1] ?? ''),
-  ]
+      .filter(body => new RegExp(`\\bvariable\\s*=\\s*"[^"]*:${key}"`).test(body))
+      .map(body => /\bvalues\s*=\s*(\[[^\]]{0,2000}\])/.exec(body)?.[1] ?? ''),
+  ].flatMap(value => [...value.matchAll(/"([^"]*)"/g)].map(([, one = '']) => one))
+
+// An OIDC role trust: GitHub's by its host or its provider's name, any other by a reference to its provider.
+const oidcFindings = (text: string, isGithub: boolean): string[] => {
+  const found: string[] = []
+  const subs = conditionValues(text, 'sub')
+  // A wildcard audience checks nothing, so it counts as none.
+  const hasAud = /:aud"/.test(text) && !conditionValues(text, 'aud').some(aud => aud.includes('*'))
+
+  if (!isGithub) {
+    return [
+      ...(/:sub"/.test(text) && !subs.includes('*')
+        ? []
+        : ['trusts an OIDC provider without a :sub condition, so any identity it issues can assume the role; pin :sub to the workload']),
+      ...(hasAud ? [] : ['trusts an OIDC provider without a :aud condition; require the audience the role expects']),
+    ]
+  }
+
   // *, repo:*, repo:org/* and repo:org/prefix-*: a star before the repo's own qualifier lets other repositories in.
-  const wild = values
-    .flatMap(value => [...value.matchAll(/"([^"]*)"/g)].map(([, sub = '']) => sub))
-    .filter(sub => /^\*$|^repo:[^:]*\*/.test(sub))
+  const wild = subs.filter(sub => /^\*$|^repo:[^:]*\*/.test(sub))
 
   if (!/:sub"/.test(text)) {
     found.push('trusts GitHub Actions OIDC without a :sub condition, so any repository can assume it; pin it to repo:<org>/<repo>:...')
@@ -145,7 +242,7 @@ const oidcFindings = (text: string): string[] => {
     found.push(`trusts GitHub Actions OIDC for a wildcard repository (${wild.join(', ')}); name the repo in :sub`)
   }
 
-  if (!/:aud"/.test(text)) {
+  if (!hasAud) {
     found.push('trusts GitHub Actions OIDC without a :aud condition; require sts.amazonaws.com')
   }
 
@@ -171,7 +268,10 @@ const ACTION_VALUES = /\bactions?\\?"?\s*[=:]\s*(\[[^\]{}]{0,400}|\\?"[^"\\\n]{0
 // while one from an earlier step's, job's or env output is a temporary credential.
 const WORKFLOW_RULES = [
   [
-    /\baws-(?:access-key-id|secret-access-key)\s*:(?!\s*["']?\$\{\{\s*(?:steps|needs|env)\.)|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*:\s*["']?\$\{\{\s*secrets[.[]/,
+    // The env name set in env: (the value may sit under a block scalar, >- or |) or in a run: step (export NAME=, NAME= into
+    // $GITHUB_ENV), and aws configure set with a stored key. An output a workflow or action declares under the input's name
+    // (the bare key, then value: from anything but secrets) is not a key handed to the job.
+    /\baws-(?:access-key-id|secret-access-key)\s*:(?!\s*["']?\$\{\{\s*(?:steps|needs|env)\.)(?![^\S\n]*\n(?:\s+description\s*:[^\n]*\n)?\s+value\s*:(?!\s*["']?\$\{\{\s*secrets[.[]))|\bAWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY)\s*[:=]\s*(?:[>|][-+\d]*\s*)?["']?\$\{\{\s*secrets[.[]|\bconfigure\s+set\s+(?:[\w.-]+\.)?aws_(?:access_key_id|secret_access_key)\s+["']?\$\{\{\s*secrets[.[]/,
     'passes a static AWS key to the job; use aws-actions/configure-aws-credentials with role-to-assume and permissions: id-token: write',
   ],
   [
@@ -189,31 +289,25 @@ const workflowFindings = (source: string): string[] => {
   return WORKFLOW_RULES.flatMap(([pattern, finding]) => (pattern.test(text) ? [finding] : []))
 }
 
-// shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
-const findings = (source: string): string[] => {
-  const text = source
-    // A block comment, only when it starts its line: "bucket/*" and "cron(0 */2 * * ? *)" in strings are not one.
-    .replace(/^\s*\/\*[\s\S]*?\*\//gm, '')
-    .split('\n')
-    .map(line => line.replace(/(^|\s)(#|\/\/).*$/, ''))
-    .join('\n')
-    .replace(/\$\{[^}]*\}/g, '')
-  const found = blockFindings(text)
+const UNREAD = 'could not be read in full by tf-lint, so some of its rules did not run; review it by hand'
 
-  for (const [type, finding] of RISKY_RESOURCES) {
-    if (new RegExp(`\\bresource\\s+"?${type}\\b|"${type}"\\s*:\\s*\\{`).test(text)) {
-      found.push(finding)
-    }
-  }
+const resourceFindings = (text: string): string[] =>
+  RISKY_RESOURCES.flatMap(([type, finding]) =>
+    new RegExp(`\\bresource\\s+"?${type}\\b|"${type}"\\s*:\\s*\\{`).test(text) ? [finding] : [],
+  )
 
-  // The OIDC provider resource names the host too; only a role trust (Federated, AssumeRoleWithWebIdentity) needs the conditions.
-  // A trust may name the provider only by reference (aws_iam_openid_connect_provider.github.arn).
-  if (
-    /token\.actions\.githubusercontent\.com|openid_connect_provider\.[\w-]*github/i.test(text) &&
-    /AssumeRoleWithWebIdentity|Federated/.test(text)
-  ) {
-    found.push(...oidcFindings(text))
-  }
+// The OIDC provider resource names the host too; only a role trust (Federated, AssumeRoleWithWebIdentity) needs the conditions.
+// A trust may name the provider only by reference (aws_iam_openid_connect_provider.github.arn).
+const trustFindings = (text: string): string[] => {
+  const isGithub = /token\.actions\.githubusercontent\.com|openid_connect_provider\.[\w-]*github/i.test(text)
+
+  return /AssumeRoleWithWebIdentity|Federated/.test(text) && (isGithub || /openid_connect_provider\.[\w-]+/.test(text))
+    ? oidcFindings(text, isGithub)
+    : []
+}
+
+const policyFindings = (text: string): string[] => {
+  const found: string[] = []
 
   // shortcut: a condition anywhere in the text clears every wildcard principal in it; upgrade to checkov for per-statement reads.
   if (
@@ -225,7 +319,8 @@ const findings = (source: string): string[] => {
 
   const actions = [...text.matchAll(ACTION_VALUES)].map(([, value = '']) => value).join('\n')
 
-  if (/"\*\\?"/.test(actions)) {
+  // "*:*" is every action of every service, as "*" is.
+  if (/"\*(?::\*)?\\?"/.test(actions)) {
     found.push('grants every action (Action "*") in a policy; name the actions the identity needs')
   }
 
@@ -239,31 +334,91 @@ const findings = (source: string): string[] => {
     )
   }
 
-  // A tags map is not a block: dropped, it leaves the resource body innermost. Other maps may hold rules (locals), so they stay.
-  const BLOCK = /([^\n{}]*)\{([^{}]*)\}/g
-  const blocks: { head: string; body: string }[] = []
-  let rest = text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null')
+  return found
+}
 
-  // Innermost blocks, then the ones that held them with those emptied: a rule resource with a lifecycle block is read too.
-  for (let inner = [...rest.matchAll(BLOCK)]; inner.length > 0; inner = [...rest.matchAll(BLOCK)]) {
-    blocks.push(...inner.map(([, head = '', body = '']) => ({ head, body })))
-    rest = rest.replace(BLOCK, '$1')
-  }
+const portFindings = (text: string): string[] => {
+  const found: string[] = []
+  // A tags map is not a block: dropped, it leaves the resource body innermost. Other maps may hold rules (locals), so they stay.
+  const rest = text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null')
+  // Every block at its own level, the blocks inside it cut out: a rule resource with a lifecycle block is read too.
+  const blocks = [...blocksIn(rest).values()].map(block => ({
+    head: rest.slice(block.start, block.open),
+    body: ownText(rest, block, ''),
+  }))
 
   for (const { head, body } of blocks.length > 0 ? blocks : [{ head: '', body: text }]) {
-    const isEgress = /egress/.test(head) || /type\s*=\s*"egress"/.test(body)
+    if (!WORLD.test(body)) {
+      continue
+    }
+
+    // A rule's direction is its type (the block's keyword, or a resource's type label) or type = "egress", never its name:
+    // aws_vpc_security_group_ingress_rule "egress_proxy" is an ingress rule.
+    const kind = /^\s*(?:(?:resource|data|dynamic)\s+)?"?([\w-]+)/.exec(head)?.[1] ?? ''
+    const isEgress = /egress/.test(kind) || /type\s*=\s*"egress"/.test(body)
     const from = port(body, 'from_port')
     const to = port(body, 'to_port')
     // Protocol -1 is every port, whatever from_port and to_port say.
     const isEveryPort = /protocol\s*=\s*"?(-1|all)\b/.test(body)
     const open = MANAGEMENT_PORTS.filter(one => isEveryPort || (from <= one && one <= to))
 
-    if (!isEgress && WORLD.test(body) && open.length > 0) {
+    if (!isEgress && open.length > 0) {
       found.push(`opens port ${open.join(' and ')} to 0.0.0.0/0; restrict the source CIDR`)
     }
   }
 
   return found
+}
+
+// shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
+const findings = (source: string): string[] => {
+  // A block comment, only when it starts its line: "bucket/*" and "cron(0 */2 * * ? *)" in strings are not one.
+  const text = cut(
+    cut(source, /^[^\S\n]*\/\*/gm, '*/')
+      .split('\n')
+      .map(line => line.replace(/(^|\s)(#|\/\/).*$/, ''))
+      .join('\n'),
+    /\$\{/g,
+    '}',
+  )
+  const bare = eachString(text, quoted => quoted.replace(/[{}]/g, ''))
+  const found: string[] = []
+  let hasFailed = false
+
+  // A rule that throws loses only its own findings, and the reader is told the read was not whole.
+  for (const rule of [
+    () => kmsFindings(bare),
+    () => providerFindings(bare),
+    () => secretNameFindings(bare),
+    () => resourceFindings(text),
+    () => trustFindings(text),
+    () => policyFindings(text),
+    () => portFindings(text),
+  ]) {
+    try {
+      for (const one of rule()) {
+        found.push(one)
+      }
+    } catch {
+      hasFailed = true
+    }
+  }
+
+  return hasFailed ? [UNREAD, ...found] : found
+}
+
+const MOST = 20
+
+// The findings for one write, each once and the first few only; a linter that throws says so, where a replayed call would
+// drop every warning.
+const lint = (file: string, text: string): string[] => {
+  try {
+    const found = [...new Set(TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : [])]
+
+    return found.length > MOST ? [...found.slice(0, MOST), `has ${found.length - MOST} more finding(s) not listed`] : found
+  } catch {
+    return [UNREAD]
+  }
 }
 
 export const register: Register = on => {
@@ -279,7 +434,7 @@ export const register: Register = on => {
     }
 
     const ran = await next(e)
-    const found = TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : []
+    const found = lint(file, text)
 
     if (ran.deny !== undefined || found.length === 0) {
       return ran
@@ -315,15 +470,33 @@ export const register: Register = on => {
       return next(e)
     }
 
-    // JSON escapes a nested string's quotes, which hides secret_key = "..." from SECRET, so each string is read on its own too.
+    // JSON escapes a nested string's quotes, which hides secret_key = "..." from SECRET, so each string is read on its own too,
+    // and one that is itself JSON (a body built with JSON.stringify, to five levels) is decoded and read the same way.
     const leaves: string[] = []
-    const json = JSON.stringify(args, (_, value: unknown) => {
+    const collect = (value: unknown, depth: number): void => {
       if (typeof value === 'string') {
         leaves.push(value)
-      }
 
-      return value
-    })
+        if (depth < 5 && /^\s*[[{"]/.test(value)) {
+          let inner: unknown
+
+          try {
+            inner = JSON.parse(value)
+          } catch {
+            return
+          }
+
+          leaves.push(JSON.stringify(inner))
+          collect(inner, depth + 1)
+        }
+      } else if (typeof value === 'object' && value !== null) {
+        Object.values(value).forEach(inner => collect(inner, depth))
+      }
+    }
+
+    collect(args, 0)
+
+    const json = JSON.stringify(args)
     const secret = [json, ...leaves].map(secretIn).find(found => found !== undefined)
 
     return secret === undefined

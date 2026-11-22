@@ -1,25 +1,26 @@
 import type { Register } from 'claude-code'
 
 // A literal secret in a permission rule: "Yes, and don't ask again" saves the whole command, secret included.
-// The same matchers check env and MCP server env and headers.
+// The same matchers check env and an MCP server's env, headers, command line and url.
 // A value starting with $ is a variable reference and passes.
+// Every run before a later literal is bounded: an unbounded one let a repo's .mcp.json hang session start.
 const SECRET = [
   /\b(?:PGPASSWORD|MYSQL_PWD|REDISCLI_AUTH)=["']?(?!\$)[^\s"';]/,
   // A value stops at `)` and `:`, which close a rule (`Bash(mysql -p)`, `Bash(mysql -p:*)`).
-  /\bsshpass\b[^;&|]*\s-p\s*["']?(?!\$)[^\s"'):]/,
-  /\b(?:mysql|mariadb)\w*\b[^;&|]*\s-p["']?(?!\$)[^\s"'):]/,
-  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]*\blogin\b[^;&|]*\s-p\s*["']?(?!\$)[^\s"'):]/,
-  /\bredis-cli\b[^;&|]*\s-a\s*["']?(?!\$)[^\s"'):]/,
+  /\bsshpass\b[^;&|]{0,400}\s-p\s*["']?(?!\$)[^\s"'):]/,
+  /\b(?:mysql|mariadb)\w*\b[^;&|]{0,400}\s-p["']?(?!\$)[^\s"'):]/,
+  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\blogin\b[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
+  /\bredis-cli\b[^;&|]{0,400}\s-a\s*["']?(?!\$)[^\s"'):]/,
   // -u user:password; `:*` ends a rule (`Bash(curl -u admin:*)`).
-  /\b(?:curl|wget)\b[^;&|]*\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
+  /\b(?:curl|wget)\b[^;&|]{0,400}\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
   /--password[= ]["']?(?!\$)[^\s"'):-]/i,
   // --token x and --api-key x, the value after a space; --with-token and --token-file name no value.
-  /--[\w-]*(?:token|api[_-]?key|access[_-]?key|secret[_-]?key)\s+["']?(?![$*-])[^\s"'):]{6,}/i,
+  /--[\w-]{0,40}(?:token|api[_-]?key|access[_-]?key|secret[_-]?key)\s+["']?(?![$*-])[^\s"'):]{6,}/i,
   /secret_access_key\s+["']?(?!\$)[A-Za-z0-9/+]{40}\b/i,
   /\bbearer\s+(?!\$)[A-Za-z0-9._~+/-]{8,}/i,
   // Any other scheme: Basic, token.
   /\bauthorization:\s*\w+\s+(?!\$)[^\s"']{8,}/i,
-  /\b(?:[sr]k_live_[A-Za-z0-9]{20,}|AIza[\w-]{35}|eyJ[\w-]{10,}\.eyJ[\w-]{10,}\.)/,
+  /\b(?:[sr]k_live_[A-Za-z0-9]{20,}|AIza[\w-]{35}|eyJ[\w-]{10,1000}\.eyJ[\w-]{10,}\.)/,
   /\bsb_secret_[A-Za-z0-9_-]{20,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
   /\bsk-[A-Za-z0-9_-]{20,}/,
@@ -27,11 +28,15 @@ const SECRET = [
   /\bnpm_[A-Za-z0-9]{30,}/,
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
   /\bsbp_[a-f0-9]{40}\b/,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  // The next four have tf-lint's shape, so the two mods agree on them.
+  /\bxapp-\d-[A-Za-z0-9-]{10,}/,
+  /hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]{20,}/,
+  /AccountKey=[A-Za-z0-9+/]{86}==/,
+  /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY(?: BLOCK)?-----/,
   // user:password@host in a connection string or URL.
-  /[a-z][a-z0-9+.-]*:\/\/[^\s:/@"']+:(?!\$)[^\s@"'/]+@/i,
+  /[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@"']+:(?!\$)[^\s@"'/]+@/i,
   // No leading \b, so a compound name like SUPABASE_SECRET_KEY= counts; a bare pass needs one (DB_PASS=, not bypass=).
-  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]+)*\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
+  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]{1,30}){0,6}\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
 ]
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -42,12 +47,28 @@ const pairs = (value: unknown, join: string): string[] =>
   Object.entries(record(value)).flatMap(([name, one]) => (typeof one === 'string' ? [`${name}${join}${one}`] : []))
 
 const servers = (value: unknown): string[] =>
-  Object.values(record(value)).flatMap(server => [...pairs(record(server).env, '='), ...pairs(record(server).headers, ': ')])
+  Object.values(record(value)).flatMap(server => {
+    const { env, headers, command, args, url } = record(server)
+    // command and args as one line, so `--api-key` and the value after it read as they do in a rule.
+    const line = [command, ...(Array.isArray(args) ? args : [])].filter(one => typeof one === 'string').join(' ')
 
-// Permission rules, env, and MCP server env and headers (also per project, in ~/.claude.json); a file that does not parse is scanned whole.
+    return [...pairs(env, '='), ...pairs(headers, ': '), line, ...(typeof url === 'string' ? [url] : [])]
+  })
+
+// Strict JSON, then the same text without trailing commas.
+const parse = (text: string): unknown => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return JSON.parse(text.replace(/,(\s*[}\]])/g, '$1'))
+  }
+}
+
+// Permission rules, env, and MCP servers (also per project, in ~/.claude.json). A file that still does not parse is scanned
+// whole, as written and with "NAME": "value" turned into NAME=value, so the name-based matchers apply to it too.
 const entries = (text: string): string[] => {
   try {
-    const parsed = record(JSON.parse(text))
+    const parsed = record(parse(text.replace(/^﻿/, '')))
     const permissions = record(parsed.permissions)
     const rules = ['allow', 'ask', 'deny'].flatMap(list => {
       const listed = permissions[list]
@@ -62,7 +83,7 @@ const entries = (text: string): string[] => {
       ...Object.values(record(parsed.projects)).flatMap(project => servers(record(project).mcpServers)),
     ]
   } catch {
-    return [text]
+    return [`${text}\n${text.replace(/"\s*:\s*"/g, '=')}`]
   }
 }
 
@@ -98,7 +119,7 @@ export const register: Register = on => {
       // Count and path only: the warning itself must not carry the secret.
       if (count > 0) {
         warnings.push(
-          `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, MCP env or headers): delete them and rotate the secrets`,
+          `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, or an MCP server's env, headers, args, url or command): delete them and rotate the secrets`,
         )
       }
     }
