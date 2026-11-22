@@ -14,6 +14,44 @@
   the organization baseline, and the other four only remind, display or trim
   output. Their entries below stay as history; they remain in the 0.7.0 release.
 
+- Hardening pass after a security audit of every mod. The shared shell parser
+  (aws-guard, secret-read-guard, supply-chain-guard, terraform-guard) reads each
+  line as bash, PowerShell and cmd, unescapes words the way the shell does, cuts
+  comments and heredocs before quotes, and throws on input over 64 KB or deep
+  nesting, so the guard denies what it cannot read. A substitution among a
+  checked command's arguments is marked and denied where it could change the call.
+- aws-guard 0.6.0: reads the operation after abbreviated global options, calls
+  hidden behind docker, uv, poetry, saml2aws, ssh, kubectl and python flags,
+  escaped operation and cmdlet names, PowerShell assignments, upper-case static
+  key names, and cmdlet switches after quoted, parenthesised, here-string or
+  continued arguments.
+- secret-read-guard 0.4.0: follows cd, drive-relative, escaped and backticked
+  paths, heredoc bodies and here-strings; reads wildcards and `[sets]` against
+  credential names; adds the Claude, Codex, Terraform and AppData folders,
+  credential variables named in interpreter code, more printers, senders and
+  copiers; reads a long command in linear time.
+- terraform-guard 0.4.0: denies terraform.cmd/.bat, tofu and terragrunt Windows
+  names, calls through builtin, noglob, npx, bunx, pnpm, yarn and uvx, and an
+  apply or destroy with a `$( )`, backtick or `( )` among its arguments; reads a
+  quoted TF_CLI_ARGS value whole; the fed-destroy check is linear.
+- supply-chain-guard 0.3.0: reads versioned pip and python names, corepack,
+  npx, bunx, uvx and pipx, every npm install spelling, update, exec, dlx and init,
+  uv tool, run --with and pip sync, option values, substituted or xargs-fed
+  packages, lockfile-off installs, and cargo, gem, go and composer installs;
+  --require-hashes and -e exempt only where pip honours them.
+- secret-allow-guard 0.4.0: bounds every matcher so a hostile settings or
+  .mcp.json file cannot hang session start, scans MCP args, url and command, reads
+  name-based secrets from a file with a BOM, trailing comma or other broken JSON,
+  and adds Slack app tokens and webhooks, Azure storage keys and PGP private key
+  blocks.
+- tf-lint: closes secret-deny bypasses (escaped quotes, `aws-secret-access-key`,
+  `aws configure set`, XML and dotted spellings, a key after `_`, EXAMPLE added to
+  a real value, doubly nested JSON in MCP calls), flags ingress rules named for
+  egress, stored keys in `run:` steps, block scalars and
+  `.github/actions/**/action.yml`, `api_key` variables, OIDC trusts by reference
+  without `sub` or `aud`, a `*` aud and `Action "*:*"`, reports a failed read
+  instead of dropping warnings, and reads 100 KB inputs in linear time.
+
 ## 0.7.0 (2026-11-21)
 
 - examples/managed-settings.json: locks on secret-read-guard; the Read deny

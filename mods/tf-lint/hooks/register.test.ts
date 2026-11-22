@@ -50,6 +50,17 @@ const STATIC_KEYS =
 const OIDC_WORKFLOW =
   'permissions:\n  id-token: write\n  contents: read\njobs:\n  deploy:\n    steps:\n      # aws-access-key-id: ${{ secrets.OLD_KEY }}\n      - uses: aws-actions/configure-aws-credentials@v4\n        with:\n          role-to-assume: arn:aws-us-gov:iam::1:role/deploy\n          aws-region: us-gov-west-1'
 
+// Built in parts, so no secret scanner takes the fixtures for real ones.
+const KEY = `${'AKIA'}${'ABCDEFGHIJKLMNOP'}`
+const TOKEN = `${'ghp'}_${'c'.repeat(36)}`
+const K = `${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl`
+const EKS = 'oidc.eks.us-east-1.amazonaws.com/id/ABC'
+const BY_REFERENCE = (conditions: string) => ROLE(conditions).replace('.github.', '.this.')
+const KEY_OUTPUTS =
+  'outputs:\n  aws-access-key-id:\n    description: The temporary key id\n    value: ${{ steps.assume.outputs.aws-access-key-id }}\n  aws-secret-access-key:\n    value: ${{ steps.assume.outputs.aws-secret-access-key }}\nruns:\n  using: composite\n  steps:\n    - id: assume\n      uses: aws-actions/configure-aws-credentials@v4\n      with:\n        role-to-assume: ${{ inputs.role }}\n        output-credentials: true'
+const SSH_RULE = (type: string, name: string) =>
+  `resource "aws_vpc_security_group_${type}_rule" "${name}" {\n  from_port = 22\n  to_port = 22\n  ip_protocol = "tcp"\n  cidr_ipv4 = "0.0.0.0/0"\n}`
+
 // What the model reads after the write, or undefined when the write was denied.
 const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefined])[] = [
   ['an ARN with a hardcoded partition', 'main.tf', 'role = "arn:aws:iam::1:role/x"', /partition/],
@@ -168,7 +179,7 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a GitHub OIDC trust in a policy document', 'role.tf', DOCUMENT('"repo:acme/infra:ref:refs/heads/main"'), null],
   ['a wildcard GitHub OIDC trust in a policy document', 'role.tf', DOCUMENT('"repo:acme/*"'), /wildcard repository/],
   ['a GitHub OIDC trust with no condition, its provider by reference', 'role.tf', ROLE(''), /without a :sub condition.*without a :aud condition/],
-  ['an EKS OIDC trust by reference', 'role.tf', ROLE('').replace('.github.', '.eks.'), null],
+  ['an EKS OIDC trust by reference with no condition', 'role.tf', ROLE('').replace('.github.', '.eks.'), /trusts an OIDC provider without a :sub condition.*trusts an OIDC provider without a :aud condition/],
   ['the GitHub OIDC provider', 'oidc.tf', `resource "aws_iam_openid_connect_provider" "github" {\n  url            = "https://${GH}"\n  client_id_list = ["sts.amazonaws.com"]\n}`, null],
   // Wildcard principals.
   ['a bucket policy open to everyone', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect    = "Allow"\n    Principal = "*"\n    Action    = "s3:GetObject"\n    Resource  = "*"\n  }]\n})', /Principal "\*" with no condition/],
@@ -206,7 +217,107 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a workflow using Google workload identity', '.github/workflows/deploy.yml', 'steps:\n  - uses: google-github-actions/auth@v2\n    with:\n      workload_identity_provider: projects/1/locations/global/workloadIdentityPools/gh/providers/gh\n      service_account: ci@p.iam.gserviceaccount.com', null],
   ["a workflow passing on a step's or job's credential", '.github/workflows/deploy.yml', 'steps:\n  - uses: some/action@v1\n    with:\n      creds: ${{ steps.vault.outputs.creds }}\n      credentials_json: ${{ needs.auth.outputs.json }}\n    env:\n      AZURE_CLIENT_SECRET: ${{ steps.vault.outputs.secret }}', null],
   ['key inputs outside a workflow', 'docs/config.yml', 'aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}', null],
+  // Found in the hardening pass. Secrets: an escaped quote, the key's other spellings, a key after _ and EXAMPLE added to a real value.
+  ['a secret key behind escaped quotes in a script', 's.sh', `echo "secret_${'key'} = \\"${K}\\"" > t.tf`, undefined],
+  ['a secret key behind backtick-escaped quotes', 's.ps1', `"secret_${'key'} = \`"${K}\`"" | Set-Content t.tf`, undefined],
+  ['a secret key in JSON nested in a string', 'cfg.json', `{"cfg":"{\\"aws_secret_access_${'key'}\\":\\"${K}\\"}"}`, undefined],
+  ['a secret key in JSON nested twice', 'cfg.json', JSON.stringify({ a: JSON.stringify({ b: JSON.stringify({ [`secret_${'key'}`]: K }) }) }), undefined],
+  ['a hyphenated secret key in a workflow', '.github/workflows/deploy.yml', `with:\n  aws-secret-access-${'key'}: ${K}`, undefined],
+  ['a secret key handed to aws configure set', 'setup.sh', `aws configure set aws_secret_access_${'key'} ${K}`, undefined],
+  ['a secret key in STS XML', 'creds.xml', `<SecretAccess${'Key'}>${K}</SecretAccess${'Key'}>`, undefined],
+  ['a dotted secret key in a properties file', 'app.properties', `aws.secret.${'key'}=${K}`, undefined],
+  ['a secret key after a hash rocket', 'config.rb', `secret_access_${'key'} => '${K}'`, undefined],
+  ['a secret key after a long run of spaces', 'terraform.tfvars', `secret_${'key'}${' '.repeat(40)}= "${K}"`, undefined],
+  ['an access key after an underscore', 'notes.md', `KEY_${KEY}`, undefined],
+  ['an access key before an underscore', 'notes.md', `${KEY}_OLD`, undefined],
+  ['a secret key with EXAMPLE after it', '.env', `AWS_SECRET_ACCESS_${'KEY'}=${K}#EXAMPLE`, undefined],
+  ['a placeholder-shaped secret key that is not the sample', '.env', `AWS_SECRET_ACCESS_${'KEY'}=${'abcdEXAMPLE'}${'x'.repeat(29)}`, undefined],
+  ['a GitHub token with EXAMPLE after it', 'notes.md', `${'ghp'}_${'a'.repeat(36)}EXAMPLE`, undefined],
+  ['a GitHub token with EXAMPLE inside it', 'notes.md', `${'ghp'}_${'a'.repeat(18)}EXAMPLE${'a'.repeat(18)}`, undefined],
+  ["AWS's sample access key after an underscore", 'notes.md', 'KEY_AKIAIOSFODNN7EXAMPLE', null],
+  ["AWS's second sample secret key", 'README.md', `aws_secret_access_${'key'} = je7MtGbClwBF/2Zp9Utk/${'h3yCo8nvb'}EXAMPLEKEY`, null],
+  ["AWS's sample secret key behind escaped quotes", 'README.md', `{"a":"{\\"SecretAccess${'Key'}\\":\\"wJalrXUtnFEMI/K7MDENG/${'bPxRfiCY'}EXAMPLEKEY\\"}"}`, null],
+  ['a GitHub token placeholder', 'README.md', 'GITHUB_TOKEN=ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE', null],
+  ['prose about the secret key', 'README.md', 'The secret key is rotated every ninety days; aws configure set aws_secret_access_key reads it from the vault.', null],
+  ['a secret key path', 'main.tf', 'secret_key_path = "/etc/app/keys/current/service/account/main.pem"', null],
+  // Ports: the rule's type decides its direction, not its name.
+  ['an SSH ingress rule named for egress', 'sg.tf', SSH_RULE('ingress', 'egress_proxy_ssh'), /port 22 /],
+  ['an SSH egress rule named for ingress', 'sg.tf', SSH_RULE('egress', 'ingress_ssh_out'), null],
+  ['an inline egress block in a group named for ingress', 'sg.tf', 'resource "aws_security_group" "ingress" {\n  egress {\n    from_port = 0\n    to_port = 0\n    protocol = "-1"\n    cidr_blocks = ["0.0.0.0/0"]\n  }\n}', null],
+  // Workflows: a stored key in a run step or a block scalar, and composite actions.
+  ['a workflow exporting a stored key in a run step', '.github/workflows/deploy.yml', 'steps:\n  - run: export AWS_ACCESS_KEY_ID=${{ secrets.K }}', /static AWS key/],
+  ['a workflow writing a stored key to GITHUB_ENV', '.github/workflows/deploy.yml', 'steps:\n  - run: echo "AWS_SECRET_ACCESS_KEY=${{ secrets.K }}" >> "$GITHUB_ENV"', /static AWS key/],
+  ['a workflow running aws configure set with a stored key', '.github/workflows/deploy.yml', 'steps:\n  - run: aws configure set aws_secret_access_key ${{ secrets.K }}', /static AWS key/],
+  ['a workflow running aws configure set for a profile', '.github/workflows/deploy.yml', 'steps:\n  - run: aws configure set profile.ci.aws_access_key_id "${{ secrets.K }}"', /static AWS key/],
+  ['a workflow with a stored key in a block scalar', '.github/workflows/deploy.yml', 'env:\n  AWS_SECRET_ACCESS_KEY: >-\n    ${{ secrets.K }}', /static AWS key/],
+  ['a workflow setting a region with aws configure set', '.github/workflows/deploy.yml', 'steps:\n  - run: aws configure set region ${{ secrets.REGION }}\n  - run: export AWS_REGION=${{ secrets.REGION }}', null],
+  ['a workflow exporting temporary keys from a step', '.github/workflows/deploy.yml', 'steps:\n  - run: export AWS_ACCESS_KEY_ID=${{ steps.assume.outputs.id }}', null],
+  ['a composite action with static AWS keys', '.github/actions/aws-login/action.yml', STATIC_KEYS, /static AWS key/],
+  ['a nested composite action on a Windows path', 'C:\\repo\\.github\\actions\\aws\\login\\action.yaml', 'runs:\n  steps:\n    - run: export AWS_ACCESS_KEY_ID=${{ secrets.K }}', /static AWS key/],
+  ['a composite action using OIDC', '.github/actions/aws-login/action.yml', OIDC_WORKFLOW, null],
+  ['another file beside a composite action', '.github/actions/aws-login/config.yml', STATIC_KEYS, null],
+  ['an action.yml outside .github', 'vendor/actions/aws-login/action.yml', STATIC_KEYS, null],
+  // Secret names: API keys.
+  ['an API key variable with a literal default', 'variables.tf', 'variable "api_key" {\n  default = "abc123"\n}', /variable "api_key" without sensitive = true; and gives variable "api_key" a literal default/],
+  ['an api-key variable', 'variables.tf', 'variable "stripe-api-key" {\n  type = string\n}', /variable "stripe-api-key" without sensitive = true/],
+  ['an apikey output', 'outputs.tf', 'output "apikey" {\n  value = x.y.key\n}', /output "apikey" without sensitive = true/],
+  ['a sensitive API key variable', 'variables.tf', 'variable "api_key" {\n  type      = string\n  sensitive = true\n}', null],
+  ['an API key name variable', 'variables.tf', 'variable "api_key_name" {\n  default = "primary"\n}', null],
+  ['an API key source variable', 'variables.tf', 'variable "api_key_source" {\n  default = "HEADER"\n}', null],
+  ['an API key required switch', 'variables.tf', 'variable "api_key_required" {\n  type    = bool\n  default = false\n}', null],
+  ['an API key type and file variable', 'variables.tf', 'variable "api_key_type" {\n  default = "ed25519"\n}\nvariable "api-key_file" {\n  default = "keys/api.pub"\n}', null],
+  ['a bool variable named for an API key', 'variables.tf', 'variable "use_api_key" {\n  type = bool\n}\nvariable "rotate_apikey" {\n  default = true\n}', null],
+  ['an API key variable with a string default beside a switch', 'variables.tf', 'variable "api_key_required" {\n  type = bool\n}\nvariable "apikey" {\n  type    = string\n  default = "abc123"\n}', /variable "apikey" without sensitive = true; and gives variable "apikey" a literal default/],
+  // An output declared under a key input's name is not a key handed to the job.
+  ['a composite action that outputs temporary keys', '.github/actions/aws-login/action.yml', KEY_OUTPUTS, null],
+  ['a reusable workflow that outputs temporary keys', '.github/workflows/assume.yml', 'on:\n  workflow_call:\n    outputs:\n      aws-access-key-id:\n        description: "The temporary key id"\n        value: ${{ jobs.assume.outputs.id }}', null],
+  ['a composite action that outputs a stored key', '.github/actions/aws-login/action.yml', 'outputs:\n  aws-access-key-id:\n    value: ${{ secrets.AWS_ACCESS_KEY_ID }}', /static AWS key/],
+  ['a composite action with key outputs and a stored key in with', '.github/actions/aws-login/action.yml', `${KEY_OUTPUTS}\n        aws-access-key-id: \${{ secrets.AWS_ACCESS_KEY_ID }}`, /static AWS key/],
+  ['a composite action with key outputs and a stored key in env', '.github/actions/aws-login/action.yml', `${KEY_OUTPUTS}\n      env:\n        AWS_SECRET_ACCESS_KEY: \${{ secrets.K }}`, /static AWS key/],
+  ['a composite action that declares a key input', '.github/actions/aws-login/action.yml', 'inputs:\n  aws-access-key-id:\n    description: A static key id\n    required: true', /static AWS key/],
+  ['a workflow with a key on the line after its name', '.github/workflows/deploy.yml', 'with:\n  aws-access-key-id:\n    ${{ secrets.AWS_ACCESS_KEY_ID }}', /static AWS key/],
+  // OIDC trusts: any provider by reference, and a wildcard audience.
+  ['an OIDC trust by reference with no condition', 'role.tf', BY_REFERENCE(''), /trusts an OIDC provider without a :sub condition, so any identity it issues can assume the role.*trusts an OIDC provider without a :aud condition/],
+  ['an OIDC trust by reference without sub', 'role.tf', BY_REFERENCE(`        StringEquals = { "${EKS}:aud" = "sts.amazonaws.com" }`), /^(?!.*:aud condition).*trusts an OIDC provider without a :sub condition/],
+  ['an OIDC trust by reference with a * sub', 'role.tf', BY_REFERENCE(`        StringEquals = { "${EKS}:aud" = "sts.amazonaws.com" }\n        StringLike = { "${EKS}:sub" = "*" }`), /trusts an OIDC provider without a :sub condition/],
+  ['an OIDC trust by reference with sub and aud', 'role.tf', BY_REFERENCE(`        StringEquals = {\n          "${EKS}:aud" = "sts.amazonaws.com"\n          "${EKS}:sub" = "system:serviceaccount:app:api"\n        }`), null],
+  ['an OIDC provider output, no trust', 'outputs.tf', 'output "oidc_arn" {\n  value = aws_iam_openid_connect_provider.this.arn\n}', null],
+  ['a GitHub OIDC trust with a * aud', 'role.tf', ROLE(`        StringLike = { "${GH}:aud" = "*" }\n${SUB('"repo:acme/infra:*"')}`), /trusts GitHub Actions OIDC without a :aud condition/],
+  ['a GitHub OIDC trust with a * aud in a policy document', 'role.tf', DOCUMENT('"repo:acme/infra:*"').replace('["sts.amazonaws.com"]', '["*"]'), /trusts GitHub Actions OIDC without a :aud condition/],
+  // Every action, spelled *:*.
+  ['a policy granting *:*', 'iam.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect   = "Allow"\n    Action   = "*:*"\n    Resource = "*"\n  }]\n})', /grants every action/],
+  ['a policy document listing *:*', 'iam.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    actions = ["s3:GetObject", "*:*"]\n  }\n}', /grants every action/],
+  // A finding is listed once, however often the text repeats it, and a long list is cut short.
+  ['a secret variable repeated to 100 KB', 'variables.tf', 'variable "password" {}\n'.repeat(4500), /^tf-lint: the text just written to variables\.tf declares variable "password" without sensitive = true\. Fix it before finishing\.$/],
+  ['more findings than are listed', 'variables.tf', Array.from({ length: 30 }, (_, i) => `variable "password_${i}x" {}`).join('\n'), /variable "password_19x" without sensitive = true; and has 10 more finding\(s\) not listed\. Fix/],
 ]
+
+// 100 KB of each shape that once took seconds; a hundredth of that now.
+const SLOW: readonly (readonly [string, string])[] = [
+  ['one long line', `x = "${'a'.repeat(100_000)}"`],
+  ['interpolations never closed', '${'.repeat(50_000)],
+  ['20,000 nested blocks in a KMS key', `resource "aws_kms_key" "k" {\n${'a{'.repeat(20_000)}${'}'.repeat(20_000)}\n}`],
+  ['a secret key name with no value', 'secret_key='.repeat(20_000)],
+  ['blank lines', '\n'.repeat(100_000)],
+  ['block comments never closed', '/*\n'.repeat(33_000)],
+  ['quotes never closed', '"\\'.repeat(50_000)],
+  ['sub lists never closed', ':sub" = ['.repeat(11_000)],
+  ['KMS keys never closed', 'resource "aws_kms_key" "k" {\n'.repeat(3_500)],
+  ['secret variables with different names', Array.from({ length: 4_000 }, (_, i) => `variable "password${i}" {}`).join('\n')],
+]
+
+for (const [name, content] of SLOW) {
+  test(`Write of ${name} is read in under a second`, async ($, on) => {
+    on('tool.call', { tool: ['Write'] }, () => ({ result: {} as never }))
+
+    const started = Date.now()
+    const ran = await $.tool.call({ tool: 'Write', file_path: 'main.tf', content })
+
+    expect(ran.deny).toBe(undefined)
+    expect(Date.now() - started < 1000).toBe(true)
+  })
+}
+
 
 test('a notebook cell with a token is denied', async ($, on) => {
   let hasRun = false
@@ -221,8 +332,6 @@ test('a notebook cell with a token is denied', async ($, on) => {
   expect(ran.deny).toMatch(/private key or API token into a\.ipynb/)
 })
 
-const KEY = `${'AKIA'}${'ABCDEFGHIJKLMNOP'}`
-const TOKEN = `${'ghp'}_${'c'.repeat(36)}`
 // What the deny says, or null when the call runs.
 const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: string }, RegExp | null])[] = [
   ['Bash echoing a key into a file', { tool: 'Bash', command: `echo ${KEY} > creds.txt` }, /command would write an AWS access key into a file/],
@@ -243,6 +352,27 @@ const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: strin
   ['Bash reading a key without writing a file', { tool: 'Bash', command: `grep -c ${KEY} access.log` }, null],
   ['an MCP send with a token in its body', { tool: 'mcp__gmail__send', to: 'x', body: `here it is: ${TOKEN}` }, /send a private key or API token to mcp__gmail__send/],
   ['an MCP send with ordinary text', { tool: 'mcp__gmail__send', to: 'x', body: 'lunch at noon -> room 4' }, null],
+  // Found in the hardening pass.
+  ['Bash echoing a secret key behind escaped quotes', { tool: 'Bash', command: `echo "secret_${'key'} = \\"${K}\\"" > t.tf` }, /AWS access key into a file/],
+  ['PowerShell piping a secret key behind escaped quotes', { tool: 'PowerShell', command: `"secret_${'key'} = \`"${K}\`"" | Set-Content t.tf` }, /AWS access key into a file/],
+  ['Bash handing a secret key to aws configure set', { tool: 'Bash', command: `aws configure set aws_secret_access_${'key'} ${K}` }, /AWS access key into a file/],
+  ['PowerShell handing a secret key to aws configure set', { tool: 'PowerShell', command: `aws configure set aws_secret_access_${'key'} ${K} --profile ci` }, /AWS access key into a file/],
+  ['Monitor handing an access key to aws configure set', { tool: 'Monitor', command: `aws configure set aws_access_key_id ${KEY}` }, /AWS access key into a file/],
+  ['the terminal handing a token to npm config set', { tool: 'mcp__terminal__run_in_terminal', command: `npm config set //registry.npmjs.org/:_authToken ${TOKEN}` }, /private key or API token into a file/],
+  ['Bash writing a key after an underscore', { tool: 'Bash', command: `echo KEY_${KEY} > creds.txt` }, /AWS access key into a file/],
+  ['PowerShell writing a key after an underscore', { tool: 'PowerShell', command: `Add-Content creds.txt 'KEY_${KEY}'` }, /AWS access key into a file/],
+  ['Bash appending a token with EXAMPLE after it', { tool: 'Bash', command: `echo ${TOKEN}EXAMPLE >> .env` }, /private key or API token into a file/],
+  ['PowerShell writing a secret key with EXAMPLE after it', { tool: 'PowerShell', command: `Set-Content .env 'AWS_SECRET_ACCESS_${'KEY'}=${K}#EXAMPLE'` }, /AWS access key into a file/],
+  ['Bash setting a region with aws configure set', { tool: 'Bash', command: 'aws configure set region us-gov-west-1' }, null],
+  ['PowerShell setting a region with aws configure set', { tool: 'PowerShell', command: 'aws configure set region us-gov-west-1 --profile ci' }, null],
+  ["Bash handing AWS's sample keys to aws configure set", { tool: 'Bash', command: `aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE && aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/${'bPxRfiCY'}EXAMPLEKEY` }, null],
+  ['PowerShell writing a token placeholder', { tool: 'PowerShell', command: "Set-Content README.md 'GITHUB_TOKEN=ghp_EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE'" }, null],
+  ['Bash reading a secret key without writing a file', { tool: 'Bash', command: `grep -c "secret_${'key'} = \\"${K}\\"" main.tf` }, null],
+  ['an MCP call with a secret key in JSON nested twice', { tool: 'mcp__http__post', body: JSON.stringify({ cfg: JSON.stringify({ [`secret_${'key'}`]: K }) }) }, /send an AWS access key to mcp__http__post/],
+  ['an MCP call with a secret key behind unicode escapes', { tool: 'mcp__http__post', body: `{"cfg":"secret_${'key'}=\\u0022${K}\\u0022"}` }, /send an AWS access key to mcp__http__post/],
+  ['an MCP call with a token in a JSON string of a JSON string', { tool: 'mcp__http__post', body: JSON.stringify(JSON.stringify({ t: `${'ghp'}_\u0063${'c'.repeat(35)}` })) }, /send a private key or API token to mcp__http__post/],
+  ['an MCP call with ordinary nested JSON', { tool: 'mcp__http__post', body: JSON.stringify({ cfg: JSON.stringify({ note: 'lunch at noon', secret_key: 'from the vault' }) }) }, null],
+  ['an MCP call with a string that only looks like JSON', { tool: 'mcp__notes__create', note: '{ not json at all' }, null],
   ['an MCP call with a secret key in a nested string', { tool: 'mcp__notes__create', note: { text: `secret_${'key'} = "${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl"` } }, /send an AWS access key to mcp__notes__create/],
 ]
 

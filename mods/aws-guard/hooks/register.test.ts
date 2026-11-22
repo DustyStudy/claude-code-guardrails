@@ -372,6 +372,109 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['Remove-S3Object -Key ($k) -BucketName b -Force', true],
   ['Initialize-AWSDefaultConfiguration -AccessKey $a -SecretKey $s -Region us-gov-west-1', false],
   ['Initialize-AWSDefaultConfiguration -ProfileName dev -Region us-gov-west-1', true],
+  // A PowerShell assignment before the call.
+  ['$r = aws iam delete-role --role-name x', false],
+  ['$null = Remove-IAMRole -RoleName x -Force', false],
+  ['$env:AWS_PROFILE = "security"; $out = Stop-EC2Instance -InstanceId i-1 -Terminate', false],
+  ['$r = aws iam list-roles', true],
+  ['$r = Get-IAMRole -RoleName x', true],
+  // A global option between the service and the operation, abbreviated or not, with its value.
+  ['aws iam --prof dev delete-role --role-name x', false],
+  ['aws iam --endpoint http://localhost:4566 delete-role --role-name x', false],
+  ['aws kms --reg us-east-1 --no-verify-ssl schedule-key-deletion --key-id k', false],
+  ['aws --ou json iam --prof dev --q RoleName delete-role --role-name x', false],
+  ['aws s3 --cli-read 5 rm s3://bucket/prefix --recursive', false],
+  ['aws iam --endpoint-url=http://localhost:4566 --debug delete-role --role-name x', false],
+  [`aws ${'--reg us-east-1 '.repeat(80)}iam delete-role --role-name x`, false],
+  ['aws iam --prof dev list-roles', true],
+  ['aws iam --debug get-role --role-name delete-role', true],
+  ['aws organizations --no-paginate list-accounts-for-parent --parent-id r', true],
+  ['aws iam --endpoint-url=http://localhost:4566 list-roles', true],
+  ['aws --endpoint-url http://localhost:4566 s3 ls', true],
+  ['aws ec2 --prof dev terminate-instances --instance-ids i-1 --dry-run', true],
+  // Runners that hide the call: a container image, package and environment runners, credential helpers, ssh, python's flags.
+  ['docker run --rm amazon/aws-cli iam delete-role --role-name x', false],
+  ['docker run --rm -it -v ~/.aws:/root/.aws public.ecr.aws/aws-cli/aws-cli:2.17.0 kms schedule-key-deletion --key-id k', false],
+  ['podman run --name aws amazon/aws-cli iam delete-role --role-name x', false],
+  ['uv run aws iam delete-role --role-name x', false],
+  ['uv run -m awscli iam delete-role --role-name x', false],
+  ['poetry run aws iam delete-role --role-name x', false],
+  ['saml2aws exec -- aws iam delete-role --role-name x', false],
+  ['ssh host aws iam delete-role --role-name x', false],
+  ['ssh host "aws iam delete-role --role-name x"', false],
+  ['kubectl exec deploy/tools -- aws organizations leave-organization', false],
+  ['py -3 -m awscli iam delete-role --role-name x', false],
+  ['python3 -u -m awscli iam delete-role --role-name x', false],
+  ['python3 -um awscli iam delete-role --role-name x', false],
+  [`uv run aws --query 'a|b' iam delete-role --role-name x`, false],
+  ['docker run --rm amazon/aws-cli s3 ls', true],
+  ['docker run --rm amazon/aws-cli iam list-roles', true],
+  ['docker build -t aws-cli .', true],
+  ['uv run aws sts get-caller-identity', true],
+  ['poetry run pytest -k aws', true],
+  ['saml2aws exec -- aws s3 sync ./dist s3://bucket/ --delete', true],
+  ['ssh host aws iam get-role --role-name x', true],
+  ['ssh host "echo aws iam delete-role"', true],
+  ['python3 -u -m awscli iam list-roles', true],
+  ['python -m pip install awscli', true],
+  ['uv run aws cloudformation delete-stack --stack-name app', true],
+  // An escape inside the operation or the cmdlet's name: bash drops the backslash, PowerShell the backtick, cmd the caret.
+  ['aws iam delete\\-role --role-name x', false],
+  ['aws iam delete`-role --role-name x', false],
+  ['Remove`-IAMRole -RoleName x -Force', false],
+  ['cmd /c aws iam delete^-role --role-name x', false],
+  // A config file's key names are read in any case.
+  ['aws configure set AWS_SECRET_ACCESS_KEY abc', false],
+  ['aws configure set profile.dev.AWS_Access_Key_Id AKIAEXAMPLE', false],
+  ['aws configure set REGION us-gov-west-1', true],
+  // A quoted or escaped -WhatIf or -Key is a value, not the parameter; so is one after --, or joined to a value by a comma.
+  [`Remove-IAMRole -RoleName admin -Force -OutVariable '-WhatIf'`, false],
+  ['Remove-IAMRole -RoleName admin -Force -OutVariable "-WhatIf"', false],
+  ['Remove-IAMRole -RoleName admin -Force -OutVariable `-WhatIf', false],
+  ['Remove-EC2Instance -Force -InstanceId i-1, -WhatIf', false],
+  ['Remove-CWLLogGroup -Force -- -WhatIf', false],
+  [`Write-Host "Remove-IAMRole -WhatIf"; Remove-IAMRole -RoleName admin -Force -OutVariable '-WhatIf'`, false],
+  [`Stop-EC2Instance -InstanceId i-1 -Terminate -OutVariable '-WhatIf'`, false],
+  [`Remove-S3Object -BucketName b -KeyCollection $keys -Force -OutVariable '-Key'`, false],
+  ['Remove-IAMRole -RoleName x -Force -WhatIf', true],
+  ['Remove-IAMRole -WhatIf:$true -RoleName x', true],
+  // The switch after an argument that ends the call for the parser: parentheses with a pipe or a line's end in them, a backtick at
+  // a line's end, a quoted ; or bracket, a here-string, a block comment, a quoted name.
+  ['Stop-EC2Instance -InstanceId (Get-Ids) `\n -Terminate', false],
+  ['Stop-EC2Instance -InstanceId (Get-Ids) `\r\n -Terminate', false],
+  ['Stop-EC2Instance -InstanceId (Get-EC2Instance | Select-Object -First 1) -Terminate', false],
+  ['Stop-EC2Instance -InstanceId (Get-Ids;\n Get-More) -Terminate', false],
+  [`Stop-EC2Instance -InstanceId (Get-Ids) -OutVariable 'a;b' -Terminate`, false],
+  [`Stop-EC2Instance -InstanceId (Get-Ids) -OutVariable ')' -Terminate`, false],
+  [`& "Stop-EC2Instance" -InstanceId (Get-Ids) -OutVariable '(' -Terminate`, false],
+  [`Stop-EC2Instance -InstanceId i-1 -OutVariable @'\nit's (\n'@ -Terminate`, false],
+  ['Stop-EC2Instance -InstanceId (Get-Ids) <# ) #> -Terminate', false],
+  ['Stop-EC2Instance -InstanceId (Get-Ids) <# ( #> -Terminate', false],
+  ['Stop-EC2"Instance" -InstanceId (Get-Ids) -Terminate', false],
+  ['Remove-SECSecret -SecretId (Get-Ids | Select-Object -First 1) -ForceDeleteWithoutRecovery $true', false],
+  ['Stop-EC2Instance -InstanceId (Get-EC2Instance | Select-Object -First 1)', true],
+  ['Stop-EC2Instance -InstanceId (Get-EC2Instance | Select-Object -First 1) -Terminate -WhatIf', true],
+  ['Stop-EC2Instance -InstanceId (Get-Ids) `\n -Force', true],
+  // A substitution among the arguments can be the operation, or the option that makes the call destroy; after a written operation it is a value.
+  ['aws iam $(echo delete-role) --role-name x', false],
+  ['aws $(echo iam) delete-role --role-name x', false],
+  ['aws iam `echo delete-role` --role-name x', false],
+  ['aws --profile $(cat profile) iam delete-role --role-name x', false],
+  ['aws s3 rm s3://bucket/prefix $(echo --recursive)', false],
+  ['aws secretsmanager delete-secret --secret-id s $(echo --force-delete-without-recovery)', false],
+  ['aws ec2 describe-instances --instance-ids $(cat ids.txt)', true],
+  ['aws s3 cp $(ls dist) s3://bucket/', true],
+  ['aws s3 ls "s3://bucket/$(date +%F)/"', true],
+  ['aws iam get-role --role-name $(cat role.txt) --profile dev', true],
+  // A substitution as a global option's value: the word after it is the service, not that value.
+  ['aws --region $(aws configure get region) ec2 describe-instances', true],
+  ['aws --profile $(cat p) s3 ls', true],
+  ['aws --profile "$(cat p)" --region us-east-1 iam list-roles', true],
+  ['aws --profile $(cat p) iam $(echo delete-role) --role-name x', false],
+  ['aws --profile $(cat p) $(echo iam) delete-role --role-name x', false],
+  ['aws --profile $(cat p) --region us-east-1 kms $(cat op) --key-id k', false],
+  ['echo --profile $(cat p); aws --profile dev iam $(echo delete-role)', false],
+  ['aws --region $(cat r) ec2 terminate-instances --instance-ids i-1', false],
 ]
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
@@ -398,6 +501,13 @@ test('a cmdlet is named in the deny as written', async ($, on) => {
   on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
   const ran = await $.tool.call({ tool: 'PowerShell', command: 'Get-IAMRoleList | Remove-IAMRole -Force' })
   expect(JSON.stringify(ran)).toContain('`Remove-IAMRole` needs the user')
+})
+
+test('a command too long to read is denied with the reason', async ($, on) => {
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  const ran = JSON.stringify(await $.tool.call({ tool: 'Bash', command: `aws s3 ls ${'a'.repeat(70_000)}` }))
+  expect(ran).toContain('aws-guard: the command is longer than 64 KB')
+  expect(ran).not.toContain('guard failed')
 })
 
 // Monitor and the desktop app's terminal tool hand a command line to a shell too: they are checked like Bash.

@@ -1,149 +1,578 @@
-// Finds where a command line really runs a given program. The same file sits in terraform-guard, aws-guard, model-guard, merged-branch-guard, secret-read-guard and supply-chain-guard: keep the copies identical.
+// Finds where a command line really runs a given program. The same file sits in aws-guard, secret-read-guard, supply-chain-guard
+// and terraform-guard: keep the copies identical.
+//
+// What a guard gets:
+// - invocations(source, binary): the argument list of every call to `binary`. It THROWS Unreadable when the line cannot be read
+//   (over 64 KB, nested too deeply, too costly to read), so a guard that does not catch it denies through its own .catch.
+// - unreadable(source): the reason invocations would throw, or undefined; for a guard that wants to say why it denies.
+// - DYNAMIC: the last argument of a call whose arguments are not all written out: a $( ), ` ` or PowerShell ( ) stood among them, so
+//   the shell can add any word there. A guard that reads flags or positions must deny a call it would deny with any word added.
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
   /^(bash|sh|zsh|dash|ksh|fish|busybox|eval|env|xargs|find|nice|ionice|stdbuf|doas|watch|parallel|chroot|setsid|unbuffer|script|flock|firejail|systemd-run|cmd|powershell|pwsh|wsl|sudo|time|timeout|nohup|winpty|exec|command|call|start|start-process|saps|invoke-expression|iex|invoke-command|icm|coproc|trap|su|runuser|pkexec|runas|sg|unshare|nsenter|taskset|chrt|numactl|strace|ltrace|torsocks|proxychains4?|caffeinate|xvfb-run|dbus-run-session|ssh-agent|fakeroot|tmux|screen|aws-vault|op|doppler|direnv|mise|asdf|dotenv|envchain|nix-shell)(\.exe)?$/i
-// What can stand before a command's first word: VAR=x, !, a keyword, a redirection.
-const LEAD = /^(\w+=.*|!|if|then|else|elif|do|while|until|\d*[<>].*)$/
-const OPERATOR = /^[;|&(){}`\n]$/
-// A heredoc: its quote (a quoted tag keeps $( ) in the body unexpanded), tag, and the rest of the opening line with the body.
-// <<< is a here-string, not one. A tag that goes on past its quote (<<"EO"F) ends at another line than \2 finds: not taken as one.
-export const HEREDOC = /(?<!<)<<(?!<)-?\s*(["']?)(\w+)\1(?![\w"'\\])([\s\S]*?)\n\s*\2\b/g
+// What can stand before a command's first word: VAR=x, !, a keyword, a redirection, PowerShell's dot call and `$out =`.
+const LEAD = /^(\w+=.*|!|\.|if|then|else|elif|do|while|until|\d*[<>].*|(\[[^\]]*\])*\$[\w:.{}[\]]*|[-+*/%]?=)$/
+// PowerShell's assignment written as one word: $out=terraform runs terraform.
+const ASSIGNED = /^(?:\[[^\]]*\])*\$[\w:.{}]+[-+*/%]?=(.+)$/s
+// A heredoc's opening: its quote (a quoted tag keeps $( ) in the body unexpanded) and tag. <<< is a here-string, not one. A tag
+// that goes on past its quote (<<"EO"F) ends at another line than the tag finds: not taken as one.
+const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 // A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
-const SUBSTITUTION = /\$\(([^()]*)\)|`([^`\n]*)`/
-// A word (quoted runs and ${VAR} kept whole), or one operator that ends a command. A brace is one: a group, or a PowerShell script block.
-const TOKEN = /(?:"(?:\\.|[^"\\])*"|'[^']*'|>&|\$\{[^}]*\}|[^\s"';|&(){}`])+|[;|&(){}`\n]/g
-
-// PowerShell drops a backtick inside a word (terraf`orm is terraform) where bash would start a substitution.
-const ESCAPE = /(?<=\w)`(?=[a-z])/gi
-
-// bash's $'...' and $"..." quote too: $'terraform' is terraform.
-// shortcut: escapes inside $'...' ($'\x74erraform') are not decoded; decode them if one is seen in use.
-const unquote = (word: string) => word.replace(/\$(?=["'])/g, '').replace(/["']/g, '')
-
-// bash drops a backslash in a program's name (\terraform, terr\aform); only the name, as a C:\ path or a pattern argument keeps its own.
-const isNamed = (word: string, binary: RegExp) => binary.test(word) || binary.test(word.replace(/\\(?=[\w-])/g, ''))
+// A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
+const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
 
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
 
-// Redirections (2>&1, >file, > file) are not arguments of the program.
-const withoutRedirections = (words: readonly string[]) =>
-  words.filter(
-    (word, i) => !/^\d*[<>]/.test(word) && !/^\d*[<>]+&?$/.test(words[i - 1] ?? ''),
-  )
+/** Thrown for a command line the parser cannot read. A guard must deny it. */
+export class Unreadable extends Error {}
+export const DYNAMIC = '-\u0000'
 
-// shortcut: no variable or alias expansion, and a heredoc body is read only for its substitutions, unless a shell on its opening line or
-// piped to after its end reads it all; a body saved to a file and run later is not followed; it errs toward finding a call, so `echo '$(prog …)'` and `bash -c echo prog …` count as calls; cost grows with the square of the number of substitutions. Upgrade to a real shell parser if any of these bites.
-/** The argument list of every call to `binary` in `source`, wrappers, subshells and substitutions included. */
-export const invocations = (source: string, binary: RegExp, depth = 0): string[][] => {
-  const found: string[][] = []
+const MOST = 65_536
+const DEEPEST = 8
+// Characters read in all, over every reading and nested command line: what stops a line built to be slow.
+const WORK = 1 << 24
+// Stand-ins for an unquoted { } and , while a word is put together: Unicode noncharacters, refused in the input.
+const OPEN = '\uFDD0'
+const CLOSE = '\uFDD1'
+const COMMA = '\uFDD2'
+const LIST = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*${COMMA}[^${OPEN}${CLOSE}]*)${CLOSE}`)
 
-  if (depth > 4) {
-    return found
+// The line is read once as each shell would, and a call found by any reading counts. They differ in the character that escapes
+// the next one (terraf`orm, terr\aform and terr^aform are terraform to one shell each), and: bash expands a brace list
+// (-{auto-approve,x}) and runs ` `; PowerShell drops <# #> and takes ( ) as an argument; cmd has no # comment.
+type Shell = 'bash' | 'powershell' | 'cmd'
+const ESCAPE: Record<Shell, string> = { bash: '\\', powershell: '`', cmd: '^' }
+
+type State = { left: number; seen: Map<string, string[][]> }
+// dynamicAt: how many words stood before the last substitution or PowerShell ( ) in the command; -1 for none.
+type Command = { raw: string[]; words: string[]; dynamicAt: number; isPiped: boolean }
+
+const spend = (state: State, cost: number) => {
+  state.left -= cost
+
+  if (state.left < 0) {
+    throw new Unreadable('the command is too complex to read')
+  }
+}
+
+// Where the quoted run, escaped character or ${VAR} that starts at `at` ends; `at` itself when none starts there (an open quote too).
+const skip = (text: string, at: number, shell: Shell, state: State): number => {
+  const char = text[at]
+
+  if (char === ESCAPE[shell] && at + 1 < text.length) {
+    return at + (text.startsWith('\r\n', at + 1) ? 3 : 2)
   }
 
-  // Read it every way a shell could, so any shell's call is found: PowerShell drops a backtick in a word, bash expands a brace
-  // list where a command starts ({terraform,apply}), and a comment ends at its line even when a \ or ` ends it.
-  const variants = [
-    source.replace(ESCAPE, ''),
-    source.replace(/(^|[;|&(\n])(\s*)\{([^\s{}]*,[^\s{}]*)\}(?=[\s;|&)]|$)/g, (_, op: string, space: string, list: string) => `${op}${space}${list.replace(/,/g, ' ')}`),
-    source.replace(/[\\`]\r?\n/g, '\n'),
-  ]
+  if (char === "'" || (char === '$' && text[at + 1] === '{')) {
+    const end = text.indexOf(char === "'" ? "'" : '}', at + 1)
 
-  for (const variant of new Set(variants)) {
-    if (variant !== source) {
-      found.push(...invocations(variant, binary, depth + 1))
+    spend(state, end < 0 ? text.length - at : 0)
+
+    return end < 0 ? at : end + 1
+  }
+
+  if (char === '"') {
+    let end = at + 1
+
+    // cmd's ^ escapes nothing inside double quotes.
+    while (end < text.length && text[end] !== '"') {
+      end += shell !== 'cmd' && text[end] === ESCAPE[shell] ? 2 : 1
+    }
+
+    spend(state, end - at)
+
+    return end < text.length ? end + 1 : at
+  }
+
+  return at
+}
+
+// PowerShell's block comment. One never closed is left in.
+const withoutBlocks = (text: string) => {
+  let out = ''
+  let at = 0
+
+  for (let open = text.indexOf('<#'); open >= 0; open = text.indexOf('<#', at)) {
+    const close = text.indexOf('#>', open + 2)
+
+    if (close < 0) {
+      break
+    }
+
+    out += `${text.slice(at, open)} `
+    at = close + 2
+  }
+
+  return out + text.slice(at)
+}
+
+// Hands the body of every $( ) and, where the shell has them, ` ` to `nested`, innermost first, and leaves a NUL where each stood:
+// what it puts there is not known.
+// shortcut: quotes and escapes are not read here, so '$(prog)' and \$(prog) count as calls; read them if that bites.
+const substitute = (text: string, hasBackticks: boolean, nested: (body: string) => void): string => {
+  const outer: [string, boolean][] = []
+  let out = ''
+
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at]
+
+    if (char === '$' && text[at + 1] === '(') {
+      outer.push([out, true])
+      out = ''
+      at++
+    } else if (char === '(') {
+      outer.push([out, false])
+      out = ''
+    } else if (char === ')' && outer.length > 0) {
+      const [before, isSubstitution] = outer.pop() ?? ['', false]
+
+      if (isSubstitution) {
+        nested(out)
+        out = `${before}\0 `
+      } else {
+        out = `${before}(${out})`
+      }
+    } else if (char === '`' && hasBackticks) {
+      let end = at + 1
+
+      while (end < text.length && text[end] !== '`' && text[end] !== '\n') {
+        end++
+      }
+
+      if (text[end] === '`') {
+        nested(text.slice(at + 1, end))
+        out += '\0 '
+        at = end
+      } else {
+        out += char
+      }
+    } else {
+      out += char
     }
   }
 
-  // Line continuations join (bash's \ leaves nothing behind, so a split word is whole again); heredoc bodies are data unless a shell runs them.
-  let text = source
-    .replace(/\\\r?\n/g, '')
-    .replace(/`\r?\n/g, ' ')
-    .replace(HEREDOC, (match: string, quote: string, _tag: string, rest: string, at: number, whole: string) => {
-      const before = whole.slice(whole.lastIndexOf('\n', at) + 1, at)
+  // One never closed is no substitution: its text stays.
+  for (let open = outer.pop(); open !== undefined; open = outer.pop()) {
+    out = `${open[0]}${open[1] ? '$(' : '('}${out}`
+  }
 
-      // A << inside quotes, a comment or arithmetic (echo '<<EOF', ;# <<EOF, $((1<<2))) starts no heredoc: the lines after it run.
-      // shortcut: a quote opened on an earlier line is not seen; track quotes across lines if one is used that way.
-      if ((before.match(/'/g) ?? []).length % 2 === 1 || (before.match(/"/g) ?? []).length % 2 === 1 || /(^|[\s;|&(])#|\(\([^)]*$/.test(before)) {
-        return match
+  return out
+}
+
+// Takes out comments and heredoc bodies, read left to right with the quotes, so a quote in a comment opens nothing and a << in
+// quotes, a comment or arithmetic (echo '<<EOF', ;# <<EOF, $((1<<2))) starts no heredoc. A body is data unless a shell runs it.
+const cut = (text: string, shell: Shell, state: State, nested: (body: string) => void): string => {
+  const waiting: [string, string][] = []
+  let out = ''
+  let lineAt = 0
+  let isWordStart = true
+  let isArithmetic = false
+
+  for (let at = 0; at < text.length; ) {
+    const end = skip(text, at, shell, state)
+
+    if (end > at) {
+      out += text.slice(at, end)
+      at = end
+      isWordStart = false
+      continue
+    }
+
+    const char = text[at] ?? ''
+
+    // A # where a word starts runs to the end of its line, whatever ends the line. A substitution in it still counts, as it did.
+    if (char === '#' && isWordStart && shell !== 'cmd') {
+      const line = text.indexOf('\n', at)
+      const stop = line < 0 ? text.length : line
+
+      substitute(text.slice(at, stop), shell === 'bash', nested)
+      at = stop
+      continue
+    }
+
+    OPENER.lastIndex = at
+    const opener = char === '<' && text[at - 1] !== '<' && !isArithmetic ? OPENER.exec(text) : null
+
+    if (opener !== null) {
+      waiting.push([opener[1] ?? '', opener[2] ?? ''])
+      at += opener[0].length
+      isWordStart = false
+      continue
+    }
+
+    if (char === '\n' && waiting.length > 0) {
+      // The opening line as it runs: comments and the << tags gone, so a tag named SH names no shell.
+      const opening = out.slice(lineAt)
+      let from = at
+      let resume = at
+
+      for (const [quote, tag] of waiting.splice(0)) {
+        // The body ends at the first line that starts with the tag: never later than bash ends it, so no command hides in a body.
+        const close = new RegExp(`^[ \\t]*${tag}\\b`, 'gm')
+        close.lastIndex = from + 1
+        const ends = close.exec(text)
+
+        spend(state, (ends?.index ?? text.length) - from)
+
+        // No end line: no heredoc, and the lines after it run.
+        if (ends === null) {
+          continue
+        }
+
+        const body = text.slice(from + 1, Math.max(from + 1, ends.index - 1))
+        let after = ends.index + ends[0].length
+
+        resume = after
+
+        while (/\s/.test(text[after] ?? '')) {
+          after++
+        }
+
+        spend(state, after - resume)
+        // The whole line after the end, so a wrapped shell (env sh) counts too.
+        const lineEnd = text.indexOf('\n', after)
+        const pipedTo = opening.trimEnd().endsWith('|') ? text.slice(after, lineEnd < 0 ? text.length : lineEnd) : ''
+
+        if (SHELL.test(opening) || SHELL.test(pipedTo)) {
+          nested(body)
+        } else if (!quote) {
+          // An unquoted body runs its substitutions wherever it goes: cat <<EOF $(terraform apply) EOF.
+          substitute(body, true, nested)
+        }
+
+        const next = text.indexOf('\n', resume)
+        from = next < 0 ? text.length : next
       }
 
-      // A comment on the opening line (cat > x.sh <<EOF # bash script) names no shell.
-      const opening = `${before} ${rest.split('\n')[0]}`.replace(/(^|\s)#.*$/, '')
-      // The whole line after the end, so a wrapped shell (env sh) counts too.
-      const pipedTo = /\|\s*$/.test(opening) ? (whole.slice(at + match.length).trim().split('\n')[0] ?? '') : ''
-      const body = rest.includes('\n') ? rest.slice(rest.indexOf('\n') + 1) : ''
+      // The bodies go, and what follows the last end line joins the opening line: cat <<EOF | ... EOF sh.
+      if (resume > at) {
+        at = resume
+        continue
+      }
+    }
 
-      if (SHELL.test(opening) || SHELL.test(pipedTo)) {
-        found.push(...invocations(body, binary, depth + 1))
-      } else if (!quote) {
-        // An unquoted body runs its substitutions wherever it goes, innermost first as below: cat <<EOF $(terraform apply) EOF.
-        let left = body
+    out += char
 
-        for (let one = SUBSTITUTION.exec(left); one !== null; one = SUBSTITUTION.exec(left)) {
-          found.push(...invocations(one[1] ?? one[2] ?? '', binary, depth + 1))
-          left = left.replace(one[0], ' ')
+    if (char === '\n') {
+      lineAt = out.length
+      isArithmetic = false
+    } else if (char === ')') {
+      isArithmetic = false
+    } else if (char === '(' && text[at + 1] === '(') {
+      isArithmetic = true
+    }
+
+    isWordStart = ' \t\r\n;|&(){}'.includes(char)
+    at++
+  }
+
+  return out
+}
+
+// Every word a brace list stands for, as bash expands it: -{a,b} is -a -b.
+const expand = (word: string, state: State, out: string[] = []): string[] => {
+  const list = LIST.exec(word)
+
+  spend(state, word.length + 1)
+
+  if (list === null) {
+    out.push(word)
+  } else {
+    for (const one of (list[1] ?? '').split(COMMA)) {
+      expand(word.slice(0, list.index) + one + word.slice(list.index + list[0].length), state, out)
+    }
+  }
+
+  return out
+}
+
+// The commands of a line, each as its words: raw as written (to tell a quoted `>` from a redirection) and as the shell hands them
+// on, quotes and escapes gone. ; | & and a newline end a command, and so do ( ) ` and a brace that is no list: a group, or a
+// PowerShell script block.
+const lex = (text: string, shell: Shell, state: State): Command[] => {
+  const blank = (): Command => ({ raw: [], words: [], dynamicAt: -1, isPiped: false })
+  let command = blank()
+  const commands = [command]
+  let raw = ''
+  let word = ''
+  let isOpen = false
+
+  const endCommand = (isPiped: boolean) => {
+    command.isPiped = isPiped
+    command = blank()
+    commands.push(command)
+  }
+
+  const endWord = () => {
+    if (!isOpen) {
+      return
+    }
+
+    const [written, cooked] = [raw, word]
+
+    raw = ''
+    word = ''
+    isOpen = false
+
+    if (!cooked.includes(OPEN) && !cooked.includes(CLOSE)) {
+      command.raw.push(written)
+      command.words.push(cooked.replaceAll(COMMA, ','))
+      return
+    }
+
+    for (const one of shell === 'bash' ? expand(cooked, state) : [cooked]) {
+      for (const part of one.replaceAll(COMMA, ',').split(new RegExp(`([${OPEN}${CLOSE}])`))) {
+        if (part === OPEN || part === CLOSE) {
+          endCommand(false)
+        } else if (part !== '') {
+          command.raw.push(part)
+          command.words.push(part)
+        }
+      }
+    }
+  }
+
+  for (let at = 0; at < text.length; at++) {
+    const end = skip(text, at, shell, state)
+    const char = text[at] ?? ''
+
+    if (end > at) {
+      const part = text.slice(at, end)
+      const inner = part.slice(1, -1)
+
+      if (char === ESCAPE[shell] && /[\r\n]/.test(part[1] ?? '')) {
+        // A line continuation: bash's leaves nothing behind (a split word is whole again), PowerShell's is a space.
+        if (shell === 'powershell') {
+          endWord()
+        }
+      } else {
+        isOpen = true
+        raw += part
+        word +=
+          char === ESCAPE[shell]
+            ? part.slice(1)
+            : char === "'"
+              ? inner
+              : char === '$'
+                ? part
+                : shell === 'bash'
+                  ? inner.replace(/\\(["\\$`]|\r?\n)/g, (_, kept: string) => (/\n/.test(kept) ? '' : kept))
+                  : shell === 'powershell'
+                    ? inner.replace(/`([\s\S])/g, '$1')
+                    : inner
+      }
+
+      at = end - 1
+    } else if (char === '\n' || char === ';' || char === '|') {
+      endWord()
+      endCommand(char === '|')
+    } else if (char === '&' && isOpen && raw.endsWith('>')) {
+      // 2>&1 is one word.
+      raw += char
+      word += char
+    } else if (char === '(' || char === ')') {
+      endWord()
+
+      // PowerShell takes ( ) among the arguments as one: terraform destroy ('-auto-approve').
+      if (shell !== 'powershell') {
+        endCommand(false)
+      } else if (char === '(') {
+        command.dynamicAt = command.words.length
+      }
+    } else if (char === '&' || (char === '`' && shell !== 'powershell')) {
+      endWord()
+      endCommand(false)
+    } else if (char === '\0') {
+      endWord()
+      command.dynamicAt = command.words.length
+    } else if (/\s/.test(char) || char === '"' || char === "'") {
+      // A quote never closed ends the word and is dropped, so what follows it is still read.
+      endWord()
+    } else if (char === ESCAPE[shell]) {
+      // The last character of the line: it escapes nothing and is dropped (terraform destroy `-auto-approve`).
+      isOpen = true
+    } else if (char === '$' && /["']/.test(text[at + 1] ?? '')) {
+      // bash's $'...' and $"..." quote too: $'terraform' is terraform.
+      // shortcut: escapes inside $'...' ($'\x74erraform') are not decoded; decode them if one is seen in use.
+      isOpen = true
+      raw += char
+    } else {
+      isOpen = true
+      raw += char
+      word += char === '{' ? OPEN : char === '}' ? CLOSE : char === ',' ? COMMA : char
+    }
+  }
+
+  endWord()
+
+  return commands
+}
+
+// Every command in `source`, nested ones included, each as its words from the program on, redirections gone.
+const read = (source: string, depth: number, state: State): string[][] => {
+  const known = state.seen.get(source)
+
+  if (known !== undefined) {
+    return known
+  }
+
+  // Fail closed: a line nested deeper than this is not read, so it is refused, not passed.
+  if (depth > DEEPEST) {
+    throw new Unreadable('the command nests too deeply to read')
+  }
+
+  const found: string[][] = []
+  const keys = new Set<string>()
+  const add = (words: string[]) => {
+    const key = words.join('\u0001')
+
+    if (words.length > 0 && !keys.has(key)) {
+      keys.add(key)
+      found.push(words)
+    }
+  }
+  const nested = (body: string) => {
+    for (const words of read(body, depth + 1, state)) {
+      add(words)
+    }
+  }
+
+  const shells: Shell[] = ['bash']
+
+  // PowerShell's reading differs only where one of these is written; cmd's is taken where a ^ or cmd itself is.
+  if (/[`\\({]|<#/.test(source)) {
+    shells.push('powershell')
+  }
+
+  if (/\^|\bcmd\b/i.test(source)) {
+    shells.push('cmd')
+  }
+
+  for (const shell of shells) {
+    spend(state, source.length + 1)
+
+    const visible = cut(shell === 'powershell' ? withoutBlocks(source) : source, shell, state, nested)
+    const commands = lex(substitute(visible, shell === 'bash', nested), shell, state)
+    let feeds = false
+
+    for (let i = commands.length - 1; i >= 0; i--) {
+      const { raw = [], words = [], dynamicAt = -1, isPiped = false } = commands[i] ?? {}
+      const next = commands[i + 1]?.words ?? []
+
+      // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
+      feeds = isPiped && (next.some(word => READER.test(word)) || (feeds && next.length > 0))
+
+      let from = 0
+
+      while (from < raw.length && LEAD.test(raw[from] ?? '')) {
+        // A bare redirection takes the next word as its target.
+        from += /^\d*[<>]+&?$/.test(raw[from] ?? '') ? 2 : 1
+      }
+
+      // Redirections (2>&1, >file, > file) are not arguments of the program.
+      const kept = words
+        .slice(from)
+        .filter((_, at) => !/^\d*[<>]/.test(raw[from + at] ?? '') && !(at > 0 && /^\d*[<>]+&?$/.test(raw[from + at - 1] ?? '')))
+      const assigned = ASSIGNED.exec(kept[0] ?? '')
+
+      if (assigned !== null) {
+        kept[0] = assigned[1] ?? ''
+      }
+
+      if (WRAPPER_NAME.test(kept[0] ?? '')) {
+        // A quoted argument of a wrapper is a command line of its own, an option's attached one (su --command="...") and a
+        // here-string (bash <<< "...") too.
+        for (const word of words.slice(from + 1).filter(one => /\s/.test(one))) {
+          nested(word.replace(/^(--?[\w-]+=|<<<)/, ''))
         }
       }
 
-      // The body goes, but the rest of the opening line stays: cat <<EOF | terraform apply runs terraform.
-      return rest.split('\n')[0] ?? ''
-    })
+      if (feeds) {
+        for (const word of kept.filter(one => /\s/.test(one))) {
+          nested(word)
+        }
 
-  // A substitution runs its body wherever it sits, inside double quotes too.
-  for (let body = SUBSTITUTION.exec(text); body !== null; body = SUBSTITUTION.exec(text)) {
-    found.push(...invocations(body[1] ?? body[2] ?? '', binary, depth + 1))
-    text = text.replace(body[0], ' ')
-  }
-
-  const commands: string[][] = [[]]
-  let isComment = false
-
-  for (const token of text.match(TOKEN) ?? []) {
-    // A word that starts with # starts a comment to the end of its line: `terraform apply # deploy` passes no plan.
-    if (isComment && token !== '\n') {
-      continue
-    }
-
-    isComment = token.startsWith('#')
-
-    if (isComment) {
-      continue
-    }
-
-    if (OPERATOR.test(token)) {
-      commands.push([])
-    } else {
-      commands.at(-1)?.push(token)
-    }
-  }
-
-  for (const raw of commands) {
-    let from = 0
-
-    while (from < raw.length && LEAD.test(raw[from] ?? '')) {
-      // A bare redirection takes the next word as its target.
-      from += /^\d*[<>]+&?$/.test(raw[from] ?? '') ? 2 : 1
-    }
-
-    const words = withoutRedirections(raw.slice(from)).map(unquote)
-
-    if (isNamed(words[0] ?? '', WRAPPER_NAME)) {
-      // A quoted argument of a wrapper is a command line of its own, an option's attached one too (su --command="...").
-      for (const word of words.slice(1).filter(one => /\s/.test(one))) {
-        found.push(...invocations(word.replace(/^--?[\w-]+=/, ''), binary, depth + 1))
+        nested(kept.slice(1).join(' '))
       }
 
-      const at = words.findIndex((word, i) => i > 0 && isNamed(word, binary))
+      const clean = kept.map(word => word.replaceAll('\0', ''))
+
+      add(dynamicAt > from || kept.some(word => word.includes('\0')) ? [...clean, DYNAMIC] : clean)
+    }
+  }
+
+  state.seen.set(source, found)
+
+  return found
+}
+
+// A guard asks about one line many times, once for each program it knows.
+let last: { source: string; commands?: string[][]; why?: string } | undefined
+
+const commandsOf = (source: string): string[][] => {
+  if (last?.source !== source) {
+    try {
+      if (source.length > MOST) {
+        throw new Unreadable('the command is longer than 64 KB')
+      }
+
+      if (/[\0\uFDD0-\uFDD2]/.test(source)) {
+        throw new Unreadable('the command holds a character no command line uses')
+      }
+
+      last = { source, commands: read(source, 0, { left: WORK, seen: new Map() }) }
+    } catch (error) {
+      last = { source, why: error instanceof Unreadable ? error.message : 'the command could not be read' }
+    }
+  }
+
+  if (last.commands === undefined) {
+    throw new Unreadable(last.why)
+  }
+
+  return last.commands
+}
+
+/** Why `source` cannot be read (too long, nested too deeply, too complex), or undefined. A guard must deny a line that has a reason. */
+export const unreadable = (source: string): string | undefined => {
+  try {
+    commandsOf(source)
+
+    return undefined
+  } catch (error) {
+    return (error as Error).message
+  }
+}
+
+// shortcut: no variable or alias expansion ($FLAG, @args and a program named by a variable are not followed), and a heredoc body
+// is read only for its substitutions, unless a shell on its opening line or piped to after its end reads it all; a body saved to
+// a file and run later is not followed, nor is input a shell reads from a file or a program (cat x | bash, xargs prog); a
+// PowerShell here-string (@' '@) is read as plain quotes; it errs toward finding a call, so `echo '$(prog …)'`,
+// `bash -c echo prog …` and a quoted argument of any wrapper count as calls. Upgrade to a real shell parser if any of these bites.
+/**
+ * The argument list of every call to `binary` in `source`, wrappers, subshells and substitutions included. A list that ends with
+ * DYNAMIC has arguments the shell fills in. Throws Unreadable for a line it cannot read: deny it.
+ */
+export const invocations = (source: string, binary: RegExp): string[][] => {
+  const found: string[][] = []
+
+  for (const words of commandsOf(source)) {
+    if (WRAPPER_NAME.test(words[0] ?? '')) {
+      const at = words.findIndex((word, i) => i > 0 && binary.test(word))
 
       if (at > 0) {
-        found.push(words.slice(at + 1).flatMap(word => word.split(/[\s,]+/)).filter(Boolean))
+        found.push(
+          words
+            .slice(at + 1)
+            .flatMap(word => word.split(/[\s,]+/))
+            .filter(Boolean),
+        )
       }
-    } else if (isNamed(words[0] ?? '', binary)) {
+    } else if (binary.test(words[0] ?? '')) {
       found.push(words.slice(1))
     }
   }

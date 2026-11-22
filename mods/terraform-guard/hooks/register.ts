@@ -1,8 +1,11 @@
 import type { Register } from 'claude-code'
 
-import { invocations } from './shell'
+import { DYNAMIC, invocations } from './shell'
 
-const BINARY = /^(.*[\\/])?(terraform|tofu|terragrunt)(\.exe)?$/i
+const BINARY = /^(.*[\\/])?(terraform|tofu|terragrunt)(\.(exe|cmd|bat))?$/i
+// Programs that run the one named after them and are not among the shared parser's wrappers: a shell's builtin and noglob, and the
+// package runners (npx terraform, pnpm dlx terraform, yarn dlx tofu, uvx terragrunt).
+const LAUNCHER = /^(.*[\\/])?(builtin|noglob|npx|bunx|pnpm|yarn|uvx)(\.(exe|cmd|bat))?$/i
 // Flags that stand alone. Any other flag written without `=` takes the next word as its value (-var-file prod.tfvars,
 // --working-dir live), which must not pass for a plan file or a subcommand.
 const BARE_FLAG =
@@ -17,31 +20,66 @@ const OTHER_VERB =
 const HELP = /^--?h(elp)?$/
 // Terraform also takes flags from TF_CLI_ARGS and TF_CLI_ARGS_<verb>: set on the command line, or inherited (passed in as `inherited`).
 // However it is set: VAR=, $env:VAR +=, [Environment]::SetEnvironmentVariable('VAR', ...).
-const INJECTED = /TF_CLI_ARGS\w*[^;&|\n]*-auto-approve(?!=(0|f|false)\b)/i
+// The rest of the command that sets one, quoted runs whole: a ; & or | inside the quotes is part of the value (-var=a=b&c -auto-approve).
+const SET = /TF_CLI_ARGS\w*(?:"[^"]*"|'[^']*'|[^;&|\n])*/gi
+const APPROVES = /-auto-approve(?!=(0|f|false)\b)/i
 // Terragrunt's apply-all and destroy-all, and the ways it runs every unit, where it adds -auto-approve itself.
 const VERB = /^(apply|destroy)(-all)?$/
 const EVERY_UNIT = /^(run-all|graph|stack|--all|-a|--graph|destroy-all)$/
 // An answer fed to destroy's prompt approves it: a pipe before it, or its input redirected.
-const FED = /(?<!\|)\|(?!\|)[\s\S]*(?<![\w.-])destroy(?![\w.-])|</
+// shortcut: any pipe earlier in the command counts, one that ends before the destroy too (git log | head; terraform destroy). Telling those
+// apart needs the pipeline's real extent (yes |\n terraform destroy, yes | while ...; do terraform destroy; done): narrow it only with a hostile review.
+const PIPE = /(?<!\|)\|(?!\|)/
+const DESTROY = /(?<![\w.-])destroy(?![\w.-])/
+
+// Two single passes, not one pattern that rescans the rest of the command from every pipe.
+const isFed = (command: string) => {
+  const pipeAt = command.search(PIPE)
+
+  return command.includes('<') || (pipeAt >= 0 && DESTROY.test(command.slice(pipeAt)))
+}
+
+// Every call of a terraform program: named itself, or after a launcher, whose quoted argument (npx -c "terraform ...") is split into words.
+const calls = (command: string) => [
+  ...invocations(command, BINARY),
+  ...invocations(command, LAUNCHER).flatMap(args => {
+    const words = args.flatMap(word => word.split(/\s+/)).filter(Boolean)
+    const at = words.findIndex(word => BINARY.test(word))
+
+    return at < 0 ? [] : [words.slice(at + 1)]
+  }),
+]
 
 type Inherited = { all?: string; apply?: string; destroy?: string }
 
 const refusal = (command: string, env: Inherited = {}): string | undefined => {
-  for (const args of invocations(command, BINARY)) {
+  const isInjected = (command.match(SET) ?? []).some(set => APPROVES.test(set))
+
+  for (const args of calls(command)) {
     const verbAt = args.findIndex(word => VERB.test(word))
     const [first] = positional(args)
 
     // Help changes nothing; another subcommand first means apply is its argument.
-    if (verbAt < 0 || args.some(word => HELP.test(word)) || OTHER_VERB.test(first ?? '')) {
+    if (args.some(word => HELP.test(word)) || OTHER_VERB.test(first ?? '')) {
+      continue
+    }
+
+    // The shell fills in words this guard cannot read: -auto-approve on an apply or destroy, or the verb itself (terraform $(echo destroy ...)).
+    if (args.includes(DYNAMIC) && (verbAt >= 0 || !positional(args).some(word => OTHER_VERB.test(word)))) {
+      return `a $( ), backtick or ( ) among the arguments can add -auto-approve to an apply or destroy. Write the arguments out. ${HOW}`
+    }
+
+    if (verbAt < 0) {
       continue
     }
 
     const rest = args.slice(verbAt + 1)
     const verb = args[verbAt]?.startsWith('apply') ? 'apply' : 'destroy'
-    const inherited = `${env.all ?? ''} ${env[verb] ?? ''}`.split(/\s+/).filter(Boolean)
+    // Terraform splits the value like a shell does, so a quoted flag is the flag.
+    const inherited = `${env.all ?? ''} ${env[verb] ?? ''}`.replace(/["']/g, '').split(/\s+/).filter(Boolean)
 
     // Terraform reads =1, =t, =TRUE as true too, so only an explicit false passes.
-    if (INJECTED.test(command) || [...args, ...inherited].some(word => /^--?auto-approve(=.*)?$/.test(word) && !/=(0|f|false)$/i.test(word))) {
+    if (isInjected ||[...args, ...inherited].some(word => /^--?auto-approve(=.*)?$/.test(word) && !/=(0|f|false)$/i.test(word))) {
       return `-auto-approve is not allowed on ${args[verbAt]}. ${HOW}`
     }
 
@@ -49,7 +87,7 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
       return `terragrunt adds -auto-approve to a destroy of every unit. Pass --no-auto-approve, or: ${HOW}`
     }
 
-    if (verb === 'destroy' && FED.test(command)) {
+    if (verb === 'destroy' && isFed(command)) {
       return `destroy takes its approval from the user, not from a pipe or a file. Run it on its own, or: ${HOW}`
     }
 
