@@ -3,3 +3,4 @@
 # AWS's documentation sample secret keys, split in two strings in tf-lint so no scanner matches the whole key (introduced in 8d8b0d4, renamed in 525fc93).
 8d8b0d4d309ec6fe4ee445f09dbc794b618c1e7a:mods/tf-lint/hooks/register.ts:generic-api-key:6
 525fc9399919a46978fcb78d8aeea1ab5c6f7147:mods/tf-lint/hooks/register.ts:generic-api-key:6
+2628b3767bc13688b9ed334c6b67486b897d4e51:mods/tf-lint/hooks/register.ts:generic-api-key:6
