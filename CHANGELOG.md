@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-11-21)
 
 - tf-lint 0.8.0: flags more non-human-identity risks. In Terraform: a
   long-lived `google_service_account_key`, `azuread_application_password` or
