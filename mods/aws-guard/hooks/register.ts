@@ -26,6 +26,10 @@ const MARK = '\uFDD3'
 // A word the shell fills in: a marked substitution, a variable ($OP, ${OP}, $env:OP, cmd's %OP% and !OP!), a glob (r? is rb
 // beside a file of that name) or PowerShell's @splat.
 const FILLED = new RegExp(String.raw`[$${MARK}*?[]|[%!]\w+[%!]|^@\w`)
+// Put in that second reading before each $ and opening backtick that is not surely inside double quotes: bash splits what an
+// unquoted one leaves into words, so `--profile $P` can be `--profile x iam delete-role`. cmd pastes %P% in as text, quoted or not.
+const UNQUOTED = '\uFDD4'
+const SPLIT = new RegExp(String.raw`${UNQUOTED}|[%!]\w+[%!]`)
 // The verbs of the Organizations and Identity Center writes: no service's name starts with one.
 const WRITE_VERB =
   /^(accept|attach|cancel|close|create|decline|delete|deregister|detach|disable|enable|invite|leave|move|provision|put|register|remove|tag|untag|update)-/
@@ -181,8 +185,53 @@ const CMDLET_WITH: readonly (readonly [string, string, (args: readonly string[])
   ['Initialize-AWSDefault(Configuration|s)', 'Initialize-AWSDefaultConfiguration', hasKey],
 ]
 
+// The command with UNQUOTED put in, quotes read as bash does.
+// shortcut: quotes are followed on one line only, and not past a substitution inside double quotes; in a command of several lines,
+// or after such a substitution, every $ counts as unquoted, so a quoted global option's value before the operation is denied there.
+const markUnquoted = (text: string): string => {
+  let out = ''
+  let quote = ''
+  let isAnsi = false
+  let inBackticks = false
+  let isLost = text.includes('\n')
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+
+    // A backslash escapes nothing inside '...', but does inside $'...'.
+    if (c === '\\' && (quote !== "'" || isAnsi)) {
+      out += text.slice(i, i + 2)
+      i++
+      continue
+    }
+
+    const opens = c === '`' && quote !== "'" && !inBackticks
+
+    if (c === '$' || opens) {
+      out += quote !== '"' || isLost ? UNQUOTED : ''
+      // Its body has quotes of its own, and where it ends is not read.
+      isLost ||= quote === '"' && (opens || text[i + 1] === '(')
+    }
+
+    if (c === '`' && quote !== "'") {
+      inBackticks = !inBackticks
+    } else if (quote === '') {
+      if (c === '"' || c === "'") {
+        quote = c
+        isAnsi = c === "'" && text[i - 1] === '$'
+      }
+    } else if (c === quote) {
+      quote = ''
+    }
+
+    out += c
+  }
+
+  return out
+}
+
 // A filled-in word where the service or the operation may stand: any word up to the second one that no option can take as its
-// value, but an option-led word and a known global option's value. After those two, a filled-in word is an argument.
+// value, but an option-led word and a known global option's value that is one word. After those two, a filled-in word is an argument.
 // An option a substitution is joined to (--x=$(echo 1 rb)) can end in any words too.
 const isFilled = (args: readonly string[]): boolean => {
   let positional = 0
@@ -190,7 +239,7 @@ const isFilled = (args: readonly string[]): boolean => {
   for (const [i, word] of args.entries()) {
     const before = args[i - 1] ?? ''
 
-    if (word.startsWith('-') ? !word.includes(MARK) : VALUE_OPTION.test(before)) {
+    if (word.startsWith('-') ? !word.includes(MARK) : VALUE_OPTION.test(before) && !SPLIT.test(word)) {
       continue
     }
 
@@ -411,7 +460,7 @@ const denied = (command: string, depth = 0): string | undefined => {
   const valued = new Set([...command.matchAll(/(--[\w-]+)\s+["']?(?:\$\(|`|\()/g)].map(([, option = '']) => option))
   // Read as written, and again with each substitution marked (a nested command line comes from a marked one): the second reading
   // only adds denies, since a mark can part a word (PowerShell's delete`-role).
-  const marked = depth > 0 ? command : command.replace(/`([^`\n]*)`/g, `${MARK}\`$1\``).replace(/\$?\(/g, `${MARK}$&`)
+  const marked = depth > 0 ? command : markUnquoted(command).replace(/`([^`\n]*)`/g, `${MARK}\`$1\``).replace(/\$?\(/g, `${MARK}$&`)
 
   if (unreadable(marked) !== undefined) {
     return 'a command with more substitutions than the guard reads'
