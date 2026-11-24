@@ -120,6 +120,10 @@ const RULES: readonly (readonly [string, boolean])[] = [
   ['Bash(mysql -e "select 1" && mkdir -p build)', false],
   ['Bash(terraform plan:*)', false],
   ['Bash(gh pr view --json title)', false],
+  ['Bash(curl -H "Authorization: Bearer <your-token>" https://api.example.com)', false],
+  ['Bash(curl https://api.example.com/login?token_type=bearer)', false],
+  ['Bash(TOKEN_FILE=/run/secrets/token ./deploy)', false],
+  [`Bash(TOKEN_FILE=${'hunter2'}pw ./deploy)`, true],
 ]
 
 for (const [rule, isSecret] of RULES) {
@@ -250,6 +254,11 @@ const BROKEN: readonly (readonly [string, string, boolean])[] = [
   ['a BOM and no secret', '﻿{"env":{"AWS_REGION":"us-gov-west-1","DB_PASSWORD":"$DB_PASSWORD"}}', false],
   ['a trailing comma and no secret', '{"env":{"MAX_THINKING_TOKENS":"8000","API_KEY":"${API_KEY}",}}', false],
   ['a comment and no secret', '{ // local\n "env": {"AWS_REGION":"us-gov-west-1","DB_PASSWORD":"$DB_PASSWORD","MAX_THINKING_TOKENS":"8000"} }', false],
+  // Found by the 0.8 audit: a flag and its value are two strings in args, which the whole-file scan read apart.
+  ['a comment and a key after a flag in args', `{ // local\n "mcpServers": {"a":{"command":"npx","args":["-y","server","--api-key","${API_KEY}7890"]}} }`, true],
+  ['a comment and a key on the line after its flag', `{ // local\n "mcpServers": {"a":{"args":["--token",\n  "${API_KEY}7890"]}} }`, true],
+  ['a comment and a password after sshpass -p in args', `{ // local\n "mcpServers": {"a":{"command":"sshpass","args":["-p","${PASSWORD}","ssh","host"]}} }`, true],
+  ['a comment and ordinary args', '{ // local\n "mcpServers": {"a":{"command":"docker","args":["run","-p","8080:80","server","--token","$TOKEN","--port","8080"]}} }', false],
 ]
 
 for (const [name, text, isSecret] of BROKEN) {
@@ -272,6 +281,30 @@ const SERVERS: readonly (readonly [string, Record<string, unknown>, number])[] =
   ['variables in args and url', { command: 'npx', args: ['--api-key', '${API_KEY}', '--token', '$TOKEN'], url: 'https://${USER}:${PASS}@mcp.example.com/mcp?api_key=${KEY}' }, 0],
   ['ordinary args and url', { command: 'docker', args: ['run', '-p', '8080:80', '--rm', 'mcp/server', '--port', '8080', 12, null], url: 'https://mcp.example.com/mcp?mode=read' }, 0],
   ['args, url and command of the wrong type', { command: 7, args: 'npx', url: ['x'] }, 0],
+  // False positives found by the 0.8 audit, each with the real secrets that must still be flagged beside it.
+  ['a port mapping after the word login', { command: 'docker', args: ['run', '--name', 'login-proxy', '-p', '8080:80', '-p', '127.0.0.1:9090:90/tcp', 'mcp/server'] }, 0],
+  ['a docker login password that starts like a port mapping', { command: 'docker', args: ['login', '-u', 'me', '-p', '8080:80x', 'registry.example.com'] }, 1],
+  ['a docker login password after a port mapping', { command: 'docker', args: ['run', '-p', '8080:80', 'img', 'login', '-p', 'hunter2'] }, 1],
+  ['a numeric docker login password', { command: 'docker', args: ['login', '-u', 'me', '-p', '80808080'] }, 1],
+  ['token_type=bearer in the url', { type: 'http', url: 'https://mcp.example.com/mcp?token_type=bearer' }, 0],
+  ['token_type=bearer then a mode in the url', { type: 'http', url: 'https://mcp.example.com/mcp?token_type=Bearer&mode=read' }, 0],
+  ['token_type=bearer then a token in the url', { type: 'http', url: `https://mcp.example.com/mcp?token_type=bearer&token=${API_KEY}` }, 1],
+  ['a token that starts with bearer', { type: 'http', url: `https://mcp.example.com/mcp?token=bearer-${API_KEY}` }, 1],
+  ['a token that starts with bearer and no dash', { type: 'http', url: `https://mcp.example.com/mcp?access_token=bearer${API_KEY}` }, 1],
+  ['file, endpoint and folder names', { command: 'npx', env: { TOKEN_FILE: '/run/secrets/token', PASSWORD_FILE: 'C:\\secrets\\pw.txt', API_TOKEN_FILE: '~/.config/token', TOKEN_ENDPOINT: 'https://auth.example.com/oauth/token', PWD: '/home/me/project' } }, 0],
+  ['a secret under TOKEN_FILE', { command: 'npx', env: { TOKEN_FILE: PASSWORD } }, 1],
+  ['a secret under PASSWORD_FILE', { command: 'npx', env: { PASSWORD_FILE: API_KEY } }, 1],
+  ['a secret under TOKEN_ENDPOINT', { command: 'npx', env: { TOKEN_ENDPOINT: PASSWORD } }, 1],
+  ['a password in a TOKEN_ENDPOINT url', { command: 'npx', env: { TOKEN_ENDPOINT: `https://user:${PASSWORD}@auth.example.com/token` } }, 1],
+  ['a key in a TOKEN_ENDPOINT url', { command: 'npx', env: { TOKEN_ENDPOINT: `https://auth.example.com/token?api_key=${API_KEY}` } }, 1],
+  ['a secret under PWD', { command: 'npx', env: { PWD: PASSWORD } }, 1],
+  ['secrets that start with a slash under DB_PWD and API_TOKEN', { command: 'npx', env: { DB_PWD: `/${PASSWORD}`, API_TOKEN: `/${API_KEY}` } }, 2],
+  ['a key format under TOKEN_FILE', { command: 'npx', env: { TOKEN_FILE: GITHUB } }, 1],
+  ['a placeholder bearer token', { type: 'http', url: 'https://mcp.example.com/mcp', headers: { Authorization: 'Bearer <your-token>' } }, 0],
+  ['a bearer token that only starts like a placeholder', { type: 'http', url: 'https://mcp.example.com/mcp', headers: { Authorization: `Bearer <${API_KEY}` } }, 1],
+  ['a bearer token after a placeholder', { type: 'http', url: 'https://mcp.example.com/mcp', headers: { Authorization: `Bearer <x>${API_KEY}` } }, 1],
+  // Kept: nothing tells a word from a passphrase.
+  ['a word after --token', { command: 'npx', args: ['server', '--token', 'enabled-mode'] }, 1],
 ]
 
 for (const [name, server, count] of SERVERS) {
