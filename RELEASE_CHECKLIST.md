@@ -40,9 +40,43 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 - D2 Pinned dev Claude Code moved 2.1.322 → 2.1.325 (npm `stable` tag). The README's managed
   baseline needs ≥2.1.324, so CI was testing on a version the baseline itself rejects. Done by
   editing `package.json` and a bare `npm install` (supply-chain-guard correctly denied a named install).
+  Evidence: unchanged mods on 2.1.325 pass the same 3,723 tests (commit 2065cee).
 - D3 Work split: one Fable implementer per mod in its own worktree; the terraform-guard owner also
   owns the four `shell.ts` copies. Implementers do not touch CHANGELOG/README; the lead integrates them.
 - D4 The 64 KB / 8-level nesting deny stays: it is fail-closed by design, not a defect.
+
+- D5 aws-guard: an unquoted substitution/variable as a global option's value before the operation is
+  denied (bash word-splits it); the double-quoted form stays allowed. Changes 4 former must-allow tests.
+- D6 terraform-guard: `case` inside `$( )` fails closed (parser cannot model it); pipe false positive
+  loosened narrowly, pending hostile review (C13).
+- D7 Kept as documented limits (not fixed): supply-chain `npx tsc` and substitution-anywhere denies;
+  secret-allow `--token <word>`.
+
+## Integration log
+
+| Commit | Branch merged | Mod tests |
+|---|---|---|
+| 460bc48 | secret-allow-guard 0.5.0 | 134 pass |
+| e78882d | tf-lint 0.9.0 | 646 pass |
+| a7e84ee | supply-chain-guard 0.4.0 | 490 pass |
+| f77ffe0 | aws-guard 0.7.0 | 1,050 pass |
+| bc52eab | terraform-guard 0.5.0 + shared parser | full `npm test`: 4,375 pass, 0 fail, shell.ts copies match |
+| 90590fb | secret-read-guard 0.5.0 | 1,594 pass on merged parser |
+| — | secret-read-guard Codex fixes (`export {,}`, dotglob, listing cost) | implementer running |
+
+## Security review log
+
+- Codex (gpt-6-astra, read-only) on secret-read-guard 0.5.0: 3 findings, all verified against code and
+  sent back for fixing: `export {,}` env dump bypass of the new `export {` exemption (register.ts:411);
+  `shopt -s dotglob; cat *` reaches `.env` (register.ts:257); unbounded `witness` work on large folders.
+- Fable hostile reviewer on the other five mods + shell.ts: running.
+
+## Live smoke tests
+
+- 2026-11-24 secret-read-guard wildcard listing (`$.fs.list`), real Claude Code 2.1.325 session
+  (`claude -p --setting-sources project --plugin-dir <renamed copy srg-rc>`, Haiku, only `Bash(cat *)` allowed),
+  folder with a fake `prod.tfvars` + `readme.txt`: `cat *` denied by `srg-rc` (the installed 0.3.1 copy lets it through).
+  PASS. The copy was renamed because this machine's managed settings load another secret-read-guard first.
 
 ## Resume here
 
