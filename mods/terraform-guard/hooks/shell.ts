@@ -5,8 +5,12 @@
 // - invocations(source, binary): the argument list of every call to `binary`. It THROWS Unreadable when the line cannot be read
 //   (over 64 KB, nested too deeply, too costly to read), so a guard that does not catch it denies through its own .catch.
 // - unreadable(source): the reason invocations would throw, or undefined; for a guard that wants to say why it denies.
-// - DYNAMIC: the last argument of a call whose arguments are not all written out: a $( ), ` ` or PowerShell ( ) stood among them, so
-//   the shell can add any word there. A guard that reads flags or positions must deny a call it would deny with any word added.
+// - DYNAMIC: the last argument of a call whose arguments are not all written out: a $( ), ` `, PowerShell ( ) or brace sequence
+//   stood among them, so the shell can add any word there. A guard that reads flags or positions must deny a call it would deny
+//   with any word added.
+// - invocations(source, binary, true): the same calls with DYNAMIC where each such word stood, not at the end, and a NUL left in a
+//   word a quoted substitution is part of ("$(x)" is one word), for a guard that must know what stands before the unread word. A
+//   DYNAMIC at the end is one that stood before the program (sudo $(x) prog).
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
@@ -39,7 +43,12 @@ const WORK = 1 << 24
 const OPEN = '\uFDD0'
 const CLOSE = '\uFDD1'
 const COMMA = '\uFDD2'
-const LIST = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*${COMMA}[^${OPEN}${CLOSE}]*)${CLOSE}`)
+const PAIR = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*)${CLOSE}`)
+// bash's {a..c} and {1..9..2}: the words it stands for are not worked out, it is marked like a substitution.
+const SEQUENCE = new RegExp(`${OPEN}(?:-?\\d+\\.\\.-?\\d+|[A-Za-z]\\.\\.[A-Za-z])(?:\\.\\.-?\\d+)?${CLOSE}`, 'g')
+// The escapes bash decodes inside $'...'.
+const ANSI = /\\(x[\da-fA-F]{1,2}|u[\da-fA-F]{1,4}|U[\da-fA-F]{1,8}|[0-7]{1,3}|c[\s\S]|[\s\S])/g
+const NAMED: Record<string, string> = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' }
 
 // The line is read once as each shell would, and a call found by any reading counts. They differ in the character that escapes
 // the next one (terraf`orm, terr\aform and terr^aform are terraform to one shell each), and: bash expands a brace list
@@ -47,9 +56,11 @@ const LIST = new RegExp(`${OPEN}([^${OPEN}${CLOSE}]*${COMMA}[^${OPEN}${CLOSE}]*)
 type Shell = 'bash' | 'powershell' | 'cmd'
 const ESCAPE: Record<Shell, string> = { bash: '\\', powershell: '`', cmd: '^' }
 
-type State = { left: number; seen: Map<string, string[][]> }
-// dynamicAt: how many words stood before the last substitution or PowerShell ( ) in the command; -1 for none.
-type Command = { raw: string[]; words: string[]; dynamicAt: number; isPiped: boolean }
+// isAnsi: whether this reading takes $'...' as bash does. A shell without it (an older dash) reads a $ and plain quotes, and a \'
+// closes there what it does not close in bash, so a line that holds one is read both ways.
+type State = { left: number; seen: Map<string, string[][]>; isAnsi: boolean }
+// dynamic: how many words stood before each substitution, PowerShell ( ) or brace sequence in the command.
+type Command = { raw: string[]; words: string[]; dynamic: number[]; isPiped: boolean }
 
 const spend = (state: State, cost: number) => {
   state.left -= cost
@@ -65,6 +76,24 @@ const skip = (text: string, at: number, shell: Shell, state: State): number => {
 
   if (char === ESCAPE[shell] && at + 1 < text.length) {
     return at + (text.startsWith('\r\n', at + 1) ? 3 : 2)
+  }
+
+  // $$ is one word of its own: the quote after it is a plain one ($$'a\' ends at the \').
+  if (shell === 'bash' && char === '$' && text[at + 1] === '$') {
+    return at + 2
+  }
+
+  // bash's $'...' ends at the first ' no backslash escapes.
+  if (shell === 'bash' && state.isAnsi && char === '$' && text[at + 1] === "'") {
+    let end = at + 2
+
+    while (end < text.length && text[end] !== "'") {
+      end += text[end] === '\\' ? 2 : 1
+    }
+
+    spend(state, end - at)
+
+    return end < text.length ? end + 1 : at
   }
 
   if (char === "'" || (char === '$' && text[at + 1] === '{')) {
@@ -113,6 +142,9 @@ const withoutBlocks = (text: string) => {
 // Hands the body of every $( ) and, where the shell has them, ` ` to `nested`, innermost first, and leaves a NUL where each stood:
 // what it puts there is not known.
 // shortcut: quotes and escapes are not read here, so '$(prog)' and \$(prog) count as calls; read them if that bites.
+// shortcut: a case inside $( ) is refused, not read: its pattern's ) would end the substitution early and hide the rest
+// ($(case x in a) prog ;; esac)). Read the case if that bites.
+const CASE = /(^|[\s;&|({])case\s[\s\S]*?\sin(\s|$)/
 const substitute = (text: string, hasBackticks: boolean, nested: (body: string) => void): string => {
   const outer: [string, boolean][] = []
   let out = ''
@@ -131,6 +163,10 @@ const substitute = (text: string, hasBackticks: boolean, nested: (body: string) 
       const [before, isSubstitution] = outer.pop() ?? ['', false]
 
       if (isSubstitution) {
+        if (CASE.test(out)) {
+          throw new Unreadable('a case inside $( ) cannot be read')
+        }
+
         nested(out)
         out = `${before}\0 `
       } else {
@@ -273,17 +309,35 @@ const cut = (text: string, shell: Shell, state: State, nested: (body: string) =>
   return out
 }
 
-// Every word a brace list stands for, as bash expands it: -{a,b} is -a -b.
+// What bash makes of the inside of $'...': \x2d, \055 and \u002d are all a dash.
+const decode = (inner: string) =>
+  inner
+    .replace(ANSI, (_, code: string) =>
+      /^[xuU]./.test(code)
+        ? String.fromCodePoint(parseInt(code.slice(1), 16))
+        : /^[0-7]/.test(code)
+          ? String.fromCharCode(parseInt(code, 8) & 0xff)
+          : code.length > 1
+            ? String.fromCharCode(code.charCodeAt(1) & 31)
+            : (NAMED[code] ?? (/[\\'"?]/.test(code) ? code : `\\${code}`)),
+    )
+    // A decoded character must not pass for one of the parser's own marks.
+    .replace(/[\0\uFDD0-\uFDD2]/g, '\uFFFD')
+
+// Every word a brace list stands for, as bash expands it: -{a,b} is -a -b. A pair with no comma inside is no list, and bash
+// leaves its braces as written: {-a,-var={x}} is -a -var={x}.
 const expand = (word: string, state: State, out: string[] = []): string[] => {
-  const list = LIST.exec(word)
+  const pair = PAIR.exec(word)
 
   spend(state, word.length + 1)
 
-  if (list === null) {
+  if (pair === null) {
     out.push(word)
   } else {
-    for (const one of (list[1] ?? '').split(COMMA)) {
-      expand(word.slice(0, list.index) + one + word.slice(list.index + list[0].length), state, out)
+    const inner = pair[1] ?? ''
+
+    for (const one of inner.includes(COMMA) ? inner.split(COMMA) : [`{${inner}}`]) {
+      expand(word.slice(0, pair.index) + one + word.slice(pair.index + pair[0].length), state, out)
     }
   }
 
@@ -294,7 +348,7 @@ const expand = (word: string, state: State, out: string[] = []): string[] => {
 // on, quotes and escapes gone. ; | & and a newline end a command, and so do ( ) ` and a brace that is no list: a group, or a
 // PowerShell script block.
 const lex = (text: string, shell: Shell, state: State): Command[] => {
-  const blank = (): Command => ({ raw: [], words: [], dynamicAt: -1, isPiped: false })
+  const blank = (): Command => ({ raw: [], words: [], dynamic: [], isPiped: false })
   let command = blank()
   const commands = [command]
   let raw = ''
@@ -324,7 +378,13 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
       return
     }
 
-    for (const one of shell === 'bash' ? expand(cooked, state) : [cooked]) {
+    const listed = shell === 'bash' ? cooked.replace(SEQUENCE, '\0') : cooked
+
+    if (listed !== cooked) {
+      command.dynamic.push(command.words.length)
+    }
+
+    for (const one of shell === 'bash' ? expand(listed, state) : [cooked]) {
       for (const part of one.replaceAll(COMMA, ',').split(new RegExp(`([${OPEN}${CLOSE}])`))) {
         if (part === OPEN || part === CLOSE) {
           endCommand(false)
@@ -355,7 +415,9 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
         word +=
           char === ESCAPE[shell]
             ? part.slice(1)
-            : char === "'"
+            : part.startsWith("$'")
+              ? decode(part.slice(2, -1))
+              : char === "'"
               ? inner
               : char === '$'
                 ? part
@@ -367,13 +429,13 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
       }
 
       at = end - 1
+    } else if ((char === '&' || char === '|') && isOpen && text[at - 1] === '>' && text[at - 2] !== ESCAPE[shell]) {
+      // 2>&1 is one word, and so is >|out. An escaped > is no redirection: echo \>| prog pipes to prog.
+      raw += char
+      word += char
     } else if (char === '\n' || char === ';' || char === '|') {
       endWord()
       endCommand(char === '|')
-    } else if (char === '&' && isOpen && raw.endsWith('>')) {
-      // 2>&1 is one word.
-      raw += char
-      word += char
     } else if (char === '(' || char === ')') {
       endWord()
 
@@ -381,14 +443,14 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
       if (shell !== 'powershell') {
         endCommand(false)
       } else if (char === '(') {
-        command.dynamicAt = command.words.length
+        command.dynamic.push(command.words.length)
       }
     } else if (char === '&' || (char === '`' && shell !== 'powershell')) {
       endWord()
       endCommand(false)
     } else if (char === '\0') {
       endWord()
-      command.dynamicAt = command.words.length
+      command.dynamic.push(command.words.length)
     } else if (/\s/.test(char) || char === '"' || char === "'") {
       // A quote never closed ends the word and is dropped, so what follows it is still read.
       endWord()
@@ -396,8 +458,7 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
       // The last character of the line: it escapes nothing and is dropped (terraform destroy `-auto-approve`).
       isOpen = true
     } else if (char === '$' && /["']/.test(text[at + 1] ?? '')) {
-      // bash's $'...' and $"..." quote too: $'terraform' is terraform.
-      // shortcut: escapes inside $'...' ($'\x74erraform') are not decoded; decode them if one is seen in use.
+      // bash's $"..." quotes too, and so does a $'...' another shell is handed: $'terraform' is terraform.
       isOpen = true
       raw += char
     } else {
@@ -436,9 +497,18 @@ const read = (source: string, depth: number, state: State): string[][] => {
     }
   }
   const nested = (body: string) => {
+    const { isAnsi } = state
+
     for (const words of read(body, depth + 1, state)) {
       add(words)
     }
+
+    state.isAnsi = isAnsi
+  }
+
+  // bash's &> is a redirection, and what follows its target still belongs to the program; sh ends the command at the &. Both are read.
+  if (source.includes('&>')) {
+    nested(source.replaceAll('&>', '>'))
   }
 
   const shells: Shell[] = ['bash']
@@ -452,7 +522,8 @@ const read = (source: string, depth: number, state: State): string[][] => {
     shells.push('cmd')
   }
 
-  for (const shell of shells) {
+  for (const [shell, isAnsi] of shells.flatMap((shell): [Shell, boolean][] => (shell === 'bash' && source.includes("$'") ? [[shell, true], [shell, false]] : [[shell, false]]))) {
+    state.isAnsi = isAnsi
     spend(state, source.length + 1)
 
     const visible = cut(shell === 'powershell' ? withoutBlocks(source) : source, shell, state, nested)
@@ -460,7 +531,7 @@ const read = (source: string, depth: number, state: State): string[][] => {
     let feeds = false
 
     for (let i = commands.length - 1; i >= 0; i--) {
-      const { raw = [], words = [], dynamicAt = -1, isPiped = false } = commands[i] ?? {}
+      const { raw = [], words = [], dynamic = [], isPiped = false } = commands[i] ?? {}
       const next = commands[i + 1]?.words ?? []
 
       // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
@@ -470,13 +541,12 @@ const read = (source: string, depth: number, state: State): string[][] => {
 
       while (from < raw.length && LEAD.test(raw[from] ?? '')) {
         // A bare redirection takes the next word as its target.
-        from += /^\d*[<>]+&?$/.test(raw[from] ?? '') ? 2 : 1
+        from += /^\d*[<>]+[&|]?$/.test(raw[from] ?? '') ? 2 : 1
       }
 
       // Redirections (2>&1, >file, > file) are not arguments of the program.
-      const kept = words
-        .slice(from)
-        .filter((_, at) => !/^\d*[<>]/.test(raw[from + at] ?? '') && !(at > 0 && /^\d*[<>]+&?$/.test(raw[from + at - 1] ?? '')))
+      const isKept = (at: number) => !/^\d*[<>]/.test(raw[at] ?? '') && !(at > from && /^\d*[<>]+[&|]?$/.test(raw[at - 1] ?? ''))
+      const kept = words.slice(from).filter((_, at) => isKept(from + at))
       const assigned = ASSIGNED.exec(kept[0] ?? '')
 
       if (assigned !== null) {
@@ -499,9 +569,21 @@ const read = (source: string, depth: number, state: State): string[][] => {
         nested(kept.slice(1).join(' '))
       }
 
-      const clean = kept.map(word => word.replaceAll('\0', ''))
+      // Kept as written: DYNAMIC where each unread word stood (one in the program's own place is not an argument), NULs left in.
+      const marks = new Set(dynamic)
+      const placed: string[] = []
 
-      add(dynamicAt > from || kept.some(word => word.includes('\0')) ? [...clean, DYNAMIC] : clean)
+      for (let at = from, taken = 0; at <= words.length; at++) {
+        if (at > from && marks.has(at)) {
+          placed.push(DYNAMIC)
+        }
+
+        if (at < words.length && isKept(at)) {
+          placed.push(kept[taken++] ?? '')
+        }
+      }
+
+      add(placed)
     }
   }
 
@@ -524,7 +606,7 @@ const commandsOf = (source: string): string[][] => {
         throw new Unreadable('the command holds a character no command line uses')
       }
 
-      last = { source, commands: read(source, 0, { left: WORK, seen: new Map() }) }
+      last = { source, commands: read(source, 0, { left: WORK, seen: new Map(), isAnsi: false }) }
     } catch (error) {
       last = { source, why: error instanceof Unreadable ? error.message : 'the command could not be read' }
     }
@@ -555,26 +637,25 @@ export const unreadable = (source: string): string | undefined => {
 // `bash -c echo prog …` and a quoted argument of any wrapper count as calls. Upgrade to a real shell parser if any of these bites.
 /**
  * The argument list of every call to `binary` in `source`, wrappers, subshells and substitutions included. A list that ends with
- * DYNAMIC has arguments the shell fills in. Throws Unreadable for a line it cannot read: deny it.
+ * DYNAMIC has arguments the shell fills in; with `inPlace`, DYNAMIC stands where each one does and a word that is partly one keeps
+ * a NUL. Throws Unreadable for a line it cannot read: deny it.
  */
-export const invocations = (source: string, binary: RegExp): string[][] => {
+export const invocations = (source: string, binary: RegExp, inPlace = false): string[][] => {
   const found: string[][] = []
+  const isUnread = (word: string) => word.includes('\0')
 
-  for (const words of commandsOf(source)) {
-    if (WRAPPER_NAME.test(words[0] ?? '')) {
-      const at = words.findIndex((word, i) => i > 0 && binary.test(word))
+  for (const placed of commandsOf(source)) {
+    const names = placed.map(word => word.replaceAll('\0', ''))
+    const at = WRAPPER_NAME.test(names[0] ?? '') ? names.findIndex((name, i) => i > 0 && binary.test(name)) : binary.test(names[0] ?? '') ? 0 : -1
 
-      if (at > 0) {
-        found.push(
-          words
-            .slice(at + 1)
-            .flatMap(word => word.split(/[\s,]+/))
-            .filter(Boolean),
-        )
-      }
-    } else if (binary.test(words[0] ?? '')) {
-      found.push(words.slice(1))
+    if (at < 0) {
+      continue
     }
+
+    const rest = inPlace ? placed.slice(at + 1) : names.slice(at + 1).filter((_, i) => placed[at + 1 + i] !== DYNAMIC)
+    const args = at > 0 ? rest.flatMap(word => word.split(/[\s,]+/)).filter(Boolean) : rest
+
+    found.push((inPlace ? placed.slice(0, at) : placed).some(isUnread) ? [...args, DYNAMIC] : args)
   }
 
   return found
