@@ -31,7 +31,7 @@ const HOME_VAR =
   /^(~|\$(HOME|USERPROFILE)|\$\{(HOME|USERPROFILE)\}|\$env:(USERPROFILE|HOME)|\$\{env:(USERPROFILE|HOME)\}|%USERPROFILE%|%HOMEDRIVE%%HOMEPATH%)(?=[\\/]|$)/i
 
 // moved: the folder a cd in the command leads to. globs: the wildcards already judged in this command.
-// asked: the folders a wildcard was tried in. files: their names, once listed. dots: a leading * takes a dot file (PowerShell).
+// asked: the folders a wildcard was tried in. files: their names, once listed.
 type World = {
   cwd: string
   home: string
@@ -40,7 +40,6 @@ type World = {
   globs: Map<string, boolean>
   asked: Set<string>
   files?: ReadonlyMap<string, readonly string[]>
-  dots?: boolean
 }
 
 const resolve = (path: string, { cwd, home }: World) => {
@@ -206,6 +205,7 @@ const MAX_GLOB = 260
 const MAX_GLOBS = 32
 // The most folders listed for one command; past that the command is denied.
 const MAX_LISTED = 64
+const MAX_ENTRIES = 2000
 
 const takesSecret = (path: string, world: World) => {
   const home = norm(world.home)
@@ -253,8 +253,8 @@ const takesListed = (path: string, world: World) => {
   const name = tokensOf(path.slice(at + 1))
 
   return (world.files?.get(dir) ?? []).some(
-    // bash's * leaves a dot file out unless the wildcard writes the dot.
-    file => (world.dots || !file.startsWith('.') || name[0] === '.') && witness(name, [...file]) !== undefined && isSecretFile(`${dir}/${file}`, world),
+    // A dot file counts in every shell: bash's * takes one under dotglob. The name is judged first: the match is the costly part.
+    file => isSecretFile(`${dir}/${file}`, world) && witness(name, [...file]) !== undefined,
   )
 }
 
@@ -408,7 +408,7 @@ const statementsOf = (command: string, depth = 0): string[][][] => {
     .replace(QUOTED, quoted => (isEscape(quoted) ? quoted : quoted.replace(/[;|&\n(){}`<>]/g, ' ')))
     .replace(/(?<!\d)\d*>&\d|(?<!\d)\d*>>?\s*[^\s|;&]+/g, ' ')
     // export { a, b } is a line of JavaScript, or an error to bash: the brace is export's argument, so it is no bare export.
-    .replace(/(?<![\w-])export[ \t]+\{/g, 'export \u0001')
+    .replace(/(?<![\w-])export[ \t]+\{(?=\s)/g, 'export \u0001')
   const own = text.split(/\|\||&&|[;&\n(){}`]/).map(statement =>
     statement
       .split('|')
@@ -968,7 +968,7 @@ export const register: Register = on => {
     // A Monitor that opens a WebSocket has no command.
     const written = String((e as { command?: unknown }).command ?? '')
     const cwd = await $.session.cwd()
-    const world = { ...worldOf(cwd, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW')), dots: e.tool === 'PowerShell' || e.tool === TERMINAL }
+    const world = worldOf(cwd, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
     let found = denial(e.tool, written, world)
 
     if (found === undefined && world.asked.size > MAX_LISTED) {
@@ -987,7 +987,9 @@ export const register: Register = on => {
       }
       const files = new Map(await Promise.all([...world.asked].map(async dir => [dir, await list(dir)] as const)))
 
-      found = denial(e.tool, written, { ...world, files, globs: new Map() })
+      found = [...files.values()].some(names => names.length > MAX_ENTRIES)
+        ? 'it names a wildcard in a folder with more files than are checked for a credential file. Name the files instead.'
+        : denial(e.tool, written, { ...world, files, globs: new Map() })
     }
 
     return found === undefined ? next(e) : { deny: `${$.plugin.name}: ${found}` }
