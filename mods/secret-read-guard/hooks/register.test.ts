@@ -500,6 +500,11 @@ const DENIED = [
   "bash -c 'export { a; }; export -p'",
   "echo 'export { a, b }' && env",
   'export; { a; }',
+  // A brace list with nothing in it expands to a bare export.
+  'export {,}',
+  'export {,,}',
+  'export {,} | cat',
+  "echo 'x' && export {,}",
   'export {\nenv\n}',
   'export { $(env) }',
   'export { `printenv` }',
@@ -819,6 +824,10 @@ const LISTED: Record<string, string[]> = {
   'c:/repos/app': ['.env', 'README.md', 'main.tf', 'prod.tfvars', 'notes.txt', 'docs', 'deploy'],
   'c:/repos/app/deploy': ['server.key', 'run.sh'],
   'c:/repos/app/docs': ['README.md', 'intro.md'],
+  'c:/repos/app/web': ['.env', 'index.html'],
+  // Slow to match one by one: many long names, none a credential's, and a few that are but do not match.
+  'c:/repos/app/big': [...Array.from({ length: 1000 }, (_, i) => `${'a'.repeat(200)}${i}.txt`), ...Array.from({ length: 20 }, (_, i) => `${'a'.repeat(200)}${i}.pem`)],
+  'c:/repos/app/huge': Array.from({ length: 2001 }, (_, i) => `f${i}.txt`),
 }
 const ON_DISK = [
   ['Bash', 'cat prod*', false],
@@ -846,10 +855,20 @@ const ON_DISK = [
   ['Bash', 'grep -rn TODO docs/*', true],
   ['PowerShell', 'gc docs\\*', true],
   ['PowerShell', 'Get-Content READ*', true],
+  // A dot file counts under Bash too: dotglob, or a PowerShell inside it, takes it.
+  ['Bash', 'cat web/*', false],
+  ['Bash', 'shopt -s dotglob; cat web/*', false],
+  ['Bash', 'cd web && shopt -s dotglob && cat *', false],
+  ['Bash', "pwsh -c 'Get-Content web/*'", false],
+  ['Bash', 'cat web/in*', true],
+  ['Bash', `cat big/${'*a'.repeat(100)}*z`, true],
+  // More files than are checked: denied.
+  ['Bash', 'cat huge/f*', false],
 ] as const
 
 for (const [tool, command, isAllowed] of ON_DISK) {
-  test(`with the folder listed, ${tool} ${isAllowed ? 'runs' : 'is denied'}: ${command}`, async ($, on) => {
+  test(`with the folder listed, ${tool} ${isAllowed ? 'runs' : 'is denied'}: ${command.slice(0, 60)}`, async ($, on) => {
+    const started = Date.now()
     world(on)
     on('fs.list', (_, e) => {
       const names = LISTED[e.path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()]
@@ -872,6 +891,7 @@ for (const [tool, command, isAllowed] of ON_DISK) {
 
     expect(hasRun).toBe(isAllowed)
     expect(/guard failed/.test(JSON.stringify(ran))).toBe(false)
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 }
 
