@@ -12,8 +12,8 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
 | C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at 6ddae53, Claude Code 2.1.325: 1,350 / 176 / 2,256 / 786 / 918 / 790 = 6,276 pass, 0 fail, copies match; T09/T10 310/216 ms |
-| C2 | CI "Mod tests" (Linux) passes on the release PR | OPEN | |
-| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor (and CodeQL) | OPEN | |
+| C2 | CI "Mod tests" (Linux) passes on the release PR | PASS | PR #90 at fd7071e: Mod tests pass (4m6s) |
+| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor (and CodeQL) | PASS | PR #90 at fd7071e: all pass, CodeQL actions + javascript-typescript pass |
 | C4 | aws-guard denies a shell-named `aws` with a denied operation (`$AWS iam delete-role`, `$(which aws) ...`, `xargs -IX X iam delete-role`, `& $aws`), with must-deny tests; read-only shell-named calls (`$AWS s3 ls`) still run | PASS | 1cb6b58, 3d3cb7f; lead probes on 6ddae53 denied |
 | C5 | No existing deny relaxed vs 53be7a6; new harmless denies listed in CHANGELOG/README | PASS | Codex confirm pass: 0 old-deny/new-allow in 4,322 comparisons (53be7a6 vs 1e57d0e); later fixes only add denies (each kept the as-written reading); every existing test still passes |
 | C6 | `plugin.json` bump for each changed mod matches CHANGELOG; Unreleased becomes 0.10.1 | PASS | aws 0.8.3, secret-allow 0.6.1, secret-read 0.6.3, supply-chain 0.5.3, terraform 0.6.3, tf-lint 0.10.0 (unchanged); `## 0.10.1 (2026-11-25)` |
@@ -21,7 +21,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | C8 | Hostile security review of the guard diff; confirmed findings fixed or accepted by owner | PASS | Codex review (v0.9.0..53be7a6) + confirm pass (53be7a6..1e57d0e); F1-F12 fixed with must-deny tests; residual items documented in README "Still open" |
 | C9 | Fable hostile review (owner's CLAUDE.md requires Fable for guard code) | N/A | Owner, 2026-11-25: use Opus until Fable resets (2026-11-28 16:00 CT); Codex review + confirm pass stand in (D7) |
 | C10 | README updated (Still open, test results) | PASS | 8c7963a, counts refreshed after C1 |
-| C11 | Merge to `main`, tag `v0.10.1`, GitHub release | BLOCKED | Needs owner approval |
+| C11 | Merge to `main`, tag `v0.10.1`, GitHub release | PASS | Owner approved 2026-11-25 ("Yes, once CI passes"); squash-merged from PR #90, tag `v0.10.1` on the merge commit, GitHub release |
 
 ## Decisions
 
@@ -93,5 +93,5 @@ Full-suite order: aws-guard / secret-allow-guard / secret-read-guard / supply-ch
 
 ## Resume here
 
-C1 passed. Next: push `release/v0.10.1`, open a draft PR, check CI (C2, C3), then ask the owner to
-approve C11 (merge, tag, release).
+Released 2026-11-25 from PR #90. Nothing left for this release; the agent worktrees and
+`C:\repos\ccg-release` can be removed.
