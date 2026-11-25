@@ -39,6 +39,8 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 |---|---|---|
 | 53be7a6 | Baseline (`origin/main`, PRs #88, #89 merged) | `npm ci && npm test` Windows, Claude Code 2.1.325: all 6 mods pass, shell.ts copies match. Main CI + Security Scan green. 0 open code-scanning, Dependabot or secret-scanning alerts |
 
+| 1cb6b58, 3d3cb7f | aws-guard 0.8.3: shell-named program (C4) and attached inline-code flag (F3); a shell-named call led by a denied operation (`$(which aws) $(echo iam) delete-role`) | aws-guard 1,330 pass; full `npm test` in the implementer's worktree exit 0 |
+
 ## Security review log
 
 - Fable hostile review attempted 2026-11-25: refused, usage limit (resets 2026-11-28 16:00 CT). See C9.
