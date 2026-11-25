@@ -35,6 +35,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | Commit | Branch merged | Tests |
 |---|---|---|
+| 334687b | secret-allow-guard 0.6.0: mid-session rescan (tool.check ask, Edit/Write to settings, ConfigChange) | 164 pass |
 
 ## Resume here
 
