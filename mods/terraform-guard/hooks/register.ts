@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { DYNAMIC, invocations, unreadable } from './shell'
+import { DYNAMIC, invocations, namedByShell, unreadable } from './shell'
 
 const BINARY = /^(.*[\\/])?(terraform|tofu|terragrunt)(\.(exe|cmd|bat))?$/i
 // Programs that run the one named after them and are not among the shared parser's wrappers: a shell's builtin and noglob, and the
@@ -64,6 +64,10 @@ const isFed = (command: string) => {
   )
 }
 
+// An alias for a terraform program, as bash and PowerShell set one: alias tf=terraform, alias tf='terraform destroy', Set-Alias tf terraform.
+// shortcut: only an alias set in the same command is followed; one from a profile is not.
+const ALIAS = /\b(?:alias\s+(?:-\w+\s+)*([\w.-]+)=|(?:set|new)-alias\s+(?:-name\s+)?([\w.-]+)\s+(?:-value\s+)?)(['"]?)([^'"\n;&|]*)\3/gi
+
 // Every call of a terraform program: named itself, or after a launcher, whose quoted argument (npx -c "terraform ...") is split into words.
 // The arguments stay in place, DYNAMIC where the shell fills one in; one that stood before the program is put last.
 const calls = (command: string) => [
@@ -73,6 +77,14 @@ const calls = (command: string) => [
     const at = words.findIndex(word => BINARY.test(word))
 
     return at < 0 ? [] : [[...words.slice(at + 1), ...(words.slice(0, at).some(isUnread) ? [DYNAMIC] : [])]]
+  }),
+  // A call of an alias is a call of what it stands for, the words written in the alias first.
+  ...[...command.matchAll(ALIAS)].flatMap(([, bashName, psName, , value = '']) => {
+    const words = value.split(/\s+/).filter(Boolean)
+    const at = words.findIndex(word => BINARY.test(word))
+    const name = (bashName ?? psName ?? '').replace(/[.]/g, '\\.')
+
+    return at < 0 ? [] : invocations(command, new RegExp(`^${name}$`, 'i'), true).map(args => [...words.slice(at + 1), ...args])
   }),
 ]
 
@@ -87,6 +99,19 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
 
   const sets = command.match(SET) ?? []
   const isInjected = sets.some(set => APPROVES.test(cooked(set)))
+
+  for (const args of namedByShell(command)) {
+    // A word the shell fills in before the program, under a wrapper or as the program, can add arguments or another subcommand
+    // (env $(echo TF_CLI_ARGS=-auto-approve) terraform apply tfplan): any terraform call after one is denied.
+    if (args.some(word => BINARY.test(word.replaceAll('\0', '')))) {
+      return `a $VAR or $( ) before terraform, under a wrapper or as the program, can add its arguments or subcommand. Write it out. ${HOW}`
+    }
+
+    // A program named by a variable or a substitution may be terraform: TF=terraform; $TF destroy -auto-approve.
+    if (args.some(word => VERB.test(word)) && args.some(word => /^--?auto-approve(=.*)?$/.test(word) && !/=(0|f|false)$/i.test(word))) {
+      return `-auto-approve is not allowed on ${args.find(word => VERB.test(word))} of a program the shell names. ${HOW}`
+    }
+  }
 
   for (const args of calls(command)) {
     const verbAt = args.findIndex(word => VERB.test(word))
