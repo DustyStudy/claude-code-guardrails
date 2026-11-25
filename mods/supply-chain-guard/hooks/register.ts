@@ -277,7 +277,13 @@ const gem = named(
 const GO = options('-o|-C|-ldflags|-gcflags|-asmflags|-tags|-mod|-modfile|-p|-pkgdir|-buildmode|-compiler|-overlay|-toolexec|-exec')
 const GO_PINNED = /^[^@\s]+@v\d+\.\d+\.\d[\w.+-]*$/
 // go get x@none removes a module.
-const goInstall = named(GO, /^(install|get)$/, ({ words }) => words.some(word => !LOCAL.test(word) && !GO_PINNED.test(word) && !/@none$/.test(word)))
+// go get -u moves every dependency to its newest version, whatever it names.
+const goInstall = named(
+  GO,
+  /^(install|get)$/,
+  ({ words, flags }) =>
+    flags.some(flag => /^-u(=|$)/.test(flag)) || words.some(word => !LOCAL.test(word) && !GO_PINNED.test(word) && !/@none$/.test(word)),
+)
 // go run takes one package, then that program's arguments. Without a version it is built from go.mod and go.sum.
 const goRun = named(GO, /^run$/, ({ words: [target = ''] }) => target.includes('@') && !GO_PINNED.test(target))
 // An exact version: evil/x:* and evil/x:^1.0 take whatever is newest.
@@ -294,11 +300,18 @@ const poetry = named(
   ({ words }) => words.some(word => !PINNED.test(word) && !LOCAL.test(word)),
 )
 // conda install pkg=1.2.3, with a channel (conda-forge::) and a build (=py311_0) allowed; --file names what to install.
-const conda = named(
-  options('-n|--name|-p|--prefix|-c|--channel|--file|--repodata-fn|--solver|-r|--root-prefix'),
-  /^install$/,
-  ({ words }) => words.some(word => !/^([\w.-]+::)?[\w.-]+==?\d+\.\d+\.\d[\w.=+-]*$/.test(word)),
+const CONDA = options('-n|--name|-p|--prefix|-c|--channel|--file|--repodata-fn|--solver|-r|--root-prefix|--cwd')
+const condaInstall = named(CONDA, /^(install|create|update|upgrade)$/, ({ words }) =>
+  words.some(word => !/^([\w.-]+::)?[\w.-]+==?\d+\.\d+\.\d[\w.=+-]*$/.test(word)),
 )
+// conda run -n x pip install y: the program is read as its own command.
+const conda: Check = (args, depth = 0) =>
+  condaInstall(args) ||
+  readings(args, CONDA).some(([verb, rest]) => {
+    const { words, at } = parse(rest, CONDA, true)
+
+    return verb === 'run' && handsTo(words[0] ?? '', rest.slice((at[0] ?? rest.length) + 1), depth)
+  })
 
 // shortcut: the install and run verbs of these tools; poetry run and a script that installs are not read. Upgrade if those come into use.
 const TOOLS: readonly (readonly [string, Check, string?])[] = [
@@ -320,7 +333,8 @@ const TOOLS: readonly (readonly [string, Check, string?])[] = [
   ['gem', gem],
   ['go', args => goInstall(args) || goRun(args)],
   ['composer', args => composer(args.filter(arg => arg !== 'global'))],
-  ['poetry', poetry],
+  // poetry self add x installs into poetry's own environment.
+  ['poetry', args => poetry(args.filter(arg => arg !== 'self'))],
   ['conda', conda, 'conda|mamba|micromamba'],
 ]
 const bin = (name: string) => new RegExp(String.raw`^(.*[\\/])?(${name})(\.exe|\.cmd|\.bat|\.ps1)?$`, 'i')
@@ -367,18 +381,30 @@ const placed = (command: string) => {
 // A fourth reading that puts the tool a substitution or variable names in its place: $(echo npx) pkg is npx pkg, $NPX pkg too,
 // and $(which npm) ci stays npm ci. A substitution's text is the shell's to run, so this is a guess, and a guess toward a call.
 const TOOL_NAME = /(?<![a-z])(npx|pnpx|bunx|uvx|pipx|pnpm|yarn|npm|pip[\d.]*|uv|bun|poetry|conda|mamba|micromamba)(?![a-z])/i
-const toolNamed = (command: string) =>
-  command.replace(/\$\([^()\n]*\)|`[^`\n]*`|\$\{?\w+\}?/g, word => TOOL_NAME.exec(word)?.[1] ?? word)
+// Innermost first, so $(basename $(which npx)) becomes $(basename npx), then npx. ${X:-npx} names npx too.
+const toolNamed = (command: string) => {
+  let text = command
+
+  for (let depth = 0; depth < 9; depth++) {
+    text = text.replace(/\$\([^()\n]*\)|`[^`\n]*`|\$\{[^{}\n]*\}|\$\w+/g, word => TOOL_NAME.exec(word)?.[1] ?? word)
+  }
+
+  return text
+}
 
 // A fifth: python handed -m or pip by the shell (python $(echo -m pip install x)) is read as python -m pip install.
 // shortcut: text-level, to the end of the command; a parser that kept the substitution's text in place would make this exact.
 const pythonNamed = (command: string) =>
   command.replace(/(^|[\s;&|(\\/])((?:python|pypy)w?[\d.]*|py)(\.exe)?([ \t][^;&|\n]*)/gi, (all, lead, name, exe = '', rest) =>
-    /(\$\(|`)[^)`]*(pip|(^|[\s(`])-[a-z]*m)/i.test(rest) ? `${lead}${name}${exe} -m pip install ${MARK}` : all,
+    // pip or -m inside a substitution, a flag the shell finishes (-$(echo m)), or pip after a word the shell fills ($M pip).
+    /(\$\(|`)[^)`]*(pip|(^|[\s(`])-[a-z]*m)|(^|\s)-[a-z]*(\$|`)|(\$[({\w]|`).*\bpip\b/i.test(rest)
+      ? `${lead}${name}${exe} -m pip install ${MARK}`
+      : all,
   )
 
-// npm reads npm_config_package_lock (any case) from the environment: set to anything but true, later installs skip the lockfile.
-const NO_LOCK_ENV = /(?<![\w-])npm_config_(package_lock|lockfile)["']?\s*=\s*["']?(?!true\b)/i
+// npm reads npm_config_package_lock (any case, - or _) from the environment: set to anything but true, later installs skip the
+// lockfile. Set as VAR=x, ${env:VAR} = x, SetEnvironmentVariable('VAR','x') or Set-Item Env:VAR x.
+const NO_LOCK_ENV = /(?<![\w-])npm_config_(package[-_]lock|lockfile)\}?["']?(\s*[=,]\s*|\s+)(?![&|;>]|["']?true\b)/i
 
 const denies = (check: Check, args: Args) => {
   try {
