@@ -21,7 +21,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | C8 | `shell.ts` copies byte-identical; fail-closed `.catch` and 4-tool coverage intact | PASS | `npm test`; a hook timeout (10 s) runs the deny-on-throw `.catch` |
 | C9 | Hostile security review of the integrated diff; findings fixed or accepted by owner | PASS (Fable pending) | Opus x2 + Codex reviews; every confirmed finding fixed with tests. Fable re-review not run (limit until 2026-11-28 16:00 CT): owner call |
 | C10 | README updated (Known limits, Still open, test results) | PASS | efd86c9 |
-| C11 | Merge to `main`, tag `v0.10.0`, GitHub release | BLOCKED | Needs owner approval |
+| C11 | Merge to `main`, tag `v0.10.0`, GitHub release | PASS | Owner approved 2026-11-24 without waiting for a Fable review. Squash-merged from PR #86; tag `v0.10.0` on the merge commit; release https://github.com/DustyStudy/claude-code-guardrails/releases/tag/v0.10.0 |
 
 ## Decisions
 
@@ -64,4 +64,4 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 ## Resume here
 
-All code integrated and verified (C1-C10). Waiting on the owner: Fable re-review now or after the release, and approval for C11 (mark PR #86 ready, squash-merge, tag `v0.10.0`, release, date the CHANGELOG).
+Released 2026-11-24. Optional follow-up: a Fable hostile review of the v0.10.0 diff (`git diff v0.9.0 v0.10.0 -- mods/`) after 2026-11-28 16:00 CT.

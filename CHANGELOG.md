@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0 (unreleased)
+## 0.10.0 (2026-11-24)
 
 Closes every "Still open after the 0.9 pass" item a text guard can close, and
 the Known limits that can be lifted. Every guard denies more; nothing that was
