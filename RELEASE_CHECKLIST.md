@@ -45,7 +45,13 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 ## Security review log
 
 - Codex on tf-lint + secret-allow-guard: 3 confirmed findings, sent back for fixing: (1) tf-lint regression, string braces synthesize `Condition` and hide a wildcard-principal warning; (2) tf-lint whole-file recheck echoes an existing token in a finding; (3) secret-allow rescan is count-based, so a replaced secret is not reported.
-- Opus reviewer on aws-guard, supply-chain-guard, terraform-guard + parser: running.
+- Codex findings 1-3 fixed: secret-allow 79ae2c7 (fingerprints; 166 pass), tf-lint ef2bd62 (790 pass).
+- Opus reviewer on aws-guard, supply-chain-guard, terraform-guard + parser: no regressions (the DYNAMIC skip
+  drops no real call; new regexes bounded; an unclosed `${` fails closed). 7 confirmed gaps in the new
+  aws-guard checks (`& ${c}`, `& "$c"`, variable case, `python -Ic`/`node -pe`, ipython/deno eval, SDK code
+  on stdin, boto3 resource `.delete()`); traced, unconfirmed gaps in supply-chain (lockfile env spellings,
+  `${X:-npx}`, `python $M`, conda create/update/run, `go get -u`) and terraform (the `namedByShell` path
+  checks only `-auto-approve`, `$TF.exe`, `sal`/`nal`, same-line function). Sent back to the three implementers.
 
 ## Resume here
 
