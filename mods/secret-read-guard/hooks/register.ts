@@ -565,6 +565,37 @@ const yieldsSecret = (text: string, next = '') => {
     })
   )
 }
+// A hashtable handed to a parameter (irm $u -Headers @{ 'Authorization' = "Bearer $env:TOKEN" }) or assigned ($h = @{ ... })
+// is used, not printed: its contents are blanked. One alone as a statement, piped on, or in a writer's call is read.
+// One pass over the text, a stack of braces: linear.
+const PRINTER_WORD = /^[ \t(]*(?:echo|printf|write|write-\w+|out-\w+|format-\w+)(?![\w-])/i
+const usedTables = (text: string) => {
+  const chars = text.split('')
+  // Each open brace: whether its contents are a used table's (inherited by the braces inside it).
+  const stack: boolean[] = []
+  let start = 0
+  let isPrinter: boolean | undefined
+
+  chars.forEach((char, i) => {
+    if (/[;\n&|]/.test(char) && stack.at(-1) !== true) {
+      start = i + 1
+      isPrinter = undefined
+    } else if (char === '{') {
+      isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40))
+      // The 40 characters before @{ are enough to see -Param or = : anchored at their end, they are read once per brace.
+      const before = text.slice(Math.max(start, i - 40), i)
+      const isUsed = !isPrinter && /(?:(?<![\w-])-\w+:?|(?<![=!<>])=)\s*@$/.test(before)
+
+      stack.push((stack.at(-1) ?? false) || isUsed)
+    } else if (char === '}') {
+      stack.pop()
+    } else if (stack.at(-1) === true) {
+      chars[i] = char === '\n' ? '\n' : ' '
+    }
+  })
+
+  return chars.join('')
+}
 // Any expression as a statement is printed by PowerShell, and run by bash. Continued lines are joined first (` in both, \ but for
 // PowerShell, neither on a comment line), and separators inside quotes are text: "a;b" + $env:TOKEN.
 const printsExpression = (command: string, isPowerShell: boolean) => {
@@ -577,7 +608,8 @@ const printsExpression = (command: string, isPowerShell: boolean) => {
       return goesOn ? `${line.replace(/[\\`]\r?$/, '')} ` : `${line}\n`
     })
     .join('')
-  const text = joined.replace(/\$\{([^{}]*)\}/g, '$$$1').replace(QUOTED, quoted => (isEscape(quoted) ? quoted : quoted.replace(/[;|&\n{}]/g, ' ')))
+  const quoted = joined.replace(/\$\{([^{}]*)\}/g, '$$$1').replace(QUOTED, part => (isEscape(part) ? part : part.replace(/[;|&\n{}]/g, ' ')))
+  const text = usedTables(quoted)
 
   return [...text.matchAll(STATEMENT)].some(
     ([, body = '', next]) => (EXPRESSION_START.test(body) || WRITER_START.test(body)) && yieldsSecret(body, next) && (!next || printsInput(next)),

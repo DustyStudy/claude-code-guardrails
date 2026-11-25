@@ -550,8 +550,12 @@ const DENIED = [
   '7z x -so x.7z .env',
   'tar -xf x.tgz --to-command cat .env',
   'git archive --format=tar HEAD .env',
-  "$h = @{\n  'Authorization' = $env:GITHUB_TOKEN\n}",
   '"$env:GITHUB_TOKEN.Length chars"',
+  // A hashtable alone as a statement, piped to a printer, or handed to a writer is printed.
+  "@{ 'a' = $env:GITHUB_TOKEN }",
+  "@{ 'a' = $env:GITHUB_TOKEN } | Format-Table",
+  "Write-Output -InputObject @{ 'a' = $env:GITHUB_TOKEN }",
+  "$h = @{ 'a' = 1 }; @{\n'b' = $env:GITHUB_TOKEN\n}",
   // 0.10: programs that print a credential file: openssl, git show/diff/log -p/blame, compose config, tar -xO, unzip -p.
   'openssl rsa -in key.pem',
   'openssl pkcs12 -in x.p12 -nodes',
@@ -878,6 +882,12 @@ const ALLOWED = [
   '[[ -n $GITHUB_TOKEN ]] && echo set',
   '$env:GITHUB_TOKEN.Length -gt 0',
   '"$env:HOME" + "/x"',
+  // A hashtable handed to a parameter or assigned is used, not printed.
+  'Invoke-RestMethod -Uri https://api.github.com -Headers @{ \'Authorization\' = "Bearer $env:GITHUB_TOKEN" }',
+  "iwr $u -Headers:@{ 'Authorization' = \"Bearer $env:GITHUB_TOKEN\" }",
+  "irm $u -Method Post -Body @{\n  'token' = $env:GITHUB_TOKEN\n}",
+  "$h = @{\n  'Authorization' = \"Bearer $env:GITHUB_TOKEN\"\n}\nirm $u -Headers $h",
+  "if ($x) { irm $u -Headers @{ 'Authorization' = \"Bearer $env:GITHUB_TOKEN\" } }",
   'curl -sS \\\n  -H "Authorization: Bearer $GITHUB_TOKEN" \\\n  https://api.github.com/user',
   'Invoke-RestMethod -Uri https://api.github.com/user `\n  -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" }',
   // 0.10: these print no credential file.
