@@ -6,9 +6,10 @@ const bin = (names: string) => new RegExp(String.raw`^(.*[\\/])?(${names})(\.exe
 
 // One spelling per path: forward slashes, lower case, Git Bash's /c/ as c:/, . and .. resolved, and Windows'
 // \\?\ prefix, trailing dots and spaces, and name:stream forms folded into the file they open.
-const norm = (path: string) => {
+const norm = (path: string, lower = true) => {
   const parts: string[] = []
-  const plain = path.replace(/\\/g, '/').replace(/^\/\/[?.]\//, '').replace(/^\/([a-z])(\/|$)/i, '$1:/').toLowerCase()
+  const slashed = path.replace(/\\/g, '/').replace(/^\/\/[?.]\//, '').replace(/^\/([a-z])(\/|$)/i, '$1:/')
+  const plain = lower ? slashed.toLowerCase() : slashed
 
   for (const [i, raw] of plain.split('/').entries()) {
     const part = raw === '.' || raw === '..' ? raw : i === 0 ? raw : raw.replace(/:[\s\S]*$/, '').replace(/(?<![. ])[. ]+$/, '')
@@ -31,22 +32,28 @@ const HOME_VAR =
   /^(~|\$(HOME|USERPROFILE)|\$\{(HOME|USERPROFILE)\}|\$env:(USERPROFILE|HOME)|\$\{env:(USERPROFILE|HOME)\}|%USERPROFILE%|%HOMEDRIVE%%HOMEPATH%)(?=[\\/]|$)/i
 
 // moved: the folder a cd in the command leads to. globs: the wildcards already judged in this command.
-// asked: the folders a wildcard was tried in. files: their names, once listed.
+// asked: the folders a wildcard or a recursive search was tried in, each with its path as written. files: their names, once
+// listed. cased: each resolved path as written, for the listing: a case-sensitive disk has no folder by the lower-case name.
 type World = {
   cwd: string
   home: string
   allow: readonly RegExp[]
   moved?: boolean
   globs: Map<string, boolean>
-  asked: Set<string>
+  asked: Map<string, string>
+  cased: Map<string, string>
   files?: ReadonlyMap<string, readonly string[]>
 }
 
-const resolve = (path: string, { cwd, home }: World) => {
+const resolve = (path: string, { cwd, home, cased }: World) => {
   // C:.env is .env in drive C's current folder: read as a name in this one.
   const expanded = path.replace(HOME_VAR, home).replace(/^[a-z]:(?=[^\\/])/i, '')
+  const whole = isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`
+  const found = norm(whole)
 
-  return norm(isAbsolute(expanded) ? expanded : `${cwd}/${expanded}`)
+  cased.set(found, norm(whole, false))
+
+  return found
 }
 
 // Files whose content is a credential, as normalised paths. Each team keeps its own exceptions in SECRET_READ_ALLOW.
@@ -248,7 +255,9 @@ const takesListed = (path: string, world: World) => {
     return false
   }
 
-  world.asked.add(dir)
+  const written = world.cased.get(path) ?? path
+
+  world.asked.set(dir, written.slice(0, written.lastIndexOf('/')) || '/')
 
   const name = tokensOf(path.slice(at + 1))
 
@@ -310,7 +319,14 @@ const EDITOR = bin('sed|yq')
 const isInPlace = (args: readonly string[]) => args.some(arg => /^(-i|--in-place)/.test(arg))
 // By case: grep's -a, -b, -c and -F take no value, and one read as taking it let the file pass for the pattern. -T and -E take one
 // only in rg, so they are left out.
-const isRecursive = (args: readonly string[]) => args.some(arg => (/^-[a-zA-Z]+$/.test(arg) && /[rR]/.test(arg)) || /^--(dereference-)?recursive$/.test(arg))
+// -d recurse and --directories=recurse are -r spelled out.
+const isRecursive = (args: readonly string[]) =>
+  args.some(
+    (arg, i) =>
+      (/^-[a-zA-Z]+$/.test(arg) && /[rR]/.test(arg)) ||
+      /^(--(dereference-)?recursive|-drecurse|--directories=recurse)$/.test(arg) ||
+      (/^(-d|--directories)$/.test(arg) && args[i + 1] === 'recurse'),
+  )
 const isValueFlag = (arg: string) =>
   /^(-[ABCmtgf]|--(after-context|before-context|context|max-count|type|type-not|glob|iglob|file))$/.test(arg) || /^-((literal)?path|context)$/i.test(arg)
 const operands = (args: readonly string[], hasShortFlags = true) => {
@@ -371,6 +387,24 @@ const tarred = (args: readonly string[]) => {
 
   return [...args.filter((arg, i) => !isFlags(arg, i) && (at < 0 || i !== at + 1)), file]
 }
+// tar -xOf x.tgz .env (or xOf, --extract --to-stdout, or --to-command=cat) prints the members it names.
+const untarred = (args: readonly string[]) => {
+  const flags = args.filter((arg, i) => arg.startsWith('-') || i === 0)
+  const short = flags.filter(arg => /^-?[A-Za-z]+$/.test(arg)).join('')
+  const isPrinted =
+    (/x/.test(short) || flags.some(arg => /^--(extract|get)$/.test(arg))) && (/O/.test(short) || flags.some(arg => /^--(to-stdout|to-command)(=|$)/.test(arg)))
+
+  return isPrinted ? args.filter((arg, i) => !arg.startsWith('-') && i > 0) : []
+}
+// git show rev:.env, cat-file -p :.env, and diff, blame, archive, format-patch --stdout or log -p naming one print its content,
+// now or as it was. rev-parse rev:.env names the blob for a cat-file to print.
+const gitShown = (args: readonly string[]) =>
+  says(args, / (show|cat-file|diff|blame|archive|rev-parse) /) ||
+  (says(args, / format-patch /) && args.includes('--stdout')) ||
+  (says(args, / (log|whatchanged) /) &&
+    args.some(arg => /^(-p|-u|-c|-m|-U\d*|--cc|--dd|--remerge-diff|--unified(=\d+)?|--patch(-with-\w+)?|--word-diff(=\S*)?|--color-words(=\S*)?|-L\S*)$/.test(arg)))
+    ? args.filter(arg => !arg.startsWith('-')).flatMap(arg => [arg, arg.slice(arg.indexOf(':') + 1), arg.slice(arg.lastIndexOf(':') + 1)])
+    : []
 const copiedOut = (args: readonly string[], world: World) => {
   const flag = args.findIndex(arg => /^(-dest\w*|-t|--target-directory)$/i.test(arg))
   const words = args.filter((arg, i) => !/^-[\w-]+$/.test(arg) && (flag < 0 || i !== flag + 1))
@@ -500,6 +534,87 @@ const BARE_VAR = new RegExp(
 // A string alone as a statement is printed the same way: "token: $env:GITHUB_TOKEN". One with no space ("$KEY_DIR/run.sh") is
 // more likely a program's path.
 const BARE_STRING = new RegExp(String.raw`(?:^|[;\n&{]|\|\|)[ \t(]*"(?<text>[^"\n]*)"[ \t)]*${ENDS}`, 'g')
+// Any expression as a statement is printed by PowerShell, and run by bash: $env:TOKEN -replace 'a','b', -join $env:TOKEN,
+// "x" + $env:TOKEN, [string]$env:TOKEN, and a writer's argument the statement parser splits off: Write-Output ("x" + $env:TOKEN).
+// A statement opens as an expression with $, a quote, @, a digit, a unary , or +, -join or -split, or a [type]; [ -n "$TOKEN" ]
+// is bash's test.
+// Each statement is read once, and every pattern on it is anchored with no two runs that can take the same characters: a long
+// line of spaces or operators is read in linear time.
+const STATEMENT = /(?:^|\|\||[;\n&{}])([^;\n&{}|]*)(?:\|(?!\|)[ \t]*([^\s|;&{}]*))?/g
+const EXPRESSION_START = /^[ \t(]*(?:-[ic]?(?:join|split)(?![\w-])|[$"'@\d,+]|\[\w)/
+const WRITER_START = /^[ \t]*(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]/i
+// What reaches the screen whatever is done with the statement's value: $x = $env:TOKEN | Write-Host, $x = Write-Host $env:TOKEN.
+const HOST_WRITER = /(?<![\w-])(?:write-host|out-host|write-information)(?![\w-])/i
+const SECRET_VARS = new RegExp(SECRET_VAR.source, 'gi')
+const LENGTH = /\}?\.length(?![\w.[(])/iy
+// An assignment yields nothing ($t = $env:TOKEN, [string]$t = ...), nor does a test ([string]::IsNullOrEmpty($env:TOKEN)) or
+// $env:TOKEN.Length outside quotes, as before. A hashtable's 'key' = $env:TOKEN is printed with the table, so it is no assignment.
+const ASSIGNED = /^[ \t]*(?:\[[\w.]+\][ \t]*)*\$[\w:]+(?:\.\w+|\[[^\]]*\])*[ \t]*(?:[-+*/%]|\?\?)?=(?!=)/
+const TEST_CALL = /^[ \t(]*\[[\w.]+\]::Is\w+\([^()]*\)[ \t)]*$/i
+const yieldsSecret = (text: string, next = '') => {
+  // Same length, with the quoted runs blanked: a .Length inside "..." is text after the value.
+  const outside = text.replace(QUOTED, quoted => (isEscape(quoted) ? quoted : ' '.repeat(quoted.length)))
+
+  return (
+    (!ASSIGNED.test(outside) || HOST_WRITER.test(text) || HOST_WRITER.test(next)) &&
+    !TEST_CALL.test(text) &&
+    [...text.matchAll(SECRET_VARS)].some(({ index = 0, 0: found }) => {
+      LENGTH.lastIndex = index + found.length
+
+      return outside[index] !== '$' || !LENGTH.test(text)
+    })
+  )
+}
+// A hashtable handed to a parameter (irm $u -Headers @{ 'Authorization' = "Bearer $env:TOKEN" }) or assigned ($h = @{ ... })
+// is used, not printed: its contents are blanked. One alone as a statement, piped on, or in a writer's call is read.
+// One pass over the text, a stack of braces: linear.
+const PRINTER_WORD = /^[ \t(]*(?:echo|printf|write|write-\w+|out-\w+|format-\w+)(?![\w-])/i
+const usedTables = (text: string) => {
+  const chars = text.split('')
+  // Each open brace: whether its contents are a used table's (inherited by the braces inside it).
+  const stack: boolean[] = []
+  let start = 0
+  let isPrinter: boolean | undefined
+
+  chars.forEach((char, i) => {
+    if (/[;\n&|]/.test(char) && stack.at(-1) !== true) {
+      start = i + 1
+      isPrinter = undefined
+    } else if (char === '{') {
+      isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40))
+      // The 40 characters before @{ are enough to see -Param or = : anchored at their end, they are read once per brace.
+      const before = text.slice(Math.max(start, i - 40), i)
+      const isUsed = !isPrinter && /(?:(?<![\w-])-\w+:?|(?<![=!<>])=)\s*@$/.test(before)
+
+      stack.push((stack.at(-1) ?? false) || isUsed)
+    } else if (char === '}') {
+      stack.pop()
+    } else if (stack.at(-1) === true) {
+      chars[i] = char === '\n' ? '\n' : ' '
+    }
+  })
+
+  return chars.join('')
+}
+// Any expression as a statement is printed by PowerShell, and run by bash. Continued lines are joined first (` in both, \ but for
+// PowerShell, neither on a comment line), and separators inside quotes are text: "a;b" + $env:TOKEN.
+const printsExpression = (command: string, isPowerShell: boolean) => {
+  const lines = command.split('\n')
+  const joined = lines
+    .map((line, i) => {
+      const isComment = /^\s*#/.test(line) || /\s#/.test(line)
+      const goesOn = i < lines.length - 1 && !isComment && (/`\r?$/.test(line) || (!isPowerShell && /\\\r?$/.test(line)))
+
+      return goesOn ? `${line.replace(/[\\`]\r?$/, '')} ` : `${line}\n`
+    })
+    .join('')
+  const quoted = joined.replace(/\$\{([^{}]*)\}/g, '$$$1').replace(QUOTED, part => (isEscape(part) ? part : part.replace(/[;|&\n{}]/g, ' ')))
+  const text = usedTables(quoted)
+
+  return [...text.matchAll(STATEMENT)].some(
+    ([, body = '', next]) => (EXPRESSION_START.test(body) || WRITER_START.test(body)) && yieldsSecret(body, next) && (!next || printsInput(next)),
+  )
+}
 // Code handed to an interpreter that names one: os.environ['GITHUB_TOKEN'], process.env.GITHUB_TOKEN, $ENV{GITHUB_TOKEN}.
 const CODE_RUNNER = bin(String.raw`python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|awk|gawk|mawk|nawk`)
 const NAMED_IN_CODE = new RegExp(
@@ -508,7 +623,7 @@ const NAMED_IN_CODE = new RegExp(
 )
 // What prints what is piped into it; a program that takes it as a credential (gh auth login --with-token, docker login
 // --password-stdin) does not.
-const PRINTS_INPUT = [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|\w+-Object|select|where|\?|%`)]
+const PRINTS_INPUT = [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|\w+-Object|select|where|\?|%|echo|write|Write-Output|Write-Host|Write-Information`)]
 const printsInput = (program = '') => PRINTS_INPUT.some(prints => prints.test(program))
 const HERE_VAR = new RegExp(String.raw`<<<\s*(?:${SECRET_VAR.source})`, 'i')
 const printsVar = (stages: readonly (readonly string[])[]) =>
@@ -541,14 +656,19 @@ const pathspec = (arg: string) => {
 }
 // The file an option names: -T x, --upload-file=x, -InFile:x.
 const fileOf = (args: readonly string[], flag: RegExp) => args.flatMap((arg, i) => (flag.test(arg) ? [/[=:]/.test(arg) ? arg : (args[i + 1] ?? '')] : []))
+// gh's options whose value is text: a gist's description and file name, a release's title, notes and target.
+const isTextFlag = (arg = '') => /^(-d|--desc|-f|--filename|-n|--notes|-t|--title|--target|--discussion-category|-r|--remove)$/.test(arg)
 const SENDERS: readonly (readonly [RegExp, (args: readonly string[]) => readonly string[]])[] = [
   // gist create .env and release upload send their files; issue/pr --body-file and -F, api -F x=@.env and --input send one.
   [
     bin('gh'),
-    // A description or notes (-d "why .env is ignored") is no path.
+    // A description or notes (-d "why .env is ignored") is no path; a quoted path with a space in it ("my notes/.env") is.
     // An asset can carry a label: terraform.tfstate#state.
     args =>
-      [...(says(args, / (gist (create|edit)|release (create|upload)) /) ? args.filter(arg => !/\s/.test(arg)) : []), ...fileOf(args, /^(--body-file|-F|--field|--input)([=:]|$)/)]
+      [
+        ...(says(args, / (gist (create|edit)|release (create|upload)) /) ? args.filter((arg, i) => !/\s/.test(arg) || !(arg.startsWith('-') || isTextFlag(args[i - 1]))) : []),
+        ...fileOf(args, /^(--body-file|-F|--field|--input)([=:]|$)/),
+      ]
         .map(attached)
         .flatMap(file => [file, file.replace(/#[\s\S]*$/, '')]),
   ],
@@ -572,12 +692,15 @@ const SENDERS: readonly (readonly [RegExp, (args: readonly string[]) => readonly
       return [...s3, ...args.filter(arg => /fileb?:\/\//i.test(arg)).map(attached), ...fileOf(args, /^--body([=:]|$)/)]
     },
   ],
-  // A message (-m wip, -m "never commit .env") is no path; git rm --cached, status and check-ignore are no send.
+  // A message (-m wip, -m "never commit .env") is no path; a quoted path with a space in it is. git rm --cached, status and
+  // check-ignore are no send.
   [
     bin('git'),
     args =>
       says(args, / (add|stage|commit) /)
-        ? args.filter((arg, i) => !/\s/.test(arg) && !/^(-[a-zA-Z]*m|--(message|author|date))$/.test(args[i - 1] ?? '')).flatMap(pathspec)
+        ? args
+            .filter((arg, i) => !(/\s/.test(arg) && arg.startsWith('-')) && !/^(-[a-zA-Z]*m|--(message|author|date|trailer))$/.test(args[i - 1] ?? ''))
+            .flatMap(pathspec)
         : [],
   ],
 ]
@@ -599,11 +722,66 @@ const aboveHome = (words: readonly string[], world: World) => {
         (isWild(path) && path !== NOWHERE && !path.startsWith(`${NOWHERE}/`) && (path.length > MAX_GLOB || above.some(dir => witness(tokensOf(path), dir) !== undefined))),
     )
 }
+
+// grep -r x ., gci -Recurse | sls x and aws s3 sync . read or send every file the folder holds, a credential file among them,
+// unless a filter leaves it out. rg, git grep and the Grep tool skip what .gitignore names, so they are not read here.
+// shortcut: only the files directly in the folder are listed, not those in its subfolders; walk them if one is seen in use.
+// The working folder by its variable: $PWD, ${PWD}, $pwd, $(pwd), and the same in quotes.
+const PWD = /^["']?(\$\{?pwd\}?|\$\(\s*pwd\s*\)|\$\{?env:pwd\}?)["']?(?=[\\/]|$)/i
+const heldIn = (dirs: readonly string[], world: World, isLeftOut: (name: string) => boolean = () => false) => {
+  for (const dir of dirs.flatMap(word => pathsOf(word.replace(PWD, '.'), world))) {
+    // A wildcard is tried against the folder's files by isSecret.
+    if (!isWild(dir)) {
+      world.asked.set(dir, world.cased.get(dir) ?? dir)
+
+      const file = (world.files?.get(dir) ?? []).find(name => isSecretFile(`${dir}/${name}`, world) && !isLeftOut(name))
+
+      if (file !== undefined) {
+        return `${dir}/${file}`
+      }
+    }
+  }
+
+  return undefined
+}
+// The wildcards an option names: --include=*.ts, --exclude .env, -Include *.ts,*.md.
+const globsOf = (args: readonly string[], flag: RegExp) =>
+  fileOf(args, flag)
+    .flatMap(value => value.replace(/^-[\w-]+[=:]/, '').replace(/["']/g, '').split(','))
+    .map(glob => tokensOf(glob.toLowerCase()))
+const matches = (globs: readonly (readonly string[])[], name: string) => globs.some(glob => witness(glob, [...name]) !== undefined)
+const leftOutBy = (includes: readonly (readonly string[])[], excludes: readonly (readonly string[])[]) => (name: string) =>
+  matches(excludes, name) || (includes.length > 0 && !matches(includes, name))
+// aws s3 sync . s3://b uploads the folder; its --exclude and --include filters apply in order, the last that matches deciding.
+const uploaded = (args: readonly string[], world: World) => {
+  const sub = args.findIndex(arg => /^(sync|cp|mv)$/.test(arg))
+  const bucket = args.findIndex(arg => /^s3:\/\//i.test(arg))
+
+  if (sub < 0 || bucket < sub || args[sub - 1] !== 's3' || (args[sub] !== 'sync' && !args.includes('--recursive'))) {
+    return undefined
+  }
+
+  const filters = args.flatMap((arg, i) =>
+    /^--(exclude|include)(=|$)/.test(arg) ? [[arg.startsWith('--exclude'), tokensOf((arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : (args[i + 1] ?? '')).replace(/["']/g, '').toLowerCase())] as const] : [],
+  )
+  const local = args.slice(sub + 1, bucket).filter((arg, i, all) => (!arg.startsWith('-') || arg === DYNAMIC) && !/^--(exclude|include)$/.test(all[i - 1] ?? ''))
+  // A folder that cannot be resolved ($SRC, $(…)) may be the one with the credential: denied.
+  const unknown = local.find(arg => /[$`\u0000]/.test(arg.replace(/["']/g, '').replace(PWD, '.').replace(HOME_VAR, '~')))
+
+  return unknown ?? heldIn(local, world, name => [...filters].reverse().find(([, glob]) => witness(glob, [...name]) !== undefined)?.[0] === true)
+}
 const searchDeny = (root: string) =>
   `this would search every file under ${root}, the credentials in your home folder among them, and put what matches ${WHERE} Search the project or a folder in it instead.`
 
 // Calls that print a stored credential.
 const says = (args: readonly string[], phrase: RegExp) => phrase.test(` ${args.filter(arg => !arg.startsWith('-')).join(' ')} `)
+const composeConfig = (args: readonly string[], isCompose: boolean) =>
+  isCompose &&
+  /^(config|convert)$/.test(
+    args.filter((arg, i) => !arg.startsWith('-') && !/^(-f|--file|-p|--project-name|--env-file|--profile|--project-directory|--ansi|--progress|--parallel)$/.test(args[i - 1] ?? ''))[0] ?? '',
+  ) &&
+  // A names-only flag counts written bare; one given a value (--services=false) may turn it off.
+  !(args.some(arg => /^(-q|--quiet|--services|--volumes|--profiles|--images|--networks)$/.test(arg)) && !args.some(arg => /^(-q|--quiet|--services|--volumes|--profiles|--images|--networks)=/.test(arg)))
 const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean])[] = [
   [
     bin('aws'),
@@ -642,6 +820,9 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
       (says(args, / output /) && args.some(arg => /^--?(json|raw)(=(?!(false|0)$)[\s\S]*)?$/.test(arg))) ||
       (says(args, / show /) && args.some(arg => /^--?json(=(?!(false|0)$)[\s\S]*)?$/.test(arg))),
   ],
+  // compose config prints the file with the .env values filled in; --services and the like print names only.
+  [bin('docker'), args => composeConfig(args.slice(args.indexOf('compose') + 1), args.includes('compose'))],
+  [bin('docker-compose'), args => composeConfig(args, true)],
   [bin('gcloud'), args => says(args, / print-(access|identity)-token /)],
   [bin('az'), args => says(args, / account get-access-token /)],
   [
@@ -668,7 +849,7 @@ const fileDeny = (file: string, how = 'this would put') => `${how} ${file} ${WHE
 // shortcut: a path is found only as written (whole, with ~ or a home variable, or as a wildcard); one built from pieces
 // (Join-Path), read through a symlink or an 8.3 short name, or by a script file that opens it, slips past.
 /** Why the command would put a secret into the conversation, or undefined. */
-const finding = (command: string, world: World): string | undefined => {
+const finding = (command: string, world: World, tool = 'Bash'): string | undefined => {
   // rg x C:\Users, grep -r x /c/Users: a search of whole folders. After a cd, one that names no folder searches the folder
   // moved to: cd ~ && rg aws_secret.
   const searches = [...invocations(command, bin('rg')), ...invocations(command, bin('grep|egrep|fgrep')).filter(isRecursive)]
@@ -687,6 +868,11 @@ const finding = (command: string, world: World): string | undefined => {
     ...invocations(command, EDITOR)
       .filter(args => !isInPlace(args))
       .map(args => operands(args)),
+    ...invocations(command, bin('openssl')).map(args => fileOf(args, /^-in$/)),
+    ...invocations(command, bin('git')).map(gitShown),
+    ...invocations(command, bin('tar|bsdtar')).map(untarred),
+    ...invocations(command, bin('7z|7za|7zr|7zz')).map(args => (args.some(arg => /^-so$/i.test(arg)) ? args.filter(arg => !arg.startsWith('-')) : [])),
+    ...invocations(command, bin('unzip')).map(args => (args.some(arg => /^-[a-zA-Z]*[pc][a-zA-Z]*$/.test(arg)) ? args.filter(arg => !arg.startsWith('-')) : [])),
   ]
   const statements = statementsOf(command)
   // cat {.env,app.json}, cp .env{,.txt}: the shared parser ends a word at a brace, so brace words are read from the command.
@@ -710,7 +896,18 @@ const finding = (command: string, world: World): string | undefined => {
       world,
     ) ??
     (READ_CALL.test(command) ? secretIn(command.split(/[\s;|&()<>`,[\]"']+/), world) : undefined) ??
-    (readers.length > 0 ? secretIn(braces, world) : undefined)
+    (readers.length > 0 ? secretIn(braces, world) : undefined) ??
+    // grep -r x reads the folder it names, or the one it runs in.
+    invocations(command, bin('grep|egrep|fgrep'))
+      .filter(args => isRecursive(args) && !isNamesOnly(args))
+      .map(args => {
+        const named = operands(args).filter(
+          (arg, i, all) => !arg.startsWith('-') && !isValueFlag(all[i - 1] ?? '') && !/^(--(include|exclude|exclude-dir|exclude-from|directories|devices)|-[dD])$/.test(all[i - 1] ?? ''),
+        )
+
+        return heldIn(named.length > 0 ? named : ['.'], world, leftOutBy(globsOf(args, /^--include([=:]|$)/), globsOf(args, /^--exclude([=:]|$)/)))
+      })
+      .find(Boolean)
 
   if (read !== undefined) {
     return fileDeny(read)
@@ -747,6 +944,27 @@ const finding = (command: string, world: World): string | undefined => {
     return searchDeny(searched)
   }
 
+  // gci -Recurse | sls x reads the folder it lists; -Name hands on names, not files.
+  const walked =
+    readers.length > 0
+      ? listers
+          // -Recurse:$true and -Depth 2 walk the folder too.
+          .filter(
+            ([program, ...args]) =>
+              /^(gci|get-childitem|dir|ls)$/.test(nameOf(program)) && args.some(arg => /^-(r(e(c(u(r(se?)?)?)?)?)?|de\w*)(:\S*)?$/i.test(arg)) && !args.some(arg => /^-name$/i.test(arg)),
+          )
+          .map(([, ...args]) => {
+            const named = args.filter((arg, i) => !arg.startsWith('-') && !/^-(inc|ex|filt|de|at)\w*$/i.test(args[i - 1] ?? ''))
+
+            return heldIn(named.length > 0 ? named : ['.'], world, leftOutBy(globsOf(args, /^-(inc|filt)\w*([=:]|$)/i), globsOf(args, /^-ex\w*([=:]|$)/i)))
+          })
+          .find(Boolean)
+      : undefined
+
+  if (walked !== undefined) {
+    return fileDeny(walked)
+  }
+
   // f=.env; cat $f and for f in .env*; do cat "$f": the reader is handed the file through a variable.
   const bound = secretIn(
     [...command.matchAll(/(?:^|[\s;({])\$?\w+\s*=\s*([^\s;|&)]+)|\b(?:for|foreach)\s*(?:\(\s*)?\$?\w+\s+in\s+([^;)\n]+)/gi)].flatMap(
@@ -760,7 +978,11 @@ const finding = (command: string, world: World): string | undefined => {
     return fileDeny(handed, 'this hands a program that prints it')
   }
 
-  const sent = SENDERS.flatMap(([program, files]) => invocations(command, program).map(args => secretIn(files(args), world))).find(Boolean)
+  const sent =
+    SENDERS.flatMap(([program, files]) => invocations(command, program).map(args => secretIn(files(args), world))).find(Boolean) ??
+    invocations(command, bin('aws'))
+      .map(args => uploaded(args, world))
+      .find(Boolean)
 
   if (sent !== undefined) {
     return sendDeny(sent)
@@ -792,6 +1014,8 @@ const finding = (command: string, world: World): string | undefined => {
     ([...statements, ...statementsOf(command.replace(/\$\{([^{}]*)\}/g, '$$$1'))].some(printsVar) ||
       [command, ...scripts].some(text => [...text.matchAll(BARE_VAR)].some(isPrinted)) ||
       [...command.matchAll(BARE_STRING)].some(found => /\s/.test(found.groups?.text ?? '') && SECRET_VAR.test(found.groups?.text ?? '') && isPrinted(found)) ||
+      // \ continues a line in bash, not in PowerShell; the terminal tool's shell may be either.
+      [command, ...scripts].some(text => (tool === TERMINAL ? [true, false] : [tool === 'PowerShell']).some(isPowerShell => printsExpression(text, isPowerShell))) ||
       invocations(command, CODE_RUNNER).some(args => args.some(arg => NAMED_IN_CODE.test(arg))))
   ) {
     return `this would put the value of a variable named for a credential ${WHERE} Hand it to the program that needs it ("$NAME" as its argument, or piped to its --with-token or --password-stdin) instead of printing it.`
@@ -816,7 +1040,8 @@ const worldOf = (cwd: string, home: string, allowed = ''): World => ({
   cwd,
   home,
   globs: new Map(),
-  asked: new Set(),
+  asked: new Map(),
+  cased: new Map(),
   allow: allowed
     .split(',')
     .map(glob => glob.trim())
@@ -932,7 +1157,7 @@ const denial = (tool: string, written: string, world: World): string | undefined
 
   for (const text of texts) {
     for (const one of worldsOf(text, world)) {
-      const found = finding(text, one)
+      const found = finding(text, one, tool)
 
       if (found !== undefined) {
         return found
@@ -975,17 +1200,16 @@ export const register: Register = on => {
       found = 'it names wildcards in more folders than are checked for a credential file. Run it as shorter commands.'
     } else if (found === undefined && world.asked.size > 0) {
       // A folder that is not there, or cannot be listed, holds nothing to this check: the wildcard is judged by its text alone, as before.
-      // shortcut: a path is lower-cased when resolved, so on a case-sensitive disk only the working folder and lower-case
-      // folders are listed; keep the written case if that bites.
+      // It is listed by its path as written (a case-sensitive disk has no folder by the lower-case name), its names matched in lower case.
       // The call is written whole, $.fs.list(: the host lets a mod make only the calls it finds in its source.
-      const list = async (dir: string) => {
+      const list = async (dir: string, written: string) => {
         try {
-          return (await $.fs.list(dir === norm(cwd) ? cwd : dir)).map(entry => entry.name.toLowerCase())
+          return (await $.fs.list(dir === norm(cwd) ? cwd : written)).map(entry => entry.name.toLowerCase())
         } catch {
           return []
         }
       }
-      const files = new Map(await Promise.all([...world.asked].map(async dir => [dir, await list(dir)] as const)))
+      const files = new Map(await Promise.all([...world.asked].map(async ([dir, written]) => [dir, await list(dir, written)] as const)))
 
       found = [...files.values()].some(names => names.length > MAX_ENTRIES)
         ? 'it names a wildcard in a folder with more files than are checked for a credential file. Name the files instead.'

@@ -91,6 +91,8 @@ const runsUnpinned = (args: Args, valued: RegExp, from: RegExp, also = NEVER) =>
   const targets = values.some(([option]) => from.test(option)) ? named : [...named, ...words]
 
   return (
+    // npm exec -c "pip install x": the string is a command line of its own.
+    values.some(([option, line]) => /^(-c|--call)$/.test(option) && refusal(line) !== undefined) ||
     (!flags.some(flag => /^--no(-install)?$/.test(flag)) && targets.some(target => !PINNED.test(target))) ||
     handsTo((words[0] ?? '').split('@')[0] ?? '', args.slice((at[0] ?? args.length) + 1), 0)
   )
@@ -151,6 +153,13 @@ const pip: Check = args =>
 // --package-lock=false, =0 and =null all turn it off: anything but =true counts.
 const NO_LOCK = /^--no-(package-lock|lockfile)$|^--(package-lock|lockfile)=(?!true$)/
 const PACKAGE = /^(-p|--package)$/
+// npm config set package-lock false, npm set package-lock=false: anything but true turns it off for every later install.
+const setsNoLock = (rest: Args) =>
+  rest.some((arg, i) => {
+    const [key, , value = rest[i + 1]] = /^(package-lock|lockfile)(?:=(.*))?$/.exec(arg) ?? []
+
+    return key !== undefined && value !== 'true'
+  })
 
 // A package named on the command line comes from the registry as it is today, not from a lockfile.
 const js = (valuedNames: string, installs: RegExp, runs: RegExp) => {
@@ -175,6 +184,10 @@ const js = (valuedNames: string, installs: RegExp, runs: RegExp) => {
 
       if (runs.test(verb)) {
         return run(rest)
+      }
+
+      if (/^(c|config|set)$/.test(verb)) {
+        return (verb === 'set' || words[0] === 'set') && setsNoLock(rest)
       }
 
       // pnpm exec pip install x, yarn run pip install x, and pnpm's own fallback, pnpm pip install x: the program is read as its own command.
@@ -263,7 +276,14 @@ const gem = named(
 )
 const GO = options('-o|-C|-ldflags|-gcflags|-asmflags|-tags|-mod|-modfile|-p|-pkgdir|-buildmode|-compiler|-overlay|-toolexec|-exec')
 const GO_PINNED = /^[^@\s]+@v\d+\.\d+\.\d[\w.+-]*$/
-const goInstall = named(GO, /^install$/, ({ words }) => words.some(word => !LOCAL.test(word) && !GO_PINNED.test(word)))
+// go get x@none removes a module.
+// go get -u moves every dependency to its newest version, whatever it names.
+const goInstall = named(
+  GO,
+  /^(install|get)$/,
+  ({ words, flags }) =>
+    flags.some(flag => /^-u(=|$)/.test(flag)) || words.some(word => !LOCAL.test(word) && !GO_PINNED.test(word) && !/@none$/.test(word)),
+)
 // go run takes one package, then that program's arguments. Without a version it is built from go.mod and go.sum.
 const goRun = named(GO, /^run$/, ({ words: [target = ''] }) => target.includes('@') && !GO_PINNED.test(target))
 // An exact version: evil/x:* and evil/x:^1.0 take whatever is newest.
@@ -273,7 +293,27 @@ const composer = named(
   ({ words }) => words.some(word => !/^[^:=\s]+[:=]v?\d+\.\d+\.\d[\w.+-]*$/.test(word)),
 )
 
-// shortcut: the install and run verbs of these tools; poetry and conda pass, and a script that installs is not read. Upgrade if those come into use.
+// poetry add takes pkg==1.2.3 or pkg@1.2.3; poetry install reads poetry.lock.
+const poetry = named(
+  options('-G|--group|-E|--extras|--source|-C|--directory|-P|--project|--python|--platform|--markers'),
+  /^add$/,
+  ({ words }) => words.some(word => !PINNED.test(word) && !LOCAL.test(word)),
+)
+// conda install pkg=1.2.3, with a channel (conda-forge::) and a build (=py311_0) allowed; --file names what to install.
+const CONDA = options('-n|--name|-p|--prefix|-c|--channel|--file|--repodata-fn|--solver|-r|--root-prefix|--cwd')
+const condaInstall = named(CONDA, /^(install|create|update|upgrade)$/, ({ words }) =>
+  words.some(word => !/^([\w.-]+::)?[\w.-]+==?\d+\.\d+\.\d[\w.=+-]*$/.test(word)),
+)
+// conda run -n x pip install y: the program is read as its own command.
+const conda: Check = (args, depth = 0) =>
+  condaInstall(args) ||
+  readings(args, CONDA).some(([verb, rest]) => {
+    const { words, at } = parse(rest, CONDA, true)
+
+    return verb === 'run' && handsTo(words[0] ?? '', rest.slice((at[0] ?? rest.length) + 1), depth)
+  })
+
+// shortcut: the install and run verbs of these tools; poetry run and a script that installs are not read. Upgrade if those come into use.
 const TOOLS: readonly (readonly [string, Check, string?])[] = [
   ['pip', pip, String.raw`pip(-?\d[\d.]*)?`],
   ['python', python, String.raw`(python|pypy)w?[\d.]*|py`],
@@ -293,16 +333,19 @@ const TOOLS: readonly (readonly [string, Check, string?])[] = [
   ['gem', gem],
   ['go', args => goInstall(args) || goRun(args)],
   ['composer', args => composer(args.filter(arg => arg !== 'global'))],
+  // poetry self add x installs into poetry's own environment.
+  ['poetry', args => poetry(args.filter(arg => arg !== 'self'))],
+  ['conda', conda, 'conda|mamba|micromamba'],
 ]
 const bin = (name: string) => new RegExp(String.raw`^(.*[\\/])?(${name})(\.exe|\.cmd|\.bat|\.ps1)?$`, 'i')
 const BINARIES = [
   ...TOOLS.map(([label, check, name = label]) => [label, check, bin(name)] as const),
-  // $(which pip) install x: a program the shell names can be any of the tools.
-  // shortcut: not the runners (npx, uvx), which would deny every such program ($EDITOR notes.txt); $(echo npx) pkg passes.
+  // $(which pip) install x, sudo $NPM install x: a program the shell names can be any of the tools.
+  // Not the runners (npx, uvx), which would deny every such program ($EDITOR notes.txt): `toolNamed` reads $(echo npx) pkg.
   [
     'a program the shell names',
     (args: Args) => TOOLS.some(([label, check]) => !/^(npx|pnpx|bunx|uvx)$/.test(label) && check(args)),
-    bin(MARK),
+    bin(String.raw`${MARK}|\$\{?\w+\}?`),
   ] as const,
 ]
 const ANY = new RegExp(BINARIES.map(([, , binary]) => binary.source).join('|'), 'i')
@@ -335,6 +378,34 @@ const placed = (command: string) => {
   return text
 }
 
+// A fourth reading that puts the tool a substitution or variable names in its place: $(echo npx) pkg is npx pkg, $NPX pkg too,
+// and $(which npm) ci stays npm ci. A substitution's text is the shell's to run, so this is a guess, and a guess toward a call.
+const TOOL_NAME = /(?<![a-z])(npx|pnpx|bunx|uvx|pipx|pnpm|yarn|npm|pip[\d.]*|uv|bun|poetry|conda|mamba|micromamba)(?![a-z])/i
+// Innermost first, so $(basename $(which npx)) becomes $(basename npx), then npx. ${X:-npx} names npx too.
+const toolNamed = (command: string) => {
+  let text = command
+
+  for (let depth = 0; depth < 9; depth++) {
+    text = text.replace(/\$\([^()\n]*\)|`[^`\n]*`|\$\{[^{}\n]*\}|\$\w+/g, word => TOOL_NAME.exec(word)?.[1] ?? word)
+  }
+
+  return text
+}
+
+// A fifth: python handed -m or pip by the shell (python $(echo -m pip install x)) is read as python -m pip install.
+// shortcut: text-level, to the end of the command; a parser that kept the substitution's text in place would make this exact.
+const pythonNamed = (command: string) =>
+  command.replace(/(^|[\s;&|(\\/])((?:python|pypy)w?[\d.]*|py)(\.exe)?([ \t][^;&|\n]*)/gi, (all, lead, name, exe = '', rest) =>
+    // pip or -m inside a substitution, a flag the shell finishes (-$(echo m)), or pip after a word the shell fills ($M pip).
+    /(\$\(|`)[^)`]*(pip|(^|[\s(`])-[a-z]*m)|(^|\s)-[a-z]*(\$|`)|(\$[({\w]|`).*\bpip\b/i.test(rest)
+      ? `${lead}${name}${exe} -m pip install ${MARK}`
+      : all,
+  )
+
+// npm reads npm_config_package_lock (any case, - or _) from the environment: set to anything but true, later installs skip the
+// lockfile. Set as VAR=x, ${env:VAR} = x, SetEnvironmentVariable('VAR','x') or Set-Item Env:VAR x.
+const NO_LOCK_ENV = /(?<![\w-])npm_config_(package[-_]lock|lockfile)\}?["']?(\s*[=,]\s*|\s+)(?![&|;>]|["']?true\b)/i
+
 const denies = (check: Check, args: Args) => {
   try {
     return check(args)
@@ -357,7 +428,11 @@ const refusal = (command: string): string | undefined => {
     return `${unread}, so it does not run. Split it up, or give the user the exact command to run themselves with the \`!\` prefix.`
   }
 
-  for (const source of new Set([command, marked(command), placed(command)])) {
+  if (NO_LOCK_ENV.test(command)) {
+    return `npm_config_package_lock turns the lockfile off. Install from the lockfile (npm ci), or give the user the exact command to run themselves with the \`!\` prefix.`
+  }
+
+  for (const source of new Set([command, marked(command), placed(command), toolNamed(command), pythonNamed(command)])) {
     // One pass finds whether any tool is called at all: most commands call none.
     for (const [label, check, binary] of invocations(source, ANY).length > 0 ? BINARIES : []) {
       // Where the shell fills arguments in ($( ), a backtick, PowerShell ( )), any word can stand there: read as a package named.

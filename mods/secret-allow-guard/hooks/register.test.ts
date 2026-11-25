@@ -21,9 +21,9 @@ const start = async (
   files: Record<string, string>,
   git: Record<string, number> | 'missing' = {},
   env: Record<string, string> = {},
+  toasts: string[] = [],
 ) => {
   mock.env(on, { USERPROFILE: '/home/me', ...env })
-  const toasts: string[] = []
   // The host resolves a path its own way on each platform, so a file is matched by its ending.
   const find = (path: string) => Object.keys(files).find(one => path.replace(/\\/g, '/').endsWith(one))
   on('fs.read', (_, e) => {
@@ -49,6 +49,7 @@ const start = async (
     return { value: undefined }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('classic.ConfigChange', () => ({}))
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
   return toasts.join('\n')
@@ -98,6 +99,20 @@ const RULES: readonly (readonly [string, boolean])[] = [
   [`Bash(docker --config ${'/a'.repeat(60)} login -u me -p hunter2 registry.example.com)`, true],
   [`Bash(curl ${'-H "X-A: b" '.repeat(20)}-u admin:${'hunter'}2 https://api.example.com)`, true],
   ['Bash(DB_PASS_WORD_FOR_THE_APP=hunter2pw ./migrate)', true],
+  // Known key formats, each with no name or flag beside it.
+  [`Bash(echo ${['sk', 'ant', 'api03'].join('-')}-${'Qw3_'.repeat(8)})`, true],
+  [`Bash(echo ${['sk', 'proj'].join('-')}-${'Rt5y'.repeat(8)})`, true],
+  [`Bash(echo ${'github'}_pat_${'11AB'.repeat(9)})`, true],
+  [`Bash(echo ${'glpat'}-${'Zx8c'.repeat(5)})`, true],
+  [`Bash(echo ${'AI'}za${'Sy0_'.repeat(8)}abc)`, true],
+  [`Bash(echo ${'rk'}_live_${'aB3d'.repeat(6)})`, true],
+  [`Bash(echo ${'xo'}xb-${'1234'.repeat(3)}-${'aB3d'.repeat(4)})`, true],
+  [`Bash(echo ${'xo'}xp-${'1234'.repeat(3)}-${'aB3d'.repeat(4)})`, true],
+  [`Bash(echo ${'sb'}p_${'0a'.repeat(20)})`, true],
+  [`Bash(echo ${'np'}m_${'Kq7w'.repeat(9)})`, true],
+  [`Bash(echo ${'AS'}IA${'Y'.repeat(16)})`, true],
+  [`Bash(aws configure set aws_secret_access_key ${'Ab1/Cd2x'.repeat(5)})`, true],
+  [`Bash(az storage account keys list --query "[0].value" --account-name ${'sk'}-store)`, false],
   ['Bash(curl https://hooks.slack.com/services)', false],
   ['Bash(echo AccountKey=$STORAGE_KEY)', false],
   ['Bash(echo "-----BEGIN PGP PUBLIC KEY BLOCK-----")', false],
@@ -391,3 +406,97 @@ test('still warns of a secret when git cannot start', async ($, on) => {
 test('stays quiet outside a git repo', async ($, on) => {
   expect(await start($, on, { [LOCAL]: settings('Bash(ls)') })).toBe('')
 })
+
+// A session that starts clean, then gets `change` written to `path` by a tool call or by hand.
+// Returns the toasts raised after session start.
+const midSession = async (
+  $: EngineInterface,
+  on: On,
+  path: string,
+  change: string,
+  trigger: (files: Record<string, string>) => Promise<unknown>,
+  before: Record<string, string> = { [LOCAL]: settings('Bash(ls)') },
+) => {
+  const files = { ...before }
+  const toasts: string[] = []
+  on('tool.call', () => {
+    files[path] = change
+
+    return { result: { stdout: '', stderr: '', interrupted: false } }
+  })
+  expect(await start($, on, files, IGNORED, {}, toasts)).toBe('')
+  await trigger(files)
+
+  return toasts.join('\n')
+}
+
+const ASKED = (on: On) => {
+  on('tool.check', () => ({ decision: 'ask' as const }))
+  on('classic.PermissionRequest', () => ({ decision: { behavior: 'allow' as const } }))
+}
+
+test('flags a rule with a secret saved by an asked call during the session', async ($, on) => {
+  ASKED(on)
+  const toast = await midSession($, on, LOCAL, settings('Bash(ls)', `Bash(echo ${AWS})`), () =>
+    $.tool.call({ tool: 'Bash', command: `echo ${AWS}` } as never),
+  )
+  expect(toast.includes('/repo/.claude/settings.local.json: 1 entry looks like a literal secret')).toBe(true)
+  expect(toast.includes(AWS)).toBe(false)
+})
+
+test('does not rescan after a call no rule allowed or asked about', async ($, on) => {
+  on('tool.check', () => ({ decision: 'allow' as const }))
+  expect(await midSession($, on, LOCAL, settings(`Bash(echo ${AWS})`), () => $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+})
+
+for (const [tool, path] of [
+  ['Edit', '/repo/.claude/settings.json'],
+  ['Write', MCP],
+  ['MultiEdit', '/home/me/.claude.json'],
+  ['Write', '/home/me/.claude/settings.json'],
+] as const) {
+  test(`flags a secret a ${tool} call writes to ${path}`, async ($, on) => {
+    on('tool.check', () => ({ decision: 'allow' as const }))
+    const text = JSON.stringify({ mcpServers: { a: { env: { GITHUB_TOKEN: GITHUB } } }, permissions: { allow: [] } })
+    const toast = await midSession($, on, path, text, () => $.tool.call({ tool, file_path: path.replace(/\//g, '\\'), content: '' } as never))
+    expect(toast.includes(`${path}: 1 entry looks`)).toBe(true)
+  })
+}
+
+test('flags a settings file changed by hand during the session', async ($, on) => {
+  const toast = await midSession($, on, '/home/me/.claude/settings.json', settings(`Bash(echo ${OPENAI})`), async files => {
+    files['/home/me/.claude/settings.json'] = settings(`Bash(echo ${OPENAI})`)
+    await $.classic.ConfigChange({ source: 'user_settings', file_path: '/home/me/.claude/settings.json' })
+  })
+  expect(toast.includes('/home/me/.claude/settings.json: 1 entry looks')).toBe(true)
+})
+
+test('does not repeat a warning session start already gave', async ($, on) => {
+  const files: Record<string, string> = { [LOCAL]: settings(`Bash(echo ${AWS})`) }
+  const toasts: string[] = []
+  expect(/literal secret/.test(await start($, on, files, IGNORED, {}, toasts))).toBe(true)
+  toasts.length = 0
+  await $.classic.ConfigChange({ source: 'local_settings', file_path: LOCAL })
+  expect(toasts.join('')).toBe('')
+  files[LOCAL] = settings(`Bash(echo ${AWS})`, `Bash(echo ${GITHUB})`)
+  await $.classic.ConfigChange({ source: 'local_settings', file_path: LOCAL })
+  expect(toasts.join('').includes('/repo/.claude/settings.local.json: 2 entries look')).toBe(true)
+})
+
+// The count stays the same; the secret does not.
+for (const [name, after] of [
+  ['a secret replaced by another', JSON.stringify({ env: { API_TOKEN: `new${'secret'}456` } })],
+  ['a different entry swapped in', JSON.stringify({ env: { DB_PASSWORD: `${'hunter'}2pw` } })],
+] as const) {
+  test(`warns of ${name} at the same count`, async ($, on) => {
+    const files: Record<string, string> = { '/repo/.claude/settings.json': JSON.stringify({ env: { API_TOKEN: `old${'secret'}123` } }) }
+    const toasts: string[] = []
+    expect(/literal secret/.test(await start($, on, files, IGNORED, {}, toasts))).toBe(true)
+    toasts.length = 0
+    files['/repo/.claude/settings.json'] = after
+    await $.classic.ConfigChange({ source: 'project_settings', file_path: '/repo/.claude/settings.json' })
+    const toast = toasts.join('')
+    expect(toast.includes('/repo/.claude/settings.json: 1 entry looks')).toBe(true)
+    expect(/secret456|hunter2pw|secret123/.test(toast)).toBe(false)
+  })
+}

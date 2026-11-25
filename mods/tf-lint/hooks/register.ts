@@ -50,16 +50,19 @@ const hasToken = (text: string) =>
   (text.match(TOKENS) ?? []).some(found => found.replace(/EXAMPLE/g, 'X').match(TOKENS) !== null)
 const secretIn = (text: string) =>
   KEY_ID.test(text) || SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
-// Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too. A composite action under .github/actions is read the same way.
-const WORKFLOW = /(^|[\\/])\.github[\\/](?:workflows[\\/][^\\/]+|actions[\\/](?:[^\\/]+[\\/])*action)\.ya?ml$/i
+// Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too. A composite action's action.yml is read the same way,
+// wherever it sits.
+const WORKFLOW = /(^|[\\/])(?:\.github[\\/]workflows[\\/][^\\/]+|action)\.ya?ml$/i
 // The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, >&-, -> and >= are not
 // redirections; >&file and =>file are. tee counts only as a command after a pipe, not in a filename like tee.log.
 // aws configure set and npm config set write a credentials file with no redirection. So do New-Item -Value, the aliases sc, ac
-// and ni where a command starts, dd of=, and a call to a write or append method: [IO.File]::WriteAllText(, open().write(,
-// fs.writeFileSync(.
+// and ni where a command starts, dd of=, a call to a write or append method: [IO.File]::WriteAllText(, open().write(,
+// fs.writeFileSync(, and a file opened to write (print(..., file=open('f', 'w'))). Set-Item and si count unless the path is
+// one of PowerShell's session drives (Env:, Variable:, Function:, Alias:), which are not files.
+// shortcut: Set-Item Env:X,file -Value KEY passes; the FileSystem provider does not support Set-Item, so it writes nothing.
 const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
 const WRITES =
-  /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File|New-Item)\b|(?:^|[|;&({\n])\s*(?:sc|ac|ni)\s|\bof=|(?:\.|::)(?:write|append)\w*\s*\(|\bconfig(?:ure)?\s+set\b/i
+  /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File|New-Item)\b|(?:^|[|;&({\n])\s*(?:sc|ac|ni)\s|\bof=|(?:\.|::)(?:write|append)\w*\s*\(|\bconfig(?:ure)?\s+set\b|(?:\bSet-Item|(?:^|[|;&({\n])\s*si)(?!\s+(?:-(?:Literal)?Path[\s:]+)?["']?(?:env|variable|function|alias):)\s|(?:\.open\s*\(|\bopen\s*\([^()]*?,)\s*(?:mode\s*=\s*)?[\\\x60]*["'](?=[rbt]*[wax+])[rwabxt+]{1,4}[\\\x60]*["']/i
 // sed -i and perl -pi edit a file in place, and git config writes one. Each is two words anywhere in the command, read apart.
 // shortcut: no shell parser here, so grep -i KEY f | sed 1q is denied too; upgrade to shell.ts if that matters.
 const WRITE_PAIRS = [
@@ -158,6 +161,15 @@ const cut = (text: string, open: RegExp, close: string) => {
   }
 }
 
+// What the HCL rules and their .tf.json forms report.
+const NO_ROTATION = 'creates a KMS key without enable_key_rotation = true'
+const NO_WINDOW = 'creates a KMS key without a deletion_window_in_days of 7 to 30'
+const NO_FIPS = 'configures a GovCloud provider without use_fips_endpoint = true'
+const notSensitive = (kind: string, name: string) => `declares ${kind} "${name}" without sensitive = true`
+const literalDefault = (name: string) =>
+  `gives variable "${name}" a literal default; pass it in from a secret store or TF_VAR_${name}`
+const openPorts = (open: number[]) => `opens port ${open.join(' and ')} to 0.0.0.0/0; restrict the source CIDR`
+
 // The NIST rules for KMS keys, GovCloud providers and secret variables and outputs, read from whole blocks. Each takes the
 // text with the braces inside strings gone: a brace in "closing }" is text, not a block.
 const kmsFindings = (text: string): string[] => {
@@ -174,14 +186,14 @@ const kmsFindings = (text: string): string[] => {
 
     // Only symmetric encryption keys rotate.
     if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(settings)) {
-      found.push('creates a KMS key without enable_key_rotation = true')
+      found.push(NO_ROTATION)
     }
 
     // A window from a variable passes: its value is not in the text.
     const days = window?.[1] === undefined ? undefined : Number(window[1])
 
     if (window === null || (days !== undefined && (days < 7 || days > 30))) {
-      found.push('creates a KMS key without a deletion_window_in_days of 7 to 30')
+      found.push(NO_WINDOW)
     }
   }
 
@@ -192,32 +204,32 @@ const providerFindings = (text: string): string[] =>
   bodiesOf(text, /provider\s+"?aws"?/).some(
     body => /\bregion\s*=\s*"us-gov-/.test(body) && !/\buse_fips_endpoint\s*=\s*true\b/.test(body),
   )
-    ? ['configures a GovCloud provider without use_fips_endpoint = true']
+    ? [NO_FIPS]
     : []
 
 // A name that holds a secret; one ending in what only describes it (secret_arn, password_length, token_ttl, api_key_source)
 // does not, nor does a switch (type = bool, default = true).
+const isSecretName = (name: string) =>
+  /secret|password|passphrase|token|private_key|access_key|api[_-]?key|creds|credentials|[_-](?:pat|pwd)(?:$|[_-])/i.test(name) &&
+  !/_(arn|ids?|names?|length|ttl|path|files?|source|types?|required|version|policy|enabled|count|days)$/i.test(name)
+
 const secretNameFindings = (text: string): string[] => {
   const found: string[] = []
 
   for (const { match, body } of blocksOf(text, /\b(variable|output)\s+"?([\w-]+)"?/)) {
     const [, kind = '', name = ''] = match
 
-    if (
-      !/secret|password|token|private_key|access_key|api[_-]?key/i.test(name) ||
-      /_(arn|ids?|names?|length|ttl|path|files?|source|types?|required|version|policy|enabled|count|days)$/i.test(name) ||
-      /\btype\s*=\s*bool\b|\bdefault\s*=\s*(?:true|false)\b/.test(body)
-    ) {
+    if (!isSecretName(name) || /\btype\s*=\s*bool\b|\bdefault\s*=\s*(?:true|false)\b/.test(body)) {
       continue
     }
 
     // A description that says "sensitive = true" is not the setting.
     if (!/\bsensitive\s*=\s*true\b/.test(eachString(body, () => '""'))) {
-      found.push(`declares ${kind} "${name}" without sensitive = true`)
+      found.push(notSensitive(kind, name))
     }
 
     if (kind === 'variable' && /\bdefault\s*=\s*(?:"[^"\n]+"|<<)/.test(body)) {
-      found.push(`gives variable "${name}" a literal default; pass it in from a secret store or TF_VAR_${name}`)
+      found.push(literalDefault(name))
     }
   }
 
@@ -260,7 +272,8 @@ const oidcFindings = (text: string, isGithub: boolean): string[] => {
   }
 
   if (wild.length > 0) {
-    found.push(`trusts GitHub Actions OIDC for a wildcard repository (${wild.join(', ')}); name the repo in :sub`)
+    // The count, never the values: a finding goes into the context, and a value may hold a secret.
+    found.push(`trusts GitHub Actions OIDC for a wildcard repository (${wild.length} :sub value${wild.length === 1 ? '' : 's'}); name the repo in :sub`)
   }
 
   if (!hasAud) {
@@ -338,17 +351,75 @@ const trustFindings = (text: string): string[] => {
     : []
 }
 
-const policyFindings = (text: string): string[] => {
-  const found: string[] = []
+// Each wildcard principal needs a condition in its own statement: the block around Principal = "*", or the block around the
+// principal map or principals block that holds AWS = "*" or identifiers = ["*"]. A principal whose statement the text cuts
+// off is read against a condition anywhere in the text.
+// shortcut: a policy in an escaped JSON string (.tf.json) is not read; upgrade to checkov for those.
+const principalFindings = (source: string): string[] => {
+  // Braces inside strings become spaces, so offsets hold and no word is joined across a removed brace (Condi{tion}).
+  const text = eachString(source, quoted => quoted.replace(/[{}]/g, ' '))
+  const wild = [...text.matchAll(/\b(Principal|AWS)"?\s*[=:]\s*\[?\s*"\*"|\bidentifiers\s*=\s*\[\s*"\*"/g)]
 
-  // shortcut: a condition anywhere in the text clears every wildcard principal in it; upgrade to checkov for per-statement reads.
-  if (
-    /\b(?:Principal|AWS)"?\s*[=:]\s*\[?\s*"\*"|\bidentifiers\s*=\s*\[\s*"\*"/.test(text) &&
-    !/\bCondition\b|\bcondition\s*\{/.test(text)
-  ) {
-    found.push('grants a policy to Principal "*" with no condition; name the principals or add a Condition (aws:PrincipalOrgID, aws:SourceArn)')
+  if (wild.length === 0) {
+    return []
   }
 
+  // A Condition key, bare or quoted ("Condition": in JSON); every other string is blanked, so its text never counts.
+  const keys = eachString(text, quoted => (quoted === '"Condition"' ? quoted : `"${' '.repeat(quoted.length - 2)}"`))
+  const conditions = [...keys.matchAll(/\bCondition"?\s*[=:]|\bcondition\s*\{/g)].map(match => match.index ?? 0)
+  const closed = blocksIn(text)
+  const parents = new Map([...closed.values()].flatMap(block => block.kids.map(kid => [kid, block] as const)))
+  // The innermost { open at each match, in one pass.
+  const around = new Map<number, Block | undefined>()
+  const stack: number[] = []
+  let next = 0
+
+  for (let i = 0; i < text.length && next < wild.length; i += 1) {
+    while (next < wild.length && (wild[next]?.index ?? 0) === i) {
+      const open = stack[stack.length - 1]
+      around.set(i, open === undefined ? undefined : closed.get(open))
+      next += 1
+    }
+
+    if (text[i] === '{') {
+      stack.push(i)
+    } else if (text[i] === '}') {
+      stack.pop()
+    }
+  }
+
+  // Whether a condition starts inside the block: the first one after its { comes before its }.
+  const hasCondition = (block: Block) => {
+    let low = 0
+    let high = conditions.length
+
+    while (low < high) {
+      const mid = (low + high) >> 1
+
+      if ((conditions[mid] ?? 0) <= block.open) {
+        low = mid + 1
+      } else {
+        high = mid
+      }
+    }
+
+    return low < conditions.length && (conditions[low] ?? 0) < block.close
+  }
+
+  const bare = wild.some(match => {
+    const inner = around.get(match.index ?? 0)
+    const statement = inner === undefined || match[1] === 'Principal' ? inner : parents.get(inner)
+
+    return statement === undefined ? conditions.length === 0 : !hasCondition(statement)
+  })
+
+  return bare
+    ? ['grants a policy to Principal "*" with no condition; name the principals or add a Condition (aws:PrincipalOrgID, aws:SourceArn)']
+    : []
+}
+
+const policyFindings = (text: string): string[] => {
+  const found: string[] = []
   const actions = [...text.matchAll(ACTION_VALUES)].map(([, value = '']) => value).join('\n')
 
   // "*:*" is every action of every service, as "*" is.
@@ -408,14 +479,106 @@ const portFindings = (text: string): string[] => {
     const open = MANAGEMENT_PORTS.filter(one => isEveryPort || (from <= one && one <= to))
 
     if (!isEgress && open.length > 0) {
-      found.push(`opens port ${open.join(' and ')} to 0.0.0.0/0; restrict the source CIDR`)
+      found.push(openPorts(open))
     }
   }
 
   return found
 }
 
-// shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
+type Body = Record<string, unknown>
+
+// Terraform's JSON syntax: a block is one object or a list of them, at any level.
+const each = (value: unknown): Body[] =>
+  Array.isArray(value) ? value.flatMap(each) : typeof value === 'object' && value !== null ? [value as Body] : []
+const number = (value: unknown) =>
+  typeof value === 'number' ? value : typeof value === 'string' && /^\s*-?\d+\s*$/.test(value) ? Number(value) : undefined
+const isTrue = (value: unknown) => value === true || value === 'true'
+
+// The KMS, provider, port and secret-name rules for .tf.json, read from the parsed document. Text that is not JSON (an HCL
+// file, an Edit's fragment) gives none; the text rules still run on it.
+// shortcut: the trust and wildcard-principal rules are not read here; a policy in .tf.json is an escaped string.
+const jsonFindings = (source: string): string[] => {
+  if (!/^\s*[[{]/.test(source)) {
+    return []
+  }
+
+  let doc: unknown
+
+  try {
+    doc = JSON.parse(source)
+  } catch {
+    return []
+  }
+
+  const roots = each(doc)
+  const found: string[] = []
+  // resource.<type>.<name> and provider.<name>, each body once.
+  const resources = (type: string) => roots.flatMap(root => each(root.resource)).flatMap(group => each(group[type])).flatMap(named => Object.values(named).flatMap(each))
+  const labelled = (key: string) => roots.flatMap(root => each(root[key])).flatMap(group => Object.entries(group).flatMap(([name, body]) => each(body).map(one => [name, one] as const)))
+
+  for (const key of resources('aws_kms_key')) {
+    const spec = key.customer_master_key_spec ?? key.key_spec
+    const days = number(key.deletion_window_in_days)
+
+    // Only symmetric encryption keys rotate; a spec from an expression is read as symmetric, as in HCL.
+    if ((typeof spec !== 'string' || spec === 'SYMMETRIC_DEFAULT' || spec.includes('${')) && !isTrue(key.enable_key_rotation)) {
+      found.push(NO_ROTATION)
+    }
+
+    if (key.deletion_window_in_days == null || (days !== undefined && (days < 7 || days > 30))) {
+      found.push(NO_WINDOW)
+    }
+  }
+
+  if (labelled('provider').some(([name, body]) => name === 'aws' && /^us-gov-/.test(String(body.region ?? '')) && !isTrue(body.use_fips_endpoint))) {
+    found.push(NO_FIPS)
+  }
+
+  for (const [kind, [name, body]] of ['variable', 'output'].flatMap(kind => labelled(kind).map(one => [kind, one] as const))) {
+    if (!isSecretName(name) || body.type === 'bool' || typeof body.default === 'boolean') {
+      continue
+    }
+
+    if (!isTrue(body.sensitive)) {
+      found.push(notSensitive(kind, name))
+    }
+
+    if (kind === 'variable' && typeof body.default === 'string' && body.default !== '') {
+      found.push(literalDefault(name))
+    }
+  }
+
+  // Every object, by the keys that lead to it: a rule's direction is its block's key or its resource's type, never its name.
+  const visit = (value: unknown, keys: string[]): void => {
+    for (const body of each(value)) {
+      const own = Object.values(body).flat().filter(one => typeof one !== 'object' || one === null)
+      const last = keys.length === 3 && keys[0] === 'resource' ? keys[1] : keys[keys.length - 1] === 'content' && keys[keys.length - 3] === 'dynamic' ? keys[keys.length - 2] : keys[keys.length - 1]
+
+      if (own.some(one => typeof one === 'string' && WORLD.test(one)) && !/egress/.test(last ?? '') && body.type !== 'egress' && !isTrue(body.egress)) {
+        const from = number(body.from_port) ?? Number.NaN
+        const to = number(body.to_port) ?? Number.NaN
+        const isEveryPort = /^(-1|all)$/.test(String(body.protocol ?? body.ip_protocol ?? ''))
+        const open = MANAGEMENT_PORTS.filter(one => isEveryPort || (from <= one && one <= to))
+
+        if (open.length > 0) {
+          found.push(openPorts(open))
+        }
+      }
+
+      for (const [key, inner] of Object.entries(body)) {
+        visit(inner, [...keys, key])
+      }
+    }
+  }
+
+  visit(doc, [])
+
+  return found
+}
+
+// shortcut: reads only the text being written, block by block (after an Edit, the whole file too); a rule built from
+// variables is missed, upgrade to checkov on the file if that matters.
 const findings = (source: string): string[] => {
   // A block comment, only when it starts its line: "bucket/*" and "cron(0 */2 * * ? *)" in strings are not one.
   const text = cut(uncomment(cut(source, /^[^\S\n]*\/\*/gm, '*/'), HCL_COMMENT), /\$\{/g, '}')
@@ -430,8 +593,10 @@ const findings = (source: string): string[] => {
     () => secretNameFindings(bare),
     () => resourceFindings(text),
     () => trustFindings(text),
+    () => principalFindings(text),
     () => policyFindings(text),
     () => portFindings(text),
+    () => jsonFindings(source),
   ]) {
     try {
       for (const one of rule()) {
@@ -449,9 +614,16 @@ const MOST = 20
 
 // The findings for one write, each once and the first few only; a linter that throws says so, where a replayed call would
 // drop every warning.
-const lint = (file: string, text: string): string[] => {
+const lint = (file: string, texts: string[]): string[] => {
   try {
-    const found = [...new Set(TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : [])]
+    // A finding that names a variable or output carries text from the file: one that looks like a secret is not echoed.
+    const found = [
+      ...new Set(
+        texts
+          .flatMap(text => (TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : []))
+          .map(one => (secretIn(one) === undefined ? one : 'names a value that looks like a secret (not shown); review it by hand')),
+      ),
+    ]
 
     return found.length > MOST ? [...found.slice(0, MOST), `has ${found.length - MOST} more finding(s) not listed`] : found
   } catch {
@@ -472,7 +644,13 @@ export const register: Register = on => {
     }
 
     const ran = await next(e)
-    const found = lint(file, text)
+    // An Edit's text may hold only part of a rule (a trust's :sub, a KMS key's window), so the file it lands in is read
+    // whole too; a file that cannot be read leaves the text alone, as before.
+    const whole =
+      e.tool === 'Edit' && ran.deny === undefined && (TERRAFORM.test(file) || WORKFLOW.test(file))
+        ? await $.fs.read(file).then(String, () => undefined)
+        : undefined
+    const found = lint(file, whole === undefined ? [text] : [text, whole])
 
     if (ran.deny !== undefined || found.length === 0) {
       return ran
@@ -484,7 +662,7 @@ export const register: Register = on => {
       ...ran,
       context: [
         ...(ran.context ?? []),
-        `${$.plugin.name}: the text just written to ${file} ${found.join('; and ')}. Fix it before finishing.`,
+        `${$.plugin.name}: the text just written to ${file}${whole === undefined ? '' : ', or the file around it,'} ${found.join('; and ')}. Fix it before finishing.`,
       ],
     }
   }).catch(($, e, next) =>

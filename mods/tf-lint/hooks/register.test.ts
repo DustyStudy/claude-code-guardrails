@@ -171,9 +171,10 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a deny of everything but IAM and STS', 'scp.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    effect      = "Deny"\n    not_actions = ["iam:*", "sts:*"]\n    resources   = ["*"]\n  }\n}\nlocals {\n  p = jsonencode({ Effect = "Deny", NotAction = ["iam:*"], Resource = "*" })\n}', null],
   // GitHub OIDC trust.
   ['a GitHub OIDC trust pinned to a branch', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/infra:ref:refs/heads/main"')}`), null],
-  ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(repo:acme\/\*\)/],
-  ['a GitHub OIDC trust listing repo:*', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:acme/infra:*", "repo:*"]')}`), /wildcard repository \(repo:\*\)/],
-  ['a GitHub OIDC trust for a bare *', 'role.tf', ROLE(`${AUD}\n${SUB('"*"')}`), /wildcard repository \(\*\)/],
+  ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust listing repo:*', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:acme/infra:*", "repo:*"]')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust for a bare *', 'role.tf', ROLE(`${AUD}\n${SUB('"*"')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust with two wildcard subs', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:*", "*"]')}`), /wildcard repository \(2 :sub values\)/],
   ['a GitHub OIDC trust without sub', 'role.tf', ROLE(AUD), /without a :sub condition/],
   ['a GitHub OIDC trust without aud', 'role.tf', ROLE(SUB('"repo:acme/infra:*"')), /without a :aud condition/],
   ['a GitHub OIDC trust with an interpolated repo', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:${var.org}/${var.repo}:*"')}`), null],
@@ -260,7 +261,7 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a nested composite action on a Windows path', 'C:\\repo\\.github\\actions\\aws\\login\\action.yaml', 'runs:\n  steps:\n    - run: export AWS_ACCESS_KEY_ID=${{ secrets.K }}', /static AWS key/],
   ['a composite action using OIDC', '.github/actions/aws-login/action.yml', OIDC_WORKFLOW, null],
   ['another file beside a composite action', '.github/actions/aws-login/config.yml', STATIC_KEYS, null],
-  ['an action.yml outside .github', 'vendor/actions/aws-login/action.yml', STATIC_KEYS, null],
+  ['an action.yml outside .github', 'vendor/actions/aws-login/action.yml', STATIC_KEYS, /static AWS key/],
   // Secret names: API keys.
   ['an API key variable with a literal default', 'variables.tf', 'variable "api_key" {\n  default = "abc123"\n}', /variable "api_key" without sensitive = true; and gives variable "api_key" a literal default/],
   ['an api-key variable', 'variables.tf', 'variable "stripe-api-key" {\n  type = string\n}', /variable "stripe-api-key" without sensitive = true/],
@@ -338,6 +339,46 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   // A finding is listed once, however often the text repeats it, and a long list is cut short.
   ['a secret variable repeated to 100 KB', 'variables.tf', 'variable "password" {}\n'.repeat(4500), /^tf-lint: the text just written to variables\.tf declares variable "password" without sensitive = true\. Fix it before finishing\.$/],
   ['more findings than are listed', 'variables.tf', Array.from({ length: 30 }, (_, i) => `variable "password_${i}x" {}`).join('\n'), /variable "password_19x" without sensitive = true; and has 10 more finding\(s\) not listed\. Fix/],
+  // 0.10: composite actions anywhere.
+  ['a composite action at the repo root', 'action.yaml', 'runs:\n  using: composite\n  steps:\n    - uses: azure/login@v2\n      with:\n        creds: ${{ secrets.AZURE_CREDENTIALS }}', /static Azure or Google credential/],
+  ['a composite action on a Windows path outside .github', 'C:\\repo\\tools\\login\\action.yml', STATIC_KEYS, /static AWS key/],
+  ['a composite action using OIDC outside .github', 'tools/login/action.yml', OIDC_WORKFLOW, null],
+  ['a file whose name ends in action.yml', 'deploy/myaction.yml', STATIC_KEYS, null],
+  // 0.10: a wildcard principal needs a condition in its own statement.
+  ['a wildcard statement beside a conditioned one', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect    = "Allow"\n    Principal = "*"\n    Action    = "s3:GetObject"\n  }, {\n    Effect    = "Deny"\n    Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::1:root" }\n    Action    = "s3:*"\n    Condition = { Bool = { "aws:SecureTransport" = "false" } }\n  }]\n})', /Principal "\*" with no condition/],
+  ['a wildcard AWS principal beside a conditioned statement in JSON', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [\n  { "Effect": "Allow", "Principal": { "AWS": ["*"] }, "Action": "sqs:SendMessage" },\n  { "Effect": "Allow", "Principal": { "Service": "sns.amazonaws.com" }, "Action": "sqs:SendMessage", "Condition": { "ArnEquals": { "aws:SourceArn": "x" } } }\n] }\nEOF', /Principal "\*"/],
+  ['a policy document wildcard beside a conditioned statement', 'bucket.tf', 'data "aws_iam_policy_document" "p" {\n  statement {\n    actions = ["s3:GetObject"]\n    principals {\n      type        = "AWS"\n      identifiers = ["*"]\n    }\n  }\n  statement {\n    actions = ["s3:PutObject"]\n    condition {\n      test     = "StringEquals"\n      variable = "aws:PrincipalOrgID"\n      values   = ["o-1"]\n    }\n  }\n}', /Principal "\*"/],
+  ['a policy document wildcard with its own condition', 'bucket.tf', 'data "aws_iam_policy_document" "p" {\n  statement {\n    actions = ["s3:GetObject"]\n    principals {\n      type        = "AWS"\n      identifiers = ["*"]\n    }\n    condition {\n      test     = "StringEquals"\n      variable = "aws:PrincipalOrgID"\n      values   = ["o-1"]\n    }\n  }\n  statement {\n    actions = ["s3:ListBucket"]\n  }\n}', null],
+  ['a JSON wildcard with its own condition beside a plain statement', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [\n  { "Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Condition": { "StringEquals": { "aws:PrincipalOrgID": "o-1" } } },\n  { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "*" }\n] }\nEOF', null],
+  ['a wildcard principal whose description has a brace', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Sid       = "open }"\n    Principal = "*"\n    Action    = "s3:GetObject"\n  }, {\n    Sid       = "x"\n    Condition = { Bool = { "aws:SecureTransport" = "false" } }\n  }]\n})', /Principal "\*" with no condition/],
+  // Found by the 0.10 review: text inside a string never counts as a Condition key.
+  ['a Condition spelled with braces inside a string', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Principal = "*"\n    Action    = "s3:GetObject"\n    Resource  = "arn:${data.aws_partition.current.partition}:s3:::example/Condi{tion}"\n  }]\n})', /Principal "\*" with no condition/],
+  ['a Condition named only in a string value', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Sid       = "Condition = none"\n    Principal = "*"\n    Action    = "s3:GetObject"\n  }]\n})', /Principal "\*" with no condition/],
+  ['a quoted Condition key in heredoc JSON', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [{ "Principal": "*", "Action": "s3:GetObject", "Condition": { "Bool": { "aws:SecureTransport": "true" } } }] }\nEOF', null],
+  // 0.10: .tf.json forms of the KMS, provider, partition and port rules.
+  ['a KMS key in .tf.json with neither setting', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "description": "logs" } } } }', /enable_key_rotation = true; and .*7 to 30/],
+  ['a KMS key in .tf.json with a 3-day window', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "enable_key_rotation": true, "deletion_window_in_days": 3 } } } }', /^(?!.*enable_key_rotation).*7 to 30/],
+  ['a KMS key in .tf.json with rotation off', 'kms.tf.json', '{ "resource": [{ "aws_kms_key": [{ "logs": [{ "enable_key_rotation": false, "deletion_window_in_days": "30" }] }] }] }', /^(?!.*7 to 30).*enable_key_rotation/],
+  ['a compliant KMS key in .tf.json', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "enable_key_rotation": true, "deletion_window_in_days": 30 } } } }', null],
+  ['a KMS key in .tf.json with a window from a variable', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "enable_key_rotation": true, "deletion_window_in_days": "${var.window}" } } } }', null],
+  ['an asymmetric KMS key in .tf.json', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "sign": { "customer_master_key_spec": "RSA_2048", "deletion_window_in_days": 7 } } } }', null],
+  ['a GovCloud provider in .tf.json without FIPS', 'providers.tf.json', '{ "provider": { "aws": { "region": "us-gov-west-1" } } }', /use_fips_endpoint = true/],
+  ['GovCloud providers in .tf.json, one without FIPS', 'providers.tf.json', '{ "provider": { "aws": [{ "region": "us-gov-east-1", "use_fips_endpoint": true }, { "alias": "w", "region": "us-gov-west-1" }] } }', /use_fips_endpoint = true/],
+  ['a GovCloud provider in .tf.json with FIPS', 'providers.tf.json', '{ "provider": { "aws": { "region": "us-gov-west-1", "use_fips_endpoint": true } } }', null],
+  ['an ARN in .tf.json', 'main.tf.json', '{ "locals": { "role": "arn:aws:iam::1:role/x" } }', /partition/],
+  ['a GovCloud ARN in .tf.json', 'main.tf.json', '{ "locals": { "role": "arn:aws-us-gov:iam::1:role/x" } }', /partition/],
+  ['SSH open to the world in .tf.json', 'sg.tf.json', '{ "resource": { "aws_security_group": { "bastion": { "ingress": [{ "from_port": 22, "to_port": 22, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"] }] } } } }', /port 22 /],
+  ['an all-protocol ingress rule resource in .tf.json', 'sg.tf.json', '{ "resource": { "aws_vpc_security_group_ingress_rule": { "egress_named": { "ip_protocol": "-1", "cidr_ipv6": "::/0" } } } }', /port 22 and 3389/],
+  ['an SSH security group rule in .tf.json', 'sg.tf.json', '{ "resource": { "aws_security_group_rule": { "ssh": { "type": "ingress", "from_port": "22", "to_port": "22", "cidr_blocks": ["0.0.0.0/0"] } } } }', /port 22 /],
+  ['a dynamic ingress block in .tf.json', 'sg.tf.json', '{ "resource": { "aws_security_group": { "egress": { "dynamic": { "ingress": { "for_each": "${var.x}", "content": { "from_port": 3389, "to_port": 3389, "cidr_blocks": ["0.0.0.0/0"] } } } } } } }', /port 3389 /],
+  ['egress rules in .tf.json', 'sg.tf.json', '{ "resource": { "aws_security_group": { "ingress": { "egress": [{ "from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"] }], "dynamic": { "egress": { "content": { "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"] } } } } }, "aws_vpc_security_group_egress_rule": { "ingress_ssh": { "from_port": 22, "to_port": 22, "cidr_ipv4": "0.0.0.0/0" } }, "aws_security_group_rule": { "out": { "type": "egress", "from_port": 22, "to_port": 22, "cidr_blocks": ["0.0.0.0/0"] } }, "aws_network_acl_rule": { "out": { "egress": true, "protocol": "-1", "cidr_block": "0.0.0.0/0" } } } }', null],
+  ['HTTPS open to the world in .tf.json', 'sg.tf.json', '{ "resource": { "aws_security_group": { "web": { "ingress": [{ "from_port": 443, "to_port": 443, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"] }, { "from_port": 22, "to_port": 22, "cidr_blocks": ["10.0.0.0/8"] }] } } } }', null],
+  ['a password variable in .tf.json', 'variables.tf.json', '{ "variable": { "db_password": { "type": "string", "default": "hunter2" } } }', /variable "db_password" without sensitive = true; and gives variable "db_password" a literal default/],
+  ['a sensitive password variable and a switch in .tf.json', 'variables.tf.json', '{ "variable": { "db_password": { "type": "string", "sensitive": true }, "use_token": { "type": "bool" } }, "output": { "token_ttl": { "value": 60 } } }', null],
+  // 0.10: more secret names.
+  ['secret names ending in creds, credentials, pat, pwd or passphrase', 'variables.tf', 'variable "db_creds" {}\nvariable "azure_credentials" {}\nvariable "github_pat" {}\nvariable "admin_pwd" {}\nvariable "key_passphrase" {}\noutput "private_key_pem" {\n  value = x.y.pem\n}', /variable "db_creds" without .*variable "azure_credentials" without .*variable "github_pat" without .*variable "admin_pwd" without .*variable "key_passphrase" without .*output "private_key_pem" without sensitive = true/],
+  ['a pat-named secret with a literal default', 'variables.tf', 'variable "ci-pat" {\n  default = "abc"\n}', /variable "ci-pat" without sensitive = true; and gives variable "ci-pat" a literal default/],
+  ['names that only look like the new secret names', 'variables.tf', 'variable "path_prefix" {}\nvariable "patch_version" {}\nvariable "credentials_file" {}\nvariable "use_credentials" {\n  type = bool\n}\nvariable "creds_arn" {}\nvariable "dispatcher" {}', null],
 ]
 
 // 100 KB of each shape that once took seconds; a hundredth of that now.
@@ -352,6 +393,8 @@ const SLOW: readonly (readonly [string, string])[] = [
   ['sub lists never closed', ':sub" = ['.repeat(11_000)],
   ['KMS keys never closed', 'resource "aws_kms_key" "k" {\n'.repeat(3_500)],
   ['secret variables with different names', Array.from({ length: 4_000 }, (_, i) => `variable "password${i}" {}`).join('\n')],
+  ['wildcard principals in nested statements', `${'{ Principal = "*"\n'.repeat(5_000)}${'Condition = 1 }'.repeat(5_000)}`],
+  ['JSON objects nested 5,000 deep', `${'{"a":'.repeat(5_000)}{"cidr":"0.0.0.0/0"}${'}'.repeat(5_000)}`],
 ]
 
 for (const [name, content] of SLOW) {
@@ -408,7 +451,70 @@ const WRITERS: readonly (readonly [string, string, RegExp | null])[] = [
   ['python -c writing an ordinary word', `python -c "open('notes.txt','w').write('${WORD}')"`, null],
   ['sed printing lines that hold a key', `sed -n "/${KEY}/p" access.log`, null],
   ['git grep for a key', `git grep -c ${KEY}`, null],
+  // 0.10: print to a file opened to write, Set-Item and WriteAllBytes.
+  ['python -c printing a key to a file', `python -c "print('${KEY}', file=open('creds.txt','w'))"`, /AWS access key into a file/],
+  ['python -c printing a token to a file opened to append', `python3 -c "print('${TOKEN}', file=open('t.txt', mode='a'))"`, /private key or API token into a file/],
+  ['python -c printing a key through Path.open', `python -c "from pathlib import Path; print('${KEY}', file=Path('c').open('w'))"`, /AWS access key into a file/],
+  ['Set-Item with a key', `Set-Item -Path creds.txt -Value ${KEY}`, /AWS access key into a file/],
+  ['Set-Item with the value first', `Set-Item -Value '${KEY}' -Path Env:X`, /AWS access key into a file/],
+  ['si with a token', `cd repo; si .npmrc ${TOKEN}`, /private key or API token into a file/],
+  ['Set-Item to Env: and then to a file', `Set-Item Env:A x; Set-Item creds.txt ${KEY}`, /AWS access key into a file/],
+  ['WriteAllBytes with a key', `[IO.File]::WriteAllBytes('creds.bin', [Text.Encoding]::UTF8.GetBytes('${KEY}'))`, /AWS access key into a file/],
+  ['Out-File with a token', `'${TOKEN}' | Out-File .npmrc`, /private key or API token into a file/],
+  ['Set-Item to Env: with a key', `Set-Item Env:AWS_ACCESS_KEY_ID ${KEY}`, null],
+  ['si -Path to Env: with a token', `si -Path env:GH_TOKEN -Value ${TOKEN}`, null],
+  ['Set-Item -LiteralPath: to Variable:', `Set-Item -LiteralPath:Variable:k '${KEY}'`, null],
+  ['python -c reading a file that holds a key', `python -c "print(open('access.log').read().count('${KEY}'))"`, null],
+  ['python -c reading a file opened rb', `python -c "print(open('access.log', 'rb').read().count(b'${KEY}'))"`, null],
+  ['Set-ItemProperty with a key', `Set-ItemProperty -Path HKCU:\\x -Name n -Value ${KEY}`, null],
 ]
+
+// Found in 0.10: an Edit's text holds only the :sub; the role and its provider are in the file around it.
+test('an Edit to a trust policy sub is read with the file around it', async ($, on) => {
+  on('tool.call', { tool: ['Edit'] }, () => ({ result: {} as never }))
+  on('fs.read', () => ({ value: ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`) }))
+
+  const ran = await $.tool.call({ tool: 'Edit', file_path: 'role.tf', old_string: 'x', new_string: SUB('"repo:acme/*"') })
+
+  expect(ran.deny).toBe(undefined)
+  expect((ran.context ?? []).join('\n')).toMatch(/role\.tf, or the file around it, trusts GitHub Actions OIDC for a wildcard repository \(1 :sub value\)/)
+})
+
+// Found by the 0.10 review: a finding never echoes a value from the file, so a token there stays out of the context.
+test('a finding about a file with a token in a sub or a name does not echo the token', async ($, on) => {
+  on('tool.call', { tool: ['Edit'] }, () => ({ result: {} as never }))
+  on('fs.read', () => ({ value: `${ROLE(`${AUD}\n${SUB(`"repo:*${TOKEN}"`)}`)}\nvariable "password-${TOKEN}" {}` }))
+
+  const ran = await $.tool.call({ tool: 'Edit', file_path: 'role.tf', old_string: 'x', new_string: AUD })
+  const context = (ran.context ?? []).join('\n')
+
+  expect(context).toMatch(/wildcard repository \(1 :sub value\)/)
+  expect(context.includes(`${'ghp'}_`)).toBe(false)
+})
+
+test('an Edit to a .tf.json fragment is read with the file around it', async ($, on) => {
+  on('tool.call', { tool: ['Edit'] }, () => ({ result: {} as never }))
+  on('fs.read', () => ({ value: '{ "resource": { "aws_kms_key": { "logs": { "enable_key_rotation": true, "deletion_window_in_days": 3 } } } }' }))
+
+  const ran = await $.tool.call({ tool: 'Edit', file_path: 'kms.tf.json', old_string: '30', new_string: '"deletion_window_in_days": 3' })
+
+  expect((ran.context ?? []).join('\n')).toMatch(/7 to 30/)
+})
+
+test('an Edit to a file that is not Terraform or a workflow does not read it', async ($, on) => {
+  let hasRead = false
+  on('tool.call', { tool: ['Edit'] }, () => ({ result: {} as never }))
+  on('fs.read', () => {
+    hasRead = true
+
+    return { value: 'role = "arn:aws:iam::1:role/x"' }
+  })
+
+  const ran = await $.tool.call({ tool: 'Edit', file_path: 'notes.md', old_string: 'x', new_string: 'y' })
+
+  expect(hasRead).toBe(false)
+  expect(ran.context ?? []).toEqual([])
+})
 
 const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: string }, RegExp | null])[] = [
   ['Bash echoing a key into a file', { tool: 'Bash', command: `echo ${KEY} > creds.txt` }, /command would write an AWS access key into a file/],
@@ -485,6 +591,10 @@ for (const tool of ['Write', 'Edit'] as const) {
         hasRun = true
 
         return { result: {} as never }
+      })
+      // The file around an Edit is not there: each row is read from its text alone.
+      on('fs.read', () => {
+        throw new Error('ENOENT')
       })
 
       const call =

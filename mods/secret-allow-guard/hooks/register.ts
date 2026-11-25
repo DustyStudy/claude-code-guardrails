@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface as Engine, Register } from 'claude-code'
 
 // A literal secret in a permission rule: "Yes, and don't ask again" saves the whole command, secret included.
 // The same matchers check env and an MCP server's env, headers, command line and url.
@@ -90,16 +90,70 @@ const entries = (text: string): string[] => {
   }
 }
 
-const findSecrets = (text: string): number => entries(text).filter(entry => SECRET.some(one => one.test(entry))).length
+const findSecrets = (text: string): string[] => entries(text).filter(entry => SECRET.some(one => one.test(entry)))
+
+// 16 hex of SHA-256: enough to tell entries apart, and the entry itself is never kept.
+async function fingerprint(entry: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry))
+
+  return [...new Uint8Array(digest).slice(0, 8)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+// A file a tool call may write a permission rule, env or MCP server into.
+const WATCHED = /(?:^|[\\/])(?:settings(?:\.local)?\.json|\.claude\.json|\.mcp\.json)$/i
+
+// `seen` holds, per file, fingerprints of the entries last warned of: a file is reported when any entry is new,
+// so a secret is told once and a replaced one (same count) is told too.
+async function scan($: Engine, files: readonly string[], seen: Map<string, Set<string>>): Promise<string[]> {
+  const warnings: string[] = []
+
+  for (const file of new Set(files)) {
+    const text = await $.fs.read(file).then(String, () => undefined)
+    const matched = text === undefined ? [] : findSecrets(text)
+    const found = new Set(await Promise.all(matched.map(fingerprint)))
+    const before = seen.get(file) ?? new Set<string>()
+    const count = matched.length
+
+    // Count and path only: the warning itself must not carry the secret.
+    if ([...found].some(one => !before.has(one))) {
+      warnings.push(
+        `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, or an MCP server's env, headers, args, url or command): delete them and rotate the secrets`,
+      )
+    }
+
+    seen.set(file, found)
+  }
+
+  return warnings
+}
+
+async function warn($: Engine, warnings: readonly string[]): Promise<void> {
+  if (warnings.length > 0) {
+    await $.ui.toast(`${$.plugin.name}: ${warnings.join('; ')}.`, { timeoutMs: 30_000 })
+  }
+}
+
+// Mid-session: a warning never blocks, so a failed rescan is dropped.
+async function rescan($: Engine, files: readonly string[], seen: Map<string, Set<string>>): Promise<void> {
+  try {
+    await warn($, await scan($, files, seen))
+  } catch {
+    // dropped
+  }
+}
 
 export const register: Register = on => {
+  const seen = new Map<string, Set<string>>()
+  // Calls the rules left to an ask: "Yes, and don't ask again" may save the command as a rule.
+  const asked = new Set<string>()
+  let files: string[] = []
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     const home = (await $.env.get('USERPROFILE').catch(() => undefined)) ?? (await $.env.get('HOME').catch(() => undefined))
     // CLAUDE_CONFIG_DIR moves the user's settings out of ~/.claude.
     const config = await $.env.get('CLAUDE_CONFIG_DIR').catch(() => undefined)
-    // files[0] stays the local settings file, which the git check below reads.
-    const files = [
+    files = [
       ...[`${e.cwd}/.claude`, ...(home === undefined ? [] : [`${home}/.claude`]), ...(config ? [config] : [])].flatMap(dir => [
         `${dir}/settings.local.json`,
         `${dir}/settings.json`,
@@ -108,27 +162,11 @@ export const register: Register = on => {
       ...(home === undefined ? [] : [`${home}/.claude.json`]),
       ...(config ? [`${config}/.claude.json`] : []),
     ]
-    const warnings: string[] = []
-
-    for (const file of new Set(files)) {
-      const text = await $.fs.read(file).then(String, () => undefined)
-
-      if (text === undefined) {
-        continue
-      }
-
-      const count = findSecrets(text)
-
-      // Count and path only: the warning itself must not carry the secret.
-      if (count > 0) {
-        warnings.push(
-          `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, or an MCP server's env, headers, args, url or command): delete them and rotate the secrets`,
-        )
-      }
-    }
+    seen.clear()
+    const warnings = await scan($, files, seen)
 
     // The local file is meant to stay on this machine: flag it when git would commit it.
-    if (await $.fs.exists(files[0]).catch(() => false)) {
+    if (await $.fs.exists(`${e.cwd}/.claude/settings.local.json`).catch(() => false)) {
       // Git missing, failing or slow reads as no repo, so the secret warnings above still show and startup is not held.
       const git = (...args: string[]) =>
         $.process.run(['git', '-C', e.cwd, ...args], { timeoutMs: 5_000 }).catch(() => ({ exitCode: 128 }))
@@ -141,9 +179,39 @@ export const register: Register = on => {
       }
     }
 
-    if (warnings.length > 0) {
-      await $.ui.toast(`${$.plugin.name}: ${warnings.join('; ')}.`, { timeoutMs: 30_000 })
+    await warn($, warnings)
+
+    return result
+  })
+
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+
+    if (verdict.decision === 'ask' && e.tool_use_id !== undefined) {
+      asked.add(e.tool_use_id)
     }
+
+    return verdict
+  })
+
+  // Rescan after a call that was asked about, which may have saved a rule, or one that wrote a watched file.
+  // A warning never blocks: a failed rescan is dropped and the call's result returned.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    const path = (e as { file_path?: unknown }).file_path
+    const wasAsked = e.tool_use_id !== undefined && asked.delete(e.tool_use_id)
+
+    if (wasAsked || (['Edit', 'Write', 'MultiEdit'].includes(e.tool) && typeof path === 'string' && WATCHED.test(path))) {
+      await rescan($, files, seen)
+    }
+
+    return result
+  })
+
+  // A settings file changed outside a tool call, by hand or by another session.
+  on('classic.ConfigChange', async ($, e, next) => {
+    const result = await next(e)
+    await rescan($, files, seen)
 
     return result
   })

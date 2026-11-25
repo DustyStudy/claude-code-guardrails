@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
+import { invocations, namedByShell } from './shell'
+
 const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform apply -auto-approve', false],
   ['terraform destroy -auto-approve', false],
@@ -239,6 +241,46 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['terragrunt run-all $(echo destroy --terragrunt-non-interactive --x) plan', false],
   ['terraform destroy -auto-approve $(echo --) -help', false],
   ['terragrunt run-all plan -out=$(date +%F).tfplan', true],
+  // A function fed by a pipe takes the approval for the destroy in it.
+  ['f() { terraform destroy; }; yes | f', false],
+  ['function f { terraform destroy; }; echo yes | f', false],
+  // A word the shell fills in before the program, under a wrapper or as the program, can add arguments or another subcommand.
+  ['sudo $(echo -n) terraform plan', false],
+  ['env $(echo TF_CLI_ARGS=-auto-approve) terraform apply tfplan', false],
+  ['env $FLAGS terraform apply tfplan', false],
+  ['$(echo sudo) terraform plan', false],
+  ['sudo env TF_LOG=1 terraform plan', true],
+  // A program named by a variable, a substitution or an alias, with apply or destroy and -auto-approve.
+  ['TF=terraform; $TF destroy -auto-approve', false],
+  ['${TF} apply -auto-approve', false],
+  ['$env:TF destroy -auto-approve', false],
+  ['"$TF" destroy -auto-approve', false],
+  ['sudo $TF destroy -auto-approve', false],
+  ['$(which terraform) destroy -auto-approve', false],
+  ['alias tf=terraform; tf destroy -auto-approve', false],
+  ["alias tf='terraform destroy -auto-approve'; tf", false],
+  ['Set-Alias tf terraform; tf destroy -auto-approve', false],
+  // A program the shell names gets every check a written one does.
+  ['TF_CLI_ARGS=-auto-approve $TF destroy', false],
+  ['yes | $TF destroy', false],
+  ['$TF destroy $(echo -auto-approve)', false],
+  ['$TG run-all destroy', false],
+  ['$TF apply', false],
+  ['$TF.exe destroy -auto-approve', false],
+  ['$T$F destroy -auto-approve', false],
+  ['sal tf terraform; tf destroy -auto-approve', false],
+  ['nal tf terraform; tf destroy -auto-approve', false],
+  ['Set-Alias -Value terraform -Name tf; tf destroy -auto-approve', false],
+  ['alias -- tf=terraform; tf destroy -auto-approve', false],
+  ['tf() { terraform "$@"; }; tf destroy -auto-approve', false],
+  ['function tf { terraform $args }; tf destroy -auto-approve', false],
+  ['noglob env $FLAGS terraform apply tfplan', false],
+  ['env TF_CLI_ARGS$A terraform apply tfplan', false],
+  ['$TF apply tfplan', true],
+  ['tf() { terraform "$@"; }; tf plan', true],
+  ['$TF plan', true],
+  ['alias tf=terraform; tf plan', true],
+  ['$out = terraform plan -out=tfplan', true],
   // Routine commands.
   ['terraform plan', true],
   ['terraform fmt', true],
@@ -318,7 +360,27 @@ const PARSER_CASES: readonly (readonly [string, boolean])[] = [
   ['terraform destroy $(echo -auto-approve)', false],
   ['echo "terraform destroy -auto-approve" | bash', false],
   ['cmd /c terraform destroy -auto-appr^ove', false],
+  // A ${ } ends where bash ends it: a quoted or nested } inside does not, and a # inside is no comment.
+  ['echo ${x:-"}"}; terraform destroy -auto-approve; echo "x"', false],
+  ["echo ${x:-'}'}; terraform destroy -auto-approve; echo 'x'", false],
+  ['echo ${a:-${b} #}; terraform destroy -auto-approve', false],
+  ['echo ${x:-$(echo })}; terraform destroy -auto-approve', false],
+  // A ' inside a ${ } inside double quotes quotes or not by bash version: refused, not guessed. One never closed is refused too.
+  ["echo \"${x:-'}'}\"; terraform plan", false],
+  ['echo ${x:-; terraform plan', false],
+  ['terraform apply "${PLAN:-${DEFAULT}}"', true],
+  ['echo "${x:-"a b"}"; terraform plan', true],
 ]
+
+test('namedByShell gives the arguments of a program the shell names', () => {
+  expect(namedByShell('$NPM install x')).toEqual([['install', 'x']])
+  expect(namedByShell('sudo ${NPM} install x')).toEqual([['install', 'x']])
+  expect(namedByShell('$(echo npm) install x')).toContainEqual(['install', 'x'])
+  expect(namedByShell('npm install x')).toEqual([])
+  expect(namedByShell('$out = npm install x')).toEqual([])
+  // The classic contract is unchanged: the variable is passed over and the next word is the program.
+  expect(invocations('$NPM install x', /^install$/)).toEqual([['x']])
+})
 
 test('an -auto-approve inherited through TF_CLI_ARGS_destroy is denied', async ($, on) => {
   on('env.get', (_, e) => ({ value: e.name === 'TF_CLI_ARGS_destroy' ? '-auto-approve' : undefined }))
