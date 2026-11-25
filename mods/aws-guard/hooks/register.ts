@@ -475,11 +475,27 @@ const denied = (command: string, depth = 0): string | undefined => {
   for (const text of new Set([command, marked])) {
     // A program the shell names ($AWS, $(which aws)) is read as aws once a word names a guarded service, or a filled-in word stands
     // before a denied operation ($AWS $SVC delete-role); other programs ($EDITOR "$FILE") pass. PowerShell's array is one word: & $a @('iam','delete-role').
-    // shortcut: an unquoted $( ) right after the program ($(which aws) $(echo iam) delete-role) is lost by the parser and runs.
-    const shellNamed = namedByShell(text).filter(args =>
-      args.some((word, i) => word.split(',').some(part => GUARDED.has(part)) ||(FILLED.test(args[i - 1] ?? '') && [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(word)))),
+    const named = namedByShell(text)
+    const shellNamed = named.filter(args =>
+      args.some(
+        (word, i) =>
+          word.split(',').some(part => GUARDED.has(part)) ||
+          (FILLED.test(args[i - 1] ?? '') && [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(word))),
+      ),
     )
-    const cli = [...invocations(text, BINARY), ...shellNamed].map(args => mutation(args, valued)).find(Boolean)
+    // The parser drops an unquoted $( ) right after a filled-in program ($(which aws) $(echo iam) delete-role gives delete-role
+    // first): a list led by a denied operation is read once with each service that has it, so a dry run or help still runs.
+    // shortcut: a service and operation both filled in ($X $(echo iam delete-role)) run; terraform-guard leaves the same open.
+    const lost = named.flatMap(args => {
+      const operation = (args[0] ?? '').replace(/[\\^`]/g, '')
+      const services = [
+        ...[...DENIED].filter(([service, operations]) => !ANY_WRITE.has(service) && operations.test(operation)).map(([service]) => service),
+        ...[...DENIED_WITH.keys()].filter(call => call.endsWith(` ${operation}`)).map(call => call.split(' ')[0] ?? ''),
+      ]
+
+      return services.map(service => [service, ...args])
+    })
+    const cli = [...invocations(text, BINARY), ...shellNamed, ...lost].map(args => mutation(args, valued)).find(Boolean)
     if (cli !== undefined) {
       return `aws ${cli}`
     }

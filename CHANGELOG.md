@@ -46,9 +46,12 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   denied operation (`$AWS $SVC delete-role`); dry runs, `help` and reads
   (`$AWS s3 ls`) still run. Newly denied though harmless: any other program
   named by a variable with a guarded service's name among its arguments and
-  a filled-in word among its first two (`$G grep "$PAT" iam`). Still not
-  followed: an unquoted `$( )` right after the program (`$(which aws)
-  $(echo iam) delete-role`). Inline code attached to its flag
+  a filled-in word among its first two (`$G grep "$PAT" iam`). A call led by
+  a denied operation (`$(which aws) $(echo iam) delete-role`, where the
+  parser drops the `$( )`) is read with each service that has it; newly
+  denied though harmless: `$PY remove-dupes "$IN"`. Still not followed: a
+  service and operation both filled in (`$AWS $(echo iam delete-role)`),
+  as terraform-guard's `$TF $(echo destroy -auto-approve)`. Inline code attached to its flag
   (`python -c"..."`, `-Ic'...'`, `node -e"..."`, `-pe'...'`,
   `--eval=...`) is read for SDK calls, as code after `-c ` was.
 
