@@ -40,6 +40,12 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | beeba8c | aws-guard 0.8.0: Roles Anywhere writes, cmdlet through a variable, SDK inline code | 1158 pass |
 | 7073ee7 | terraform-guard 0.6.0 + shared parser: nested ${}, namedByShell, shell-filled word before terraform, variable/alias program | full `npm test` 4,843 pass, shell.ts copies match |
 | 52a0ce6 | tf-lint 0.10.0: open() and Set-Item writes, action.yml anywhere, per-statement principal condition, .tf.json rules, more secret names, whole file after Edit | 781 pass |
+| 4e1388b | secret-read-guard 0.6.0: PowerShell writers/expressions, Linux case, openssl/git show/compose config/tar -xO/unzip -p, recursive search/upload, quoted paths | 1,815 pass |
+
+## Security review log
+
+- Codex on tf-lint + secret-allow-guard: 3 confirmed findings, sent back for fixing: (1) tf-lint regression, string braces synthesize `Condition` and hide a wildcard-principal warning; (2) tf-lint whole-file recheck echoes an existing token in a finding; (3) secret-allow rescan is count-based, so a replaced secret is not reported.
+- Opus reviewer on aws-guard, supply-chain-guard, terraform-guard + parser: running.
 
 ## Resume here
 
