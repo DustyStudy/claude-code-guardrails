@@ -10,7 +10,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
-| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS (rerun pending) | Fresh clone at c52df84: Claude Code 2.1.325, 4,500 pass. Working tree at 8bcc811: 4,523 pass. Fresh-clone rerun at the final commit: see Resume here |
+| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at b376281: Claude Code 2.1.325, 4,523 pass, 0 fail, shell.ts copies match |
 | C2 | CI "Mod tests" (ubuntu, Node 24, pinned Claude Code) passes on the release PR | OPEN | Failed at c52df84 (Linux-only test fixture, fixed in 8bcc811). Result for the final commit not yet read: your CLAUDE.md says not to poll CI |
 | C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS (c52df84) | All passed on c52df84; recheck with C2 |
 | C4 | Every **let-through** item under README "Found by the 0.8 hardening audit" is denied, with a must-deny test (Bash and PowerShell) per item | PASS | Each item reproduced as a failing test first, then fixed; sub-case `sudo $NPM install` kept and listed in README "Still open". Per-mod reports in Integration log |
@@ -101,7 +101,6 @@ No AWS resources were created for this release.
 Next steps, in order:
 1. `gh pr checks 84`: confirm Mod tests pass on Linux at the head commit (C2, C3). If the folder-listing
    tests still fail, print `e.path` in the `fs.list` mock in mods/secret-read-guard/hooks/register.test.ts.
-2. Fresh clone of the head commit, `npm ci && npm test` (C1).
 3. Owner: decide on C13 (accept, or run the Fable re-review after 2026-11-28 16:00 CT).
 4. Owner: approve C15 (mark the PR ready, squash-merge, tag `v0.9.0`, GitHub release, and change
    `## 0.9.0 (unreleased)` in CHANGELOG to the date).
