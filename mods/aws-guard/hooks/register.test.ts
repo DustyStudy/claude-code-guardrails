@@ -609,6 +609,25 @@ const CASES: readonly (readonly [string, boolean])[] = [
   [`node -e "const { S3Client, ListBucketsCommand } = require('@aws-sdk/client-s3')"`, true],
   [`python -c "import os; os.delete_role = 1"`, true],
   ['python cleanup.py --delete-role x', true],
+  // 0.10 review: braces, quotes and case around the variable; clustered flags, more interpreters, code on stdin, resource style.
+  ["$c = 'Stop-EC2Instance'; & ${c} -InstanceId i-1 -Terminate", false],
+  ["$c = 'Stop-EC2Instance'; & \"$c\" -InstanceId i-1 -Terminate", false],
+  ["$c = 'Stop-EC2Instance'; & \"${c}\" -InstanceId i-1 -Terminate", false],
+  ["$C = 'Stop-EC2Instance'; & $c -InstanceId i-1 -Terminate", false],
+  ["${c} = 'Stop-EC2Instance'; & $c -InstanceId i-1 -Terminate", false],
+  ["$c = 'Stop-EC2Instance'; & ${c} -InstanceId i-1", true],
+  [`python -Ic "import boto3; boto3.client('iam').delete_role(RoleName='x')"`, false],
+  [`node -pe "require('aws-sdk'); new AWS.IAM().deleteRole({ RoleName: 'x' })"`, false],
+  [`ipython -c "import boto3; boto3.client('iam').delete_role(RoleName='x')"`, false],
+  [`deno eval "import { DeleteRoleCommand } from 'npm:@aws-sdk/client-iam'"`, false],
+  ["python3 - <<'EOF'\nimport boto3\nboto3.client('iam').delete_role(RoleName='x')\nEOF", false],
+  ["node <<EOF\nconst { DeleteRoleCommand } = require('@aws-sdk/client-iam')\nEOF", false],
+  [`echo "import boto3; boto3.client('s3').delete_bucket(Bucket='b')" | python`, false],
+  [`python -c "import boto3; boto3.resource('iam').Role('x').delete()"`, false],
+  [`python -c "import boto3; boto3.resource('ec2').Instance('i-1').terminate()"`, false],
+  ["python3 - <<'EOF'\nimport boto3\nprint(boto3.client('iam').list_roles())\nEOF", true],
+  [`python -Ic "import boto3; print(boto3.resource('s3').Bucket('b').name)"`, true],
+  ['python tool.py; echo delete_role boto3', true],
 ]
 
 for (const tool of ['Bash', 'PowerShell'] as const) {
