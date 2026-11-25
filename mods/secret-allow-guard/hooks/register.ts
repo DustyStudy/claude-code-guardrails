@@ -90,27 +90,38 @@ const entries = (text: string): string[] => {
   }
 }
 
-const findSecrets = (text: string): number => entries(text).filter(entry => SECRET.some(one => one.test(entry))).length
+const findSecrets = (text: string): string[] => entries(text).filter(entry => SECRET.some(one => one.test(entry)))
+
+// 16 hex of SHA-256: enough to tell entries apart, and the entry itself is never kept.
+async function fingerprint(entry: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry))
+
+  return [...new Uint8Array(digest).slice(0, 8)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 // A file a tool call may write a permission rule, env or MCP server into.
 const WATCHED = /(?:^|[\\/])(?:settings(?:\.local)?\.json|\.claude\.json|\.mcp\.json)$/i
 
-// `counts` holds, per file, the count last warned of: a file is reported only when its count grew, so a secret is told once.
-async function scan($: Engine, files: readonly string[], counts: Map<string, number>): Promise<string[]> {
+// `seen` holds, per file, fingerprints of the entries last warned of: a file is reported when any entry is new,
+// so a secret is told once and a replaced one (same count) is told too.
+async function scan($: Engine, files: readonly string[], seen: Map<string, Set<string>>): Promise<string[]> {
   const warnings: string[] = []
 
   for (const file of new Set(files)) {
     const text = await $.fs.read(file).then(String, () => undefined)
-    const count = text === undefined ? 0 : findSecrets(text)
+    const matched = text === undefined ? [] : findSecrets(text)
+    const found = new Set(await Promise.all(matched.map(fingerprint)))
+    const before = seen.get(file) ?? new Set<string>()
+    const count = matched.length
 
     // Count and path only: the warning itself must not carry the secret.
-    if (count > (counts.get(file) ?? 0)) {
+    if ([...found].some(one => !before.has(one))) {
       warnings.push(
         `${file}: ${count} ${count === 1 ? 'entry looks' : 'entries look'} like a literal secret (permission rules, env, or an MCP server's env, headers, args, url or command): delete them and rotate the secrets`,
       )
     }
 
-    counts.set(file, count)
+    seen.set(file, found)
   }
 
   return warnings
@@ -123,16 +134,16 @@ async function warn($: Engine, warnings: readonly string[]): Promise<void> {
 }
 
 // Mid-session: a warning never blocks, so a failed rescan is dropped.
-async function rescan($: Engine, files: readonly string[], counts: Map<string, number>): Promise<void> {
+async function rescan($: Engine, files: readonly string[], seen: Map<string, Set<string>>): Promise<void> {
   try {
-    await warn($, await scan($, files, counts))
+    await warn($, await scan($, files, seen))
   } catch {
     // dropped
   }
 }
 
 export const register: Register = on => {
-  const counts = new Map<string, number>()
+  const seen = new Map<string, Set<string>>()
   // Calls the rules left to an ask: "Yes, and don't ask again" may save the command as a rule.
   const asked = new Set<string>()
   let files: string[] = []
@@ -151,8 +162,8 @@ export const register: Register = on => {
       ...(home === undefined ? [] : [`${home}/.claude.json`]),
       ...(config ? [`${config}/.claude.json`] : []),
     ]
-    counts.clear()
-    const warnings = await scan($, files, counts)
+    seen.clear()
+    const warnings = await scan($, files, seen)
 
     // The local file is meant to stay on this machine: flag it when git would commit it.
     if (await $.fs.exists(`${e.cwd}/.claude/settings.local.json`).catch(() => false)) {
@@ -191,7 +202,7 @@ export const register: Register = on => {
     const wasAsked = e.tool_use_id !== undefined && asked.delete(e.tool_use_id)
 
     if (wasAsked || (['Edit', 'Write', 'MultiEdit'].includes(e.tool) && typeof path === 'string' && WATCHED.test(path))) {
-      await rescan($, files, counts)
+      await rescan($, files, seen)
     }
 
     return result
@@ -200,7 +211,7 @@ export const register: Register = on => {
   // A settings file changed outside a tool call, by hand or by another session.
   on('classic.ConfigChange', async ($, e, next) => {
     const result = await next(e)
-    await rescan($, files, counts)
+    await rescan($, files, seen)
 
     return result
   })

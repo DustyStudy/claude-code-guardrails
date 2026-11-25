@@ -482,3 +482,21 @@ test('does not repeat a warning session start already gave', async ($, on) => {
   await $.classic.ConfigChange({ source: 'local_settings', file_path: LOCAL })
   expect(toasts.join('').includes('/repo/.claude/settings.local.json: 2 entries look')).toBe(true)
 })
+
+// The count stays the same; the secret does not.
+for (const [name, after] of [
+  ['a secret replaced by another', JSON.stringify({ env: { API_TOKEN: `new${'secret'}456` } })],
+  ['a different entry swapped in', JSON.stringify({ env: { DB_PASSWORD: `${'hunter'}2pw` } })],
+] as const) {
+  test(`warns of ${name} at the same count`, async ($, on) => {
+    const files: Record<string, string> = { '/repo/.claude/settings.json': JSON.stringify({ env: { API_TOKEN: `old${'secret'}123` } }) }
+    const toasts: string[] = []
+    expect(/literal secret/.test(await start($, on, files, IGNORED, {}, toasts))).toBe(true)
+    toasts.length = 0
+    files['/repo/.claude/settings.json'] = after
+    await $.classic.ConfigChange({ source: 'project_settings', file_path: '/repo/.claude/settings.json' })
+    const toast = toasts.join('')
+    expect(toast.includes('/repo/.claude/settings.json: 1 entry looks')).toBe(true)
+    expect(/secret456|hunter2pw|secret123/.test(toast)).toBe(false)
+  })
+}
