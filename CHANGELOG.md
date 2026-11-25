@@ -92,7 +92,11 @@ supply-chain-guard 0.5.3, terraform-guard 0.6.3 (tf-lint unchanged at
   pipeline or block with a host writer in it (`irm -Headers @{...} |
   Write-Host`), `ConvertTo-Json -InputObject @{...} | Set-Content x`, and a
   table after a printer earlier on the line past `|` or `&&`
-  (`Write-Output x | irm -Headers @{...}`).
+  (`Write-Output x | irm -Headers @{...}`). A cmdlet named with its module
+  is the same cmdlet (`Microsoft.PowerShell.Utility\ConvertTo-Json
+  -InputObject @{...}`, `...\Write-Output ("x" + $env:GITHUB_TOKEN)`), also
+  after any run of blanks. A long command is read faster: the home folder is
+  normalized once per path, each statement split and each word judged once.
 - supply-chain-guard 0.5.1: the check for pip handed to python by the shell
   runs in linear time; a 60 KB line of `$(` took over a second. Its own
   xargs marking is dropped for the shared parser's.
