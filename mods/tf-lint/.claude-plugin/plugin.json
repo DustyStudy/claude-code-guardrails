@@ -1,7 +1,7 @@
 {
   "name": "tf-lint",
-  "version": "0.9.0",
-  "description": "Denies edits, file-writing shell commands and MCP tool calls that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase); flags Terraform edits with a hardcoded partition ARN, SSH/RDP open to the world, a KMS key without rotation or a 7-30 day deletion window, a GovCloud provider without FIPS, a static IAM access key or console login, a long-lived Google service account key or Azure application or service principal secret, a GitHub OIDC trust without a pinned repo sub and aud, a wildcard principal without a condition, a policy granting every action or all of IAM or STS, or a secret-named variable or output not marked sensitive; and flags GitHub Actions workflows that pass static AWS keys or a stored Azure or Google credential",
+  "version": "0.10.0",
+  "description": "Denies edits, file-writing shell commands and MCP tool calls that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase); flags Terraform edits with a hardcoded partition ARN, SSH/RDP open to the world, a KMS key without rotation or a 7-30 day deletion window, a GovCloud provider without FIPS, a static IAM access key or console login, a long-lived Google service account key or Azure application or service principal secret, a GitHub OIDC trust without a pinned repo sub and aud, a wildcard principal without a condition, a policy granting every action or all of IAM or STS, or a secret-named variable or output not marked sensitive; and flags GitHub Actions workflows and composite actions that pass static AWS keys or a stored Azure or Google credential",
   "author": {
     "name": "Dustin Arrington",
     "url": "https://github.com/DustyStudy"
