@@ -576,19 +576,23 @@ const SDK = /boto3|botocore|aws-sdk|AWSSDK|\bAmazon\.\w/i
 const runsInlineCode = (command: string): boolean | undefined => {
   let seen = 0
 
-  for (const match of command.matchAll(INTERPRETER)) {
-    // Each one reads to its statement's end, so more than are read is denied, not read on: the work stays linear.
-    if (++seen > MOST) {
-      return undefined
-    }
+  // Read as written, and again with the quotes the shell drops gone: "-cimport ...", -"c"..., py""thon. A backslash is dropped
+  // per word only (\-c), since a Windows path keeps it (C:\Python\python.exe).
+  for (const text of new Set([command, command.replace(/["'`]/g, '')])) {
+    for (const match of text.matchAll(INTERPRETER)) {
+      // Each one reads to its statement's end, so more than are read is denied, not read on: the work stays linear.
+      if (++seen > MOST) {
+        return undefined
+      }
 
-    const rest = command.slice((match.index ?? 0) + match[0].length)
-    const end = rest.search(/[;|&\n]/)
-    const statement = end < 0 ? rest : rest.slice(0, end)
-    const isPiped = command.slice(0, match.index).trimEnd().endsWith('|')
+      const rest = text.slice((match.index ?? 0) + match[0].length)
+      const end = rest.search(/[;|&\n]/)
+      const statement = end < 0 ? rest : rest.slice(0, end)
+      const isPiped = text.slice(0, match.index).trimEnd().endsWith('|')
 
-    if (isPiped || statement.includes('<<') || statement.split(/\s+/).some(word => INLINE_FLAG.test(word))) {
-      return true
+      if (isPiped || statement.includes('<<') || statement.split(/\s+/).some(word => INLINE_FLAG.test(word.replace(/\\/g, '')))) {
+        return true
+      }
     }
   }
 

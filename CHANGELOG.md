@@ -109,7 +109,9 @@ supply-chain-guard 0.5.3, terraform-guard 0.6.3 (tf-lint unchanged at
   service and operation both filled in (`$AWS $(echo iam delete-role)`),
   as terraform-guard's `$TF $(echo destroy -auto-approve)`. Inline code attached to its flag
   (`python -c"..."`, `-Ic'...'`, `node -e"..."`, `-pe'...'`,
-  `--eval=...`) is read for SDK calls, as code after `-c ` was.
+  `--eval=...`) is read for SDK calls, as code after `-c ` was, and so is
+  a flag in quotes or escaped (`python "-c..."`, `'-c...'`, `-"c"...`,
+  `\-c`, `node "-e..."`, `'-pe...'`).
 - supply-chain-guard 0.5.3: a verb `xargs` or `parallel` replace is the
   input's, read as an install, for every package manager it checks
   (`echo install | xargs -Ici npm ci evil`, `xargs --rep=ci`,
