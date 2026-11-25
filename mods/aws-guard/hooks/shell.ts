@@ -41,6 +41,13 @@ const SOURCE_LINE = new RegExp(
   String.raw`(^|[;|&()])\s*(?:(?=((?:\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|${WRAPPER.source.slice(1, -1)}|!|\{|if|then|else|elif|do|while|until|-[\w-]*)\s+))\2)*(source|\.)(?=\s)`,
 )
 const readsHeredoc = (line: string) => [line, line.replace(/\$?["']|\\/g, '')].some(one => SHELL.test(one) || SOURCE_LINE.test(one))
+// A function or alias defined anywhere in the command (f() { source /dev/stdin; }, function f { . x; }, alias s='bash') whose
+// call can read its input as a script: then every heredoc, here-string and pipe in the command is read as one. A guess toward
+// reading: any definition and any source, ., eval, read, xargs or shell word anywhere count, as the body is not matched to the call.
+const DEFINES = /\w\s*\(\s*\)|\bfunction\s|\b(alias|set-alias|new-alias|sal|nal)\s/i
+const SOURCE_WORD = /(^|[\s;&|({=])(source|\.|eval|read|xargs|parallel|iex|invoke-expression)(?=[\s;&|)}]|$)/i
+const definesReader = (source: string) =>
+  [source, source.replace(/\$?["']|\\/g, '')].some(one => DEFINES.test(one) && (SOURCE_WORD.test(one) || SHELL.test(one)))
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
 // bash's builtins that run a file as a script, piped input too (echo "prog ..." | source /dev/stdin): only as the program word,
@@ -193,7 +200,8 @@ const ESCAPE: Record<Shell, string> = { bash: '\\', powershell: '`', cmd: '^' }
 
 // isAnsi: whether this reading takes $'...' as bash does. A shell without it (an older dash) reads a $ and plain quotes, and a \'
 // closes there what it does not close in bash, so a line that holds one is read both ways.
-type State = { left: number; seen: Map<string, string[][]>; isAnsi: boolean }
+// isReader: the whole command defines a function or alias that may read its input as a script (definesReader).
+type State = { left: number; seen: Map<string, string[][]>; isAnsi: boolean; isReader: boolean }
 // dynamic: how many words stood before each substitution, PowerShell ( ) or brace sequence in the command.
 type Command = { raw: string[]; words: string[]; dynamic: number[]; isPiped: boolean }
 
@@ -512,7 +520,7 @@ const cut = (text: string, shell: Shell, state: State, nested: (body: string) =>
         const lineEnd = text.indexOf('\n', after)
         const pipedTo = opening.trimEnd().endsWith('|') ? text.slice(after, lineEnd < 0 ? text.length : lineEnd) : ''
 
-        if (readsHeredoc(opening) || readsHeredoc(pipedTo)) {
+        if (state.isReader || readsHeredoc(opening) || readsHeredoc(pipedTo)) {
           nested(body)
         } else if (!quote) {
           // An unquoted body runs its substitutions wherever it goes: cat <<EOF $(terraform apply) EOF.
@@ -782,7 +790,7 @@ const read = (source: string, depth: number, state: State): string[][] => {
       // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
       feeds =
         isPiped &&
-        (next.some(word => READER.test(word)) || sources(next) || (feeds && next.length > 0))
+        (next.some(word => READER.test(word)) || sources(next) || ((feeds || state.isReader) && next.length > 0))
 
       let from = 0
 
@@ -805,12 +813,15 @@ const read = (source: string, depth: number, state: State): string[][] => {
       // shortcut: any word counts, so a harmless one (find -name xargs) marks the call too; narrow it if that bites.
       const isFed = WRAPPER_NAME.test(kept[0] ?? '') && kept.some(word => FEEDER.test(word.replace(/\$?["']|\\/g, '')))
 
-      // source or . reads a here-string as its script too (source /dev/stdin <<< "..."), so its words are read as a wrapper's are.
-      if (WRAPPER_NAME.test(kept[0] ?? '') || sources(words)) {
+      // source or . reads a here-string as its script too (source /dev/stdin <<< "..."), so its words are read as a wrapper's are;
+      // so does any call with one in a command that defines a reader (f() { source /dev/stdin; }; f <<< "...").
+      const readsAll = sources(words) || (state.isReader && raw.some(word => /^\d*<<</.test(word)))
+
+      if (WRAPPER_NAME.test(kept[0] ?? '') || readsAll) {
         // A quoted argument of a wrapper is a command line of its own, an option's attached one (su --command="...") and a
         // here-string (bash <<< "...") too.
         // Every word for source: its here-string may stand before it (<<< "..." source /dev/stdin).
-        for (const word of (sources(words) ? words : words.slice(from + 1)).filter(one => /\s/.test(one))) {
+        for (const word of (readsAll ? words : words.slice(from + 1)).filter(one => /\s/.test(one))) {
           nested(word.replace(/^(--?[\w-]+=|<<<)/, ''), isFed)
         }
       }
@@ -892,7 +903,7 @@ const commandsOf = (source: string): string[][] => {
         throw new Unreadable('the command holds a character no command line uses')
       }
 
-      last = { source, commands: read(source, 0, { left: WORK, seen: new Map(), isAnsi: false }) }
+      last = { source, commands: read(source, 0, { left: WORK, seen: new Map(), isAnsi: false, isReader: definesReader(source) }) }
     } catch (error) {
       last = { source, why: error instanceof Unreadable ? error.message : 'the command could not be read' }
     }

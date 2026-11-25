@@ -41,9 +41,15 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   line runs in linear time: a 60 KB run of `> -x ` never finished. Newly
   denied though harmless: `parallel --jobs 4 terraform plan ...` where a
   later word holds `4`, and a heredoc body with a denied command given to
-  a wrapper whose next word is `.` (`find . -name x <<EOF`). Still not
-  covered: a function or alias defined on an earlier line than the
-  heredoc (`f() { source /dev/stdin; }` then `f <<EOF`).
+  a wrapper whose next word is `.` (`find . -name x <<EOF`). A command
+  that defines a function or alias anywhere in it (`f() { ... }`,
+  `function f`, `alias s=...`) and names `source`, `.`, a shell, `eval`,
+  `read` or `xargs` reads every heredoc, here-string and piped input in it
+  as a script (`f() { source /dev/stdin; }` then `f <<EOF`, `alias
+  s='. /dev/stdin'`, `f() { eval "$(cat)"; }` then `echo ... | f`). Newly
+  denied though harmless: such a command that also hands a denied command
+  as text to any call (`f() { . x; }; echo 'terraform apply' | grep -c .`).
+  Still not followed: `f < <(...)` and `f < file`.
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
