@@ -544,7 +544,8 @@ const STATEMENT = /(?:^|\|\||[;\n&{}])([^;\n&{}|]*)(?:\|(?!\|)[ \t]*([^\s|;&{}]*
 const EXPRESSION_START = /^[ \t(]*(?:-[ic]?(?:join|split)(?![\w-])|[$"'@\d,+]|\[\w)/
 const WRITER_START = /^[ \t]*(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]/i
 // What reaches the screen whatever is done with the statement's value: $x = $env:TOKEN | Write-Host, $x = Write-Host $env:TOKEN.
-const HOST_WRITER = /(?<![\w-])(?:write-host|out-host|write-information)(?![\w-])/i
+const HOST_WRITER =
+  /(?<![\w-])(?:(?:write-host|out-host|oh|out-default|write-information)(?![\w-])|\[(?:system\.)?console\]::write|\$host\.ui\.write)/i
 const SECRET_VARS = new RegExp(SECRET_VAR.source, 'gi')
 const LENGTH = /\}?\.length(?![\w.[(])/iy
 // An assignment yields nothing ($t = $env:TOKEN, [string]$t = ...), nor does a test ([string]::IsNullOrEmpty($env:TOKEN)) or
@@ -580,7 +581,7 @@ const SILENT_REVERSED = new RegExp(
   String.raw`^@\s*${ASSIGN_REVERSED}${TARGETS_REVERSED}(?:[ \t]*\(?\s*${ASSIGN_REVERSED}${TARGETS_REVERSED})*[ \t]*(?:[;{&]|\([$@]|(\n))`,
 )
 // parens: the open ( and braces, true for a ( whose contents are printed.
-const isSilentAssignment = (text: string, i: number, parens: readonly boolean[]) => {
+const isSilentAssignment = (text: string, i: number, parens: readonly (boolean | 'brace')[]) => {
   // The text's own start reads as a line's.
   const match = SILENT_REVERSED.exec(`${i > 200 ? text.slice(i - 200, i) : `\n${text.slice(0, i)}`}`.split('').reverse().join(''))
   // At a line's start, the ( open around the assignment (past those the targets were read through) must not group.
@@ -591,17 +592,50 @@ const isSilentAssignment = (text: string, i: number, parens: readonly boolean[])
 // PowerShell's operators look like parameters: "{0}" -f @{ ... }.a and -join @{ ... }.Values print what the table holds.
 const PARAM_TABLE =
   /(?<![\w-])-(?!(?:[ic]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|join|f|as|is|isnot|and|or|xor|not|band|bor|bxor|bnot|shl|shr)(?![\w-]))\w+:?\s*@$/i
-const PRINTER_WORD = /^[ \t(]*(?:echo|printf|write|write-\w+|out-\w+|format-\w+)(?![\w-])/i
+// A cmdlet that prints or serializes what it is handed: ConvertTo-Json -InputObject @{ ... }, New-Object psobject -Property @{ ... }.
+// After return, throw, ( , $( or @( too: $(ConvertTo-Json -InputObject @{ ... }) is printed.
+const PRINTER_WORD =
+  /^(?:[ \t]|[$@]?\(|(?:return|throw)[ \t])*(?:echo|printf|write|write-\w+|out-\w+|format-\w+|convertto-\w+|join-string|select|\w+-object)(?![\w-])/i
+const HOST_WRITERS = new RegExp(HOST_WRITER.source, 'gi')
 const usedTables = (text: string) => {
   const chars = text.split('')
   // Each open brace: true if its contents are a used table's (inherited by the braces inside it), 'table' for a printed @{ }.
   const stack: (boolean | 'table')[] = []
+  // A host writer anywhere in a pipeline prints what reaches it, an assigned table's value too: $x = @{ ... }.a | Write-Host.
+  // hostEnd[j]: where the first host writer at or after j ends. Per brace depth, the open pipeline's start and its first used
+  // table; a pipeline that ends with both has its tables read after all (fail closed: a printed table's contents).
+  const hostEnd = new Array<number>(text.length + 1).fill(Infinity)
+  for (const { index = 0, 0: found } of text.matchAll(HOST_WRITERS)) {
+    hostEnd[index] = Math.min(hostEnd[index] ?? Infinity, index + found.length)
+  }
+  for (let j = text.length - 1; j >= 0; j--) {
+    hostEnd[j] = Math.min(hostEnd[j] ?? Infinity, hostEnd[j + 1] ?? Infinity)
+  }
+  const pipeStart: number[] = [0]
+  const firstUsed: (number | undefined)[] = []
+  // A block's first used table belongs to the pipeline the block is in too: % { $h = @{ ... }; $h.a } | Write-Host.
+  const blockFirst: (number | undefined)[] = []
+  let lastSeen = ''
+  const reread = new Array<number>(text.length + 1).fill(0)
+  const endPipeline = (depth: number, i: number) => {
+    const from = firstUsed[depth]
+
+    if (from !== undefined && (hostEnd[pipeStart[depth] ?? 0] ?? Infinity) <= i) {
+      reread[from] = (reread[from] ?? 0) + 1
+      reread[i] = (reread[i] ?? 0) - 1
+    }
+    firstUsed[depth] = undefined
+    pipeStart[depth] = i + 1
+  }
+  // The statement's start and whether it is a printer's, kept for the braces open around the one being read.
+  const outer: [number, boolean | undefined, number][] = []
+  let lineStart = 0
   // Parentheses in quotes or comments are text.
   const isText = new Array<boolean>(text.length).fill(false)
   for (const { index = 0, 0: part } of text.matchAll(QUOTED)) {
     isText.fill(!isEscape(part), index, index + part.length)
   }
-  const parens: boolean[] = []
+  const parens: (boolean | 'brace')[] = []
   let comment: '' | '#' | '<#' = ''
   let start = 0
   let isPrinter: boolean | undefined
@@ -620,26 +654,77 @@ const usedTables = (text: string) => {
       }
     }
 
+    if (!comment && stack.at(-1) !== true) {
+      // A line that ends in | or whose next starts with one goes on with the pipeline; 200 blanks are taken to go on too.
+      const goesOn = char === '\n' && (lastSeen === '|' || /[ \t\r]*(?:\||$)/y.test(text.slice(i + 1, i + 200)))
+
+      // Inside an open ( the pipeline goes on: $x = $($h = @{ ... }; $h.a) | Write-Host.
+      if ((parens.length === 0 || parens.at(-1) === 'brace') && (char === ';' || (char === '\n' && !goesOn))) {
+        endPipeline(stack.length, i)
+      }
+      if (!/\s/.test(char)) {
+        lastSeen = char
+      }
+    }
+
     if (/[;\n&|]/.test(char) && stack.at(-1) !== true) {
       start = i + 1
       isPrinter = undefined
+      if (/[;\n]/.test(char)) {
+        lineStart = i + 1
+      }
     } else if (char === '{') {
-      isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40))
+      // The statement's printer too, past a | or & : Write-Output (& { 1 }) -InputObject @{ ... }.
+      isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40)) || PRINTER_WORD.test(text.slice(lineStart, lineStart + 40))
       // The 40 characters before @{ are enough to see -Param or = : anchored at their end, they are read once per brace.
       const before = text.slice(Math.max(start, i - 40), i)
       // A table that is a printed table's value (@{ 'a' = @{ ... } }) is printed with it.
       const isUsed = !isPrinter && stack.at(-1) !== 'table' && (PARAM_TABLE.test(before) || isSilentAssignment(text, i, parens))
 
+      if (isUsed && stack.at(-1) !== true) {
+        firstUsed[stack.length] ??= i
+        blockFirst[stack.length] ??= i
+      }
       stack.push(stack.at(-1) === true || isUsed ? true : text[i - 1] === '@' ? 'table' : false)
-      parens.push(false)
+      parens.push('brace')
+      outer.push([start, isPrinter, lineStart])
+      // A block's statements start after its brace: if ($x) { ConvertTo-Json -InputObject @{ ... } }.
+      start = i + 1
+      lineStart = i + 1
+      isPrinter = undefined
+      pipeStart[stack.length] = i + 1
+      firstUsed[stack.length] = undefined
+      blockFirst[stack.length] = undefined
     } else if (char === '}') {
+      if (stack.length > 0 && stack.at(-1) !== true) {
+        const inner = blockFirst[stack.length]
+
+        endPipeline(stack.length, i)
+        firstUsed[stack.length - 1] ??= inner
+        blockFirst[stack.length - 1] ??= inner
+      }
       stack.pop()
       parens.pop()
+      ;[start, isPrinter, lineStart] = outer.pop() ?? [i + 1, undefined, i + 1]
     } else if (stack.at(-1) === true) {
       chars[i] = char === '\n' ? '\n' : ' '
     } else if (stack.at(-1) === 'table' && char === '=') {
       // A printed table's key = value is printed with it: the value is read as a statement of its own, @{a=$env:TOKEN} too.
       chars[i] = ';'
+    }
+  })
+  // Braces left open end with the text.
+  for (let open = stack.length; open >= 0; open--) {
+    endPipeline(open, text.length)
+    if (open > 0) {
+      firstUsed[open - 1] ??= blockFirst[open]
+    }
+  }
+  let depth = 0
+  reread.forEach((step, j) => {
+    depth += step
+    if (depth > 0 && j < text.length) {
+      chars[j] = text[j] === '=' ? ';' : (text[j] ?? '')
     }
   })
 

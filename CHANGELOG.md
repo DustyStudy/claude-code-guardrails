@@ -69,6 +69,20 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   `-Headers ($h = @{...})`, `$o = [pscustomobject]@{a=$env:GITHUB_TOKEN}` (its
   quoted-key form was already denied), an assignment after a comment on its
   line (`<# x #> $h = @{...}`), and a target over 200 characters long.
+  A table assigned in a pipeline that ends in a host writer is read too
+  (`$x = @{a=$env:GITHUB_TOKEN}.a | Write-Host`, also `Out-Host`, `oh`,
+  `Out-Default`, `Write-Information`, `[Console]::Write*`, `$host.UI.Write*`,
+  past a `|` at a line's end or start), and so is a table handed to a cmdlet
+  that prints or serializes it (`ConvertTo-*`, `Join-String`, `select`,
+  `*-Object` such as `New-Object psobject -Property @{...}` and
+  `Select-Object`, `Format-*`, `Out-*`, `Write-*`), at a block's start, after
+  `return`, `throw`, `$(` or `@(` too. `Invoke-RestMethod -Headers @{...}`,
+  `$o = New-Object ... -Property @{...}` and `$j = ConvertTo-Json -InputObject
+  @{...}` still run. Newly denied though harmless: a used table in any
+  pipeline or block with a host writer in it (`irm -Headers @{...} |
+  Write-Host`), `ConvertTo-Json -InputObject @{...} | Set-Content x`, and a
+  table after a printer earlier on the line past `|` or `&&`
+  (`Write-Output x | irm -Headers @{...}`).
 - supply-chain-guard 0.5.1: the check for pip handed to python by the shell
   runs in linear time; a 60 KB line of `$(` took over a second. Its own
   xargs marking is dropped for the shared parser's.
