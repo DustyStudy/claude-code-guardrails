@@ -1,6 +1,6 @@
 # Release checklist: v0.9.0
 
-Release branch: `release/v0.9.0` (from `origin/main` 7e7c617). Draft PR: https://github.com/DustyStudy/claude-code-guardrails/pull/84
+Release branch: `release/v0.9.0` (from `origin/main` 7e7c617). PR: https://github.com/DustyStudy/claude-code-guardrails/pull/84 (squash-merged as 246eb58)
 Target: the README's commitment that "the next release will work through" the
 bypasses and false positives the 0.8 hardening audit reproduced.
 
@@ -24,7 +24,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | C12 | No open code-scanning, Dependabot or secret-scanning alerts | PASS | 2026-11-24: 0 / 0 / 0 via `gh api` |
 | C13 | Independent security review of the integrated diff, findings fixed or accepted by owner | PASS (owner accepted residual risk 2026-11-24) | Codex reviewed the loosenings in all 6 mods: 7 findings, all fixed. Not yet done: an independent re-review of the 7 fixes, and a review of the new *deny* logic (the planned Fable pass hit its usage limit). Owner decision: accept the residual risk or wait for Fable (resets 2026-11-28 16:00 CT) |
 | C14 | README updated: audit section reflects what was fixed, test results summary | PASS | c52df84: "Still open after the 0.9 pass", Known limits, "Latest test results" |
-| C15 | Merge to `main`, tag `v0.9.0`, GitHub release | BLOCKED | Needs owner approval (merge to default branch, publish) |
+| C15 | Merge to `main`, tag `v0.9.0`, GitHub release | PASS | Owner approved 2026-11-24. Squash-merged as 246eb58; annotated tag `v0.9.0` on 246eb58; release https://github.com/DustyStudy/claude-code-guardrails/releases/tag/v0.9.0 (Latest) |
 
 ## Baseline (2026-11-24)
 
@@ -96,14 +96,9 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 ## Resume here
 
-State 2026-11-24: branch `release/v0.9.0` pushed, draft PR #84. All code work is integrated and passes
-locally. Two worktrees of stopped agents remain under `.claude/worktrees/` (locked by the harness; their
-commits are merged); remove them with `git worktree remove -f -f` once those agents are gone.
+Released 2026-11-24. Every criterion passed. Nothing is left for v0.9.0.
 No AWS resources were created for this release.
 
-Next steps, in order:
-1. `gh pr checks 84`: confirm Mod tests pass on Linux at the head commit (C2, C3). If the folder-listing
-   tests still fail, print `e.path` in the `fs.list` mock in mods/secret-read-guard/hooks/register.test.ts.
-3. Owner: decide on C13 (accept, or run the Fable re-review after 2026-11-28 16:00 CT).
-4. Owner: approve C15 (mark the PR ready, squash-merge, tag `v0.9.0`, GitHub release, and change
-   `## 0.9.0 (unreleased)` in CHANGELOG to the date).
+Optional follow-ups:
+- Fable re-review of the 7 review fixes and the new deny logic, whose remaining risk the owner accepted (D9).
+- Items in README "Still open after the 0.9 pass".
