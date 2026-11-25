@@ -57,9 +57,13 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
     `npm install evil`; the parser marks the verb but the mod does not read a marked verb as an install. OPEN
   - F6 shared parser: a function/alias defined on an earlier line of the same command that runs `source`,
     then `f <<EOF`, hides the heredoc script. OPEN
+  - F7 shared parser (found by the F5 implementer): xargs/parallel replace strings are not applied inside
+    a wrapper's script (`echo install | xargs -Ici sh -c 'npm ci evil'`). OPEN
   - Pre-existing, fixed in 9c75ae3: `SOURCE_LINE` backtracked exponentially (`'> -x '` x24 = 638 ms; 60 KB
-    never finished) — a fail-open by hook timeout? No: a hook timeout runs the deny `.catch`, so it failed
-    closed, but it made long lines unusable.
+    never finished). A hook timeout runs the deny `.catch`, so it failed closed, but long lines were unusable.
+  - F1, F2 fixed in 9c75ae3; F6 fixed in 044d8ad; F5 fixed in afd534a; F3 fixed in 1cb6b58.
+  - Accepted, documented: quadratic `a=;a=;…` source-line check, ~0.8 s at the 64 KB cap (bounded,
+    below the 10 s hook timeout; a fix needs a quote-aware splitter).
   Assigned: F1+F2 one implementer (owns the 4 `shell.ts` copies; bumps terraform 0.6.3, supply-chain
   0.5.3); F3 with the aws-guard fix (0.8.3); F4 secret-read (0.6.3).
 
