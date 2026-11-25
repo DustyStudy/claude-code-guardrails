@@ -28,8 +28,10 @@ line says which.
   substitution (`echo "$(<.env)"`), `kubectl get Secret` in any case, a credential
   folder reached by a bare `cd` or a chain of more than three `cd` moves, and a
   wildcard that writes no credential name (`cat *`, `cat prod*`) when the folder
-  holds a credential file: the shell guard now lists that folder.
-  `echo 'export { a, b }'` is no longer read as an environment dump.
+  holds a credential file: the shell guard now lists that folder, dot files
+  included, and denies a wildcard in a folder of more than 2,000 entries.
+  `echo 'export { a, b }'` is no longer read as an environment dump
+  (`export {,}`, which bash runs as a bare `export`, still is).
 - supply-chain-guard 0.4.0: denies npm's shortened verbs (`npm upd`, `npm exe`,
   `npm creat`); any number of unlisted options before the verb; a URL with a version
   after `@`; a verb or tool the shell fills in (`npm $(echo install) x`,
