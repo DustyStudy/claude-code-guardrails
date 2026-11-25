@@ -294,17 +294,18 @@ fails if the copies drift apart.
 ### Latest test results
 
 0.10.1 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
-release), `npm test` from a fresh clone: all 6 mods pass, 6,184 tests, 0
+release), `npm ci && npm test` from a fresh clone: all 6 mods pass, 6,276 tests, 0
 failures; the four `shell.ts` copies match. Every new deny was first written
-as a failing test.
+as a failing test. The 60 KB timing tests run in under 400 ms against a 1 s
+limit.
 
 | Mod | Tests |
 |---|---|
-| aws-guard | 1,330 |
+| aws-guard | 1,350 |
 | secret-allow-guard | 176 |
-| secret-read-guard | 2,212 |
+| secret-read-guard | 2,256 |
 | supply-chain-guard | 786 |
-| terraform-guard | 890 |
+| terraform-guard | 918 |
 | tf-lint | 790 |
 
 The tests run each guard through Claude Code's engine with mocked tool
