@@ -10,11 +10,11 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
-| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | OPEN | |
-| C2 | CI "Mod tests" (ubuntu, Node 24, pinned Claude Code) passes on the release PR | OPEN | |
-| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | OPEN | |
+| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS (rerun pending) | Fresh clone at c52df84: Claude Code 2.1.325, 4,500 pass. Working tree at 8bcc811: 4,523 pass. Fresh-clone rerun at the final commit: see Resume here |
+| C2 | CI "Mod tests" (ubuntu, Node 24, pinned Claude Code) passes on the release PR | OPEN | Failed at c52df84 (Linux-only test fixture, fixed in 8bcc811). Result for the final commit not yet read: your CLAUDE.md says not to poll CI |
+| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS (c52df84) | All passed on c52df84; recheck with C2 |
 | C4 | Every **let-through** item under README "Found by the 0.8 hardening audit" is denied, with a must-deny test (Bash and PowerShell) per item | PASS | Each item reproduced as a failing test first, then fixed; sub-case `sudo $NPM install` kept and listed in README "Still open". Per-mod reports in Integration log |
-| C5 | Every **false-positive** item from that list is either allowed with a must-allow test and a hostile-review pass, or kept as a documented limit | OPEN | Loosenings done; hostile review: secret-read-guard by Codex (fixed), other five pending (C13) |
+| C5 | Every **false-positive** item from that list is either allowed with a must-allow test and a hostile-review pass, or kept as a documented limit | PASS | Every loosening went through a Codex hostile review; its 7 findings are fixed with must-deny tests. Kept as limits: README "Still open" |
 | C6 | Every mod whose shipped files changed has a `plugin.json` version bump (minor for more denies, patch for fixes) | PASS | aws 0.6.0→0.7.0, secret-allow 0.4.0→0.5.0, secret-read 0.4.0→0.5.0, supply-chain 0.3.0→0.4.0, terraform 0.4.0→0.5.0, tf-lint 0.8.0→0.9.0 |
 | C7 | `CHANGELOG.md` has a 0.9.0 section with one line per changed mod | PASS | c52df84 |
 | C8 | `hooks/shell.ts` copies are byte-identical (checked by `npm test`) | PASS | `npm test` at 750a5ce |
@@ -22,7 +22,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | C10 | Every command guard covers `Bash`, `PowerShell`, `Monitor`, `mcp__terminal__run_in_terminal` | PASS | `SHELL_TOOLS` in aws, secret-read, supply-chain, terraform, tf-lint |
 | C11 | Workflows: `contents: read` default, actions pinned by SHA, no new permissions | PASS | `git diff 7e7c617 HEAD -- .github` empty; existing workflows already meet it |
 | C12 | No open code-scanning, Dependabot or secret-scanning alerts | PASS | 2026-11-24: 0 / 0 / 0 via `gh api` |
-| C13 | Independent security review of the integrated diff, findings fixed or accepted by owner | OPEN | |
+| C13 | Independent security review of the integrated diff, findings fixed or accepted by owner | BLOCKED | Codex reviewed the loosenings in all 6 mods: 7 findings, all fixed. Not yet done: an independent re-review of the 7 fixes, and a review of the new *deny* logic (the planned Fable pass hit its usage limit). Owner decision: accept the residual risk or wait for Fable (resets 2026-11-28 16:00 CT) |
 | C14 | README updated: audit section reflects what was fixed, test results summary | PASS | c52df84: "Still open after the 0.9 pass", Known limits, "Latest test results" |
 | C15 | Merge to `main`, tag `v0.9.0`, GitHub release | BLOCKED | Needs owner approval (merge to default branch, publish) |
 
@@ -93,4 +93,15 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 ## Resume here
 
-Next step: see the last "Decisions" entry and the OPEN rows above.
+State 2026-11-24: branch `release/v0.9.0` pushed, draft PR #84. All code work is integrated and passes
+locally. Two worktrees of stopped agents remain under `.claude/worktrees/` (locked by the harness; their
+commits are merged); remove them with `git worktree remove -f -f` once those agents are gone.
+No AWS resources were created for this release.
+
+Next steps, in order:
+1. `gh pr checks 84`: confirm Mod tests pass on Linux at the head commit (C2, C3). If the folder-listing
+   tests still fail, print `e.path` in the `fs.list` mock in mods/secret-read-guard/hooks/register.test.ts.
+2. Fresh clone of the head commit, `npm ci && npm test` (C1).
+3. Owner: decide on C13 (accept, or run the Fable re-review after 2026-11-28 16:00 CT).
+4. Owner: approve C15 (mark the PR ready, squash-merge, tag `v0.9.0`, GitHub release, and change
+   `## 0.9.0 (unreleased)` in CHANGELOG to the date).

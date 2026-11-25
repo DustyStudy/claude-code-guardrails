@@ -490,7 +490,9 @@ reproduced; most need the parser to expand variables, which it does not.
   an install with a substitution anywhere (`npm install --prefix "$(pwd)/web"`),
   a substitution before the verb, and a shell-named program followed by
   `install` (`$(which make) install`).
-- **secret-read-guard.** `$env:GITHUB_TOKEN | Write-Output` and
+- **secret-read-guard.** The wildcard listing lower-cases the folder path, so
+  on a case-sensitive disk (Linux) a wildcard in a subfolder with capitals in
+  its name is judged by its text alone, as in 0.8. `$env:GITHUB_TOKEN | Write-Output` and
   `$env:GITHUB_TOKEN -replace 'a','b'` pass. Denied though harmless: a
   credential-name read after `cd $VAR` or `cd "$(…)"`, and `cat .env.ex*` and
   `cat config.*`, which could match a real credential file.
