@@ -30,13 +30,16 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 // A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
 // source and . read it too where they are the program (. /dev/stdin <<EOF, not cp x . <<EOF or cat > source <<EOF), after
-// VAR=x, a redirection, builtin, command, eval, exec, sudo and their flags. Matched against the line as written and with its
-// quotes and backslashes gone, as the shell drops them from a name (sou""rce, b\ash).
+// VAR=x, a redirection, builtin, a wrapper (command, eval, exec, sudo, time, coproc), !, {, a keyword (if, then, do, while) and
+// their flags, at the line's start or after ; | & ( or ) (case x in x) source, f() { source). Matched against the line as
+// written and with its quotes and backslashes gone, as the shell drops them from a name (sou""rce, b\ash).
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 // A redirection is one word (2>/dev/null, <<<x) or a bare one and its target (2> /dev/null); the target is never a redirection
-// itself (2> 2>), so no text matches two ways and a run of them stays linear.
-const SOURCE_LINE =
-  /(^|[;|&(])\s*((\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|command|eval|exec|sudo|-[\w-]*)\s+)*(source|\.)(?=\s)/
+// itself (2> 2>). Each word is taken once, by the first way that reads it ((?=(...))\2 does not backtrack): a target that also
+// reads as a word of its own (2> -x, 2> time) would otherwise double the work for each one.
+const SOURCE_LINE = new RegExp(
+  String.raw`(^|[;|&()])\s*(?:(?=((?:\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|${WRAPPER.source.slice(1, -1)}|!|\{|if|then|else|elif|do|while|until|-[\w-]*)\s+))\2)*(source|\.)(?=\s)`,
+)
 const readsHeredoc = (line: string) => [line, line.replace(/\$?["']|\\/g, '')].some(one => SHELL.test(one) || SOURCE_LINE.test(one))
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
@@ -69,8 +72,9 @@ const sources = (list: readonly string[]) => {
 const MOST_REPLACED = 8
 
 // The strings xargs or parallel replace with their input wherever they stand in what runs after them, read generously so a
-// misread marks more, never fewer: -I, -J, -i and any long option naming replace (--replace, --extensionreplace) give their
-// attached value or the next word, and -i and --replace {} too; parallel replaces {} always. Options are read up to the
+// misread marks more, never fewer: -I, -J, -i, any long option naming replace or a prefix of it (--replace, --rep,
+// --extensionreplace) and every long option of parallel's give their attached value, its words and the next word, and -i and
+// --replace {} too; parallel replaces {} always. Options are read up to the
 // program; a long one without = may take the next word as its value, so that word is passed over too.
 // shortcut: parallel's other replacement strings ({.}, {/}, {1}) are caught by its { alone.
 // Also where the program stands: the words before it are the options' own (-I{} is not the input's).
@@ -85,7 +89,9 @@ const replacements = (words: readonly string[]): { found: string[]; program: num
       return
     }
 
-    if (/parallel/i.test(feeder)) {
+    const isParallel = /parallel/i.test(feeder)
+
+    if (isParallel) {
       found.push('{')
     }
 
@@ -105,13 +111,17 @@ const replacements = (words: readonly string[]): { found: string[]; program: num
 
       if (word.startsWith('--')) {
         const [, name = '', value] = /^--([^=]*)(?:=([\s\S]*))?$/.exec(word) ?? []
+        // Both take any unique prefix of a long option (--rep, --r are xargs' --replace); parallel has too many options that set
+        // a replacement string (--er, --bnr, --rpl 'tag perl') to tell apart, so every value of its long options counts.
+        const isReplace = isParallel || /replace/i.test(name) || 'replace'.startsWith(name.toLowerCase())
+        const taken = (one: string) => (isReplace ? [one, ...one.split(/\s+/)] : [])
 
-        if (/replace/i.test(name)) {
-          found.push(value || '{}')
+        if (isReplace) {
+          found.push(...taken(value || '{}'))
         }
 
         if (value === undefined && !/^-/.test(words[i + 1] ?? '-')) {
-          found.push(/replace/i.test(name) ? (words[i + 1] ?? '') : '')
+          found.push(...taken(words[i + 1] ?? ''))
           i++
         }
 

@@ -125,6 +125,15 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ["echo evil | sh -c 'x\\args \"$@\"' sh npm install", false],
   // A replace string that is also the program's name still names the program.
   ['echo npm | xargs -Inpm npm install evil', false],
+  // xargs takes any unique prefix of a long option (--rep is --replace); source reads a heredoc after time or !.
+  ['echo evil | xargs --rep=--require-hashes pip install --require-hashes -r req.txt', false],
+  ['echo evil | xargs --r=--require-hashes pip install --require-hashes -r req.txt', false],
+  ['pip install --require-hashes -r req.txt', true],
+  ["time source /dev/stdin <<'EOF'\npip install evil\nEOF", false],
+  ["! source /dev/stdin <<'EOF'\npip install evil\nEOF", false],
+  ["echo 'pip install evil' | time source /dev/stdin", false],
+  ['echo src | xargs --max-args=1 npm ci', true],
+  ['time npm ci', true],
   // An install that sets the lockfile aside.
   ['npm install --no-package-lock evil', false],
   ['npm install --no-package-lock', false],

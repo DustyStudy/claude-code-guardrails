@@ -29,6 +29,21 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   (`cp x . <<EOF`) reads no heredoc. Still not covered: aws-guard does
   not check a program the shell names (`$AWS iam delete-role`,
   `xargs -IX X iam delete-role`).
+- Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
+  terraform-guard), from the review of 53be7a6 (supply-chain-guard 0.5.3,
+  terraform-guard 0.6.3): `xargs` and `parallel` take any unique prefix of
+  a long option, so `--rep=plan` and `--r=plan` are xargs' `--replace`;
+  every value of a `parallel` long option now counts as a replaced string,
+  as too many of them set one (`--er`, `--bnr`, `--rpl`). `source` and `.`
+  read a heredoc after `time`, `time -p`, `!`, `{`, `coproc`, any other
+  wrapper, `if`/`then`/`do`/`while`/`until`, and after `)` (`case x in x)
+  source ...`, `f() { source ...; }; f <<EOF`). The check for a `source`
+  line runs in linear time: a 60 KB run of `> -x ` never finished. Newly
+  denied though harmless: `parallel --jobs 4 terraform plan ...` where a
+  later word holds `4`, and a heredoc body with a denied command given to
+  a wrapper whose next word is `.` (`find . -name x <<EOF`). Still not
+  covered: a function or alias defined on an earlier line than the
+  heredoc (`f() { source /dev/stdin; }` then `f <<EOF`).
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
