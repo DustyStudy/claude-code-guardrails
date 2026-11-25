@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+
+Closes every "Still open after the 0.9 pass" item a text guard can close, and
+the Known limits that can be lifted. Every guard denies more; nothing that was
+denied now runs. Each mod's line names the new harmless denies.
+
+- Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
+  terraform-guard): reads nested `${ }` as bash does, refuses a `'` inside a
+  quoted `${ }` and a `${` never closed, treats any program word holding a
+  variable or substitution as shell-named, and exposes `namedByShell` for
+  calls whose program the shell names.
+- aws-guard 0.8.0: denies Roles Anywhere deletes, CRL and attribute-mapping
+  writes; a cmdlet called through a variable the same command sets (`& $c`,
+  `& ${c}`, `& "$c"`, any case); and AWS SDK destructive calls in inline code
+  (`python -c`/`-Ic`, `node -e`/`-pe`, `pwsh -c`, `ipython -c`, `deno eval`,
+  code piped or fed by a heredoc to an interpreter) by the deny list's
+  operation names and a resource's `.delete()`/`.terminate()`/`.remove()`.
+  Newly denied though harmless: such a name (`removeEventListener`) in inline
+  code that also loads an AWS SDK client.
+- secret-allow-guard 0.6.0: rescans the settings, `.mcp.json` and
+  `~/.claude.json` files mid-session, after a call that was asked about (where
+  "don't ask again" saves a rule), after an Edit/Write/MultiEdit to one of
+  them, and on a settings change; warns once per new entry (by a hash, never
+  the value), including a secret replaced by another.
+- supply-chain-guard 0.5.0: denies a tool named by a variable or substitution
+  (`sudo $NPM install x`, `$(echo npx) pkg`, `${X:-npx} pkg`), python handed
+  `-m pip` by the shell, `npx -c`/`npm exec --call` strings, `go get` without an
+  exact version (and `go get -u`), the lockfile turned off by
+  `npm_config_package_lock` in any spelling or `npm config set package-lock`,
+  and `poetry add`/`poetry self add` and conda/mamba `install`/`create`/`update`
+  without an exact version; reads through `conda run`. Newly denied though
+  harmless: python with a substitution holding `pip` or `-m`, and a two-part
+  conda version.
+- terraform-guard 0.6.0: denies a terraform call after a variable or
+  substitution placed before it (as the program or under a wrapper), and runs
+  every apply/destroy check on a program named by a variable, substitution,
+  same-line alias (`alias`, `Set-Alias`, `sal`, `nal`) or same-line function.
+  Newly denied though harmless: `sudo -u $USER terraform plan`,
+  `env PATH=$PATH terraform plan`.
+- tf-lint 0.10.0: flags `print(file=open(..,'w'))` and `Set-Item`/`si` writes
+  of a secret, reads `action.yml`/`action.yaml` anywhere, requires a condition
+  in each wildcard-principal statement (string content can no longer stand in
+  for one), applies the KMS, provider, open-port and secret-name rules to
+  `.tf.json`, flags `*_creds`, `*_credentials`, `*_pat`, `*_pwd` and
+  `*_passphrase` names, and checks the whole file after an Edit; findings
+  never quote file values.
+
 ## 0.9.0 (2026-11-24)
 
 Works through the bypasses and false positives the 0.8 hardening audit reproduced.
