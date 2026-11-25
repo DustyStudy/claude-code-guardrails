@@ -119,6 +119,10 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['echo evil | xargs npm install', false],
   ['echo evil | xargs -I{} npm install {}', false],
   ['echo evil | xargs uv add', false],
+  // xargs inside a script a wrapper runs feeds the call after it too.
+  ["echo evil | sh -c 'xargs \"$@\"' sh npm install", false],
+  ["echo evil | sh -c 'x\"\"args \"$@\"' sh npm install", false],
+  ["echo evil | sh -c 'x\\args \"$@\"' sh npm install", false],
   // An install that sets the lockfile aside.
   ['npm install --no-package-lock evil', false],
   ['npm install --no-package-lock', false],
@@ -294,6 +298,12 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['${X:-npx} evil', false],
   ['python -$(echo m) pip install evil', false],
   ['python $M pip install evil', false],
+  // A long line of openers is read in linear time (it took seconds), with the same result.
+  [`python ${'$a'.repeat(20000)} pip install evil`, false],
+  [`python app.py ${'$a'.repeat(20000)}`, true],
+  [`python app.py ${'`x` '.repeat(8000)}`, true],
+  // A carriage return ends the line the old regex read: pip after it is not after the $X.
+  ["python app.py '$X\rpip'", true],
   ['poetry self add evil', false],
   ['conda create -n x evil', false],
   ['mamba create -n x evil', false],

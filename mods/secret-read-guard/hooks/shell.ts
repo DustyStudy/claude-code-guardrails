@@ -32,6 +32,13 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
+// bash's builtins that run a file as a script, piped input too (echo "prog ..." | source /dev/stdin): only as the program word,
+// after builtin or command and their flags if any.
+const SOURCER = /^(source|\.)$/
+const BUILTIN = /^(builtin|command|--|-[a-zA-Z]+)$/
+// Wrappers that add words from their input to the call: what they run has arguments the shell fills in (echo apply | xargs prog),
+// named on their own or inside a script a wrapper runs (sh -c 'xargs "$@"' sh prog).
+const FEEDER = /(^|[\s;&|(`'"\\/])(xargs|parallel)(\.exe)?(?=[\s;&|)`'"]|$)/i
 
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
@@ -465,6 +472,11 @@ const lex = (text: string, shell: Shell, state: State): Command[] => {
   let isOpen = false
 
   const endCommand = (isPiped: boolean) => {
+    // Nothing between a pipe and a & or a line end (|& prog, a | at the end of a line): the pipe goes on to the next command.
+    if (!isPiped && command.raw.length === 0 && commands.at(-2)?.isPiped === true) {
+      return
+    }
+
     command.isPiped = isPiped
     command = blank()
     commands.push(command)
@@ -605,11 +617,12 @@ const read = (source: string, depth: number, state: State): string[][] => {
       found.push(words)
     }
   }
-  const nested = (body: string) => {
+  // A command line fed by xargs or parallel has arguments the shell fills in: each call in it ends in DYNAMIC.
+  const nested = (body: string, isFed = false) => {
     const { isAnsi } = state
 
     for (const words of read(body, depth + 1, state)) {
-      add(words)
+      add(isFed ? [...words, DYNAMIC] : words)
     }
 
     state.isAnsi = isAnsi
@@ -644,7 +657,9 @@ const read = (source: string, depth: number, state: State): string[][] => {
       const next = commands[i + 1]?.words ?? []
 
       // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
-      feeds = isPiped && (next.some(word => READER.test(word)) || (feeds && next.length > 0))
+      feeds =
+        isPiped &&
+        (next.some(word => READER.test(word)) || SOURCER.test(next.find(word => !BUILTIN.test(word)) ?? '') || (feeds && next.length > 0))
 
       let from = 0
 
@@ -662,11 +677,16 @@ const read = (source: string, depth: number, state: State): string[][] => {
         kept[0] = assigned[1] ?? ''
       }
 
+      // xargs or parallel among a wrapper's words, itself or in a script it runs: what it runs gets words from the input.
+      // Quotes and backslashes go first, as the script's own shell drops them (sh -c 'x""args "$@"').
+      // shortcut: any word counts, so a harmless one (find -name xargs) marks the call too; narrow it if that bites.
+      const isFed = WRAPPER_NAME.test(kept[0] ?? '') && kept.some(word => FEEDER.test(word.replace(/\$?["']|\\/g, '')))
+
       if (WRAPPER_NAME.test(kept[0] ?? '')) {
         // A quoted argument of a wrapper is a command line of its own, an option's attached one (su --command="...") and a
         // here-string (bash <<< "...") too.
         for (const word of words.slice(from + 1).filter(one => /\s/.test(one))) {
-          nested(word.replace(/^(--?[\w-]+=|<<<)/, ''))
+          nested(word.replace(/^(--?[\w-]+=|<<<)/, ''), isFed)
         }
       }
 
@@ -690,6 +710,10 @@ const read = (source: string, depth: number, state: State): string[][] => {
         if (at < words.length && isKept(at)) {
           placed.push(kept[taken++] ?? '')
         }
+      }
+
+      if (isFed) {
+        placed.push(DYNAMIC)
       }
 
       add(placed)
@@ -751,7 +775,8 @@ export const unreadable = (source: string): string | undefined => {
 
 // shortcut: no variable or alias expansion ($FLAG, @args and a program named by a variable are not followed), and a heredoc body
 // is read only for its substitutions, unless a shell on its opening line or piped to after its end reads it all; a body saved to
-// a file and run later is not followed, nor is input a shell reads from a file or a program (cat x | bash, xargs prog); a
+// a file and run later is not followed, nor is input a shell reads from a file or a program (cat x | bash, source <(x)), and
+// what xargs or parallel add is only marked DYNAMIC, not read; a
 // PowerShell here-string (@' '@) is read as plain quotes; it errs toward finding a call, so `echo '$(prog …)'`,
 // `bash -c echo prog …` and a quoted argument of any wrapper count as calls. Upgrade to a real shell parser if any of these bites.
 /**

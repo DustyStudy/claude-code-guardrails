@@ -10,7 +10,7 @@ const SECRET = [
   /\bsshpass\b[^;&|]{0,400}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\b(?:mysql|mariadb)\w*\b[^;&|]{0,400}\s-p["']?(?!\$)[^\s"'):]/,
   // login must be a whole word, not part of a container name such as login-proxy.
-  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\slogin(?=\s)[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
+  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\s["']?login["']?(?=\s)[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\bredis-cli\b[^;&|]{0,400}\s-a\s*["']?(?!\$)[^\s"'):]/,
   // -u user:password; `:*` ends a rule (`Bash(curl -u admin:*)`).
   /\b(?:curl|wget)\b[^;&|]{0,400}\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
@@ -19,8 +19,10 @@ const SECRET = [
   /--[\w-]{0,40}(?:token|api[_-]?key|access[_-]?key|secret[_-]?key)\s+["']?(?![$*-])[^\s"'):]{6,}/i,
   /secret_access_key\s+["']?(?!\$)[A-Za-z0-9/+]{40}\b/i,
   /\bbearer\s+(?!\$)[A-Za-z0-9._~+/-]{8,}/i,
-  // Any other scheme: Basic, token. A value that is all one `<placeholder>` passes.
-  /\bauthorization:\s*\w+\s+(?!\$|<[^<>\s"']{0,80}>(?:[\s"')]|$))[^\s"']{8,}/i,
+  // Any other scheme: Basic, token, its value quoted or not. A value that is all one `<placeholder>` passes: one case, or words
+  // joined by - or . (<token>, <YOUR_TOKEN>, <base64-credentials>); mixed case alone (<dXNlcjpw...>) reads as a real value.
+  // No /i flag, which would make the case test above match any value: the header name is spelled out in either case instead.
+  /\b[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:\s*\w+\s+["']?(?!\$|<(?:[a-z\d_.-]{1,80}|[A-Z\d_.-]{1,80}|[\w.-]{0,80}[-.][\w.-]{0,80})>(?:[\s"')]|$))[^\s"']{8,}/,
   /\b(?:[sr]k_live_[A-Za-z0-9]{20,}|AIza[\w-]{35}|eyJ[\w-]{10,1000}\.eyJ[\w-]{10,}\.)/,
   /\bsb_secret_[A-Za-z0-9_-]{20,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,

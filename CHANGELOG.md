@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+Fixes from the review of 0.10.0. Nothing that was denied now runs.
+
+- Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
+  terraform-guard): a call run through `xargs` or `parallel` has arguments
+  the shell fills in (`printf 'apply -auto-approve' | xargs terraform`,
+  `echo iam delete-role ... | xargs aws`), an `xargs` inside a script a
+  wrapper runs too (`xargs sh -c 'terraform "$@"' sh`); input piped to
+  `source` or `.`, also after `builtin` or `command`, is read as a command
+  line (`echo '...' | source /dev/stdin`); and a pipe goes on past `|&` or a
+  line end (`echo '...' |& bash`). Still not followed: `source <(...)`.
+  Newly denied though harmless: `echo '...' | source /dev/null`.
+- aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
+  denied though harmless: `printf plan | xargs terraform`.
+- secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
+  piped into them (`$env:GITHUB_TOKEN | ConvertTo-Json`).
+- supply-chain-guard 0.5.1: the check for pip handed to python by the shell
+  runs in linear time; a 60 KB line of `$(` took over a second. Its own
+  xargs marking is dropped for the shared parser's.
+- secret-allow-guard 0.6.1: warns again on an `Authorization` value in
+  quotes or a real one in `<>` (`Basic <dXNl...>`), and on a quoted
+  `login` (`docker "login" -p ...`). A placeholder in one case or with
+  `-`/`.` (`<token>`, `<YOUR_TOKEN>`, `<base64-credentials>`) still passes.
+
 ## 0.10.0 (2026-11-24)
 
 Closes every "Still open after the 0.9 pass" item a text guard can close, and

@@ -361,9 +361,10 @@ function handsTo(name: string, args: Args, depth: number): boolean {
   return check !== undefined && (depth > 3 || check(args, depth + 1))
 }
 
-// A second reading that puts a word where the shell would put arguments the guard cannot see: a brace list, xargs' {} and the
-// arguments xargs or parallel append. One character for a brace, so a line of JSON grows by nothing and stays within the parser's limit.
-const marked = (command: string) => command.replace(/(?<!\$)\{(?=\S)/g, MARK).replace(/\b(xargs|parallel)\b[^;|&\n]*/g, `$& ${MARK}`)
+// A second reading that puts a word where the shell would put arguments the guard cannot see: a brace list and xargs' {}. What
+// xargs or parallel append the shared parser marks itself. One character for a brace, so a line of JSON grows by nothing and
+// stays within the parser's limit.
+const marked = (command: string) => command.replace(/(?<!\$)\{(?=\S)/g, MARK)
 
 // A third reading that leaves the mark where each $( ), ( ) and backtick stood, and where a variable is the program: the parser says
 // that a call has a substitution, not where, and the place decides whether it can be the verb or the tool.
@@ -394,12 +395,57 @@ const toolNamed = (command: string) => {
 
 // A fifth: python handed -m or pip by the shell (python $(echo -m pip install x)) is read as python -m pip install.
 // shortcut: text-level, to the end of the command; a parser that kept the substitution's text in place would make this exact.
+// pip or -m inside a substitution, a flag the shell finishes (-$(echo m)), or pip after a word the shell fills ($M pip).
+// The same as /(\$\(|`)[^)`]*(pip|[\s(`]-[a-z]*m)|(^|\s)-[a-z]*(\$|`)|(\$[({\w]|`).*\bpip\b/i, scanned in linear time: as one
+// regex it retried from every opener, and a line of 30,000 `$(` took seconds.
+// A run is an opener and the text after it up to a ) or `; a match for HIDDEN that starts inside one, or on the ) or ` that ends it, counts.
+const RUN = /(?:\$\(|`)[^)`]*/g
+const HIDDEN = /pip|[\s(`]-[a-z]*m/gi
+const FILLED_FIRST = /\$[({\w]|`/g
+const PIP_WORD = /\bpip\b/gi
+const hidesPip = (rest: string) => {
+  // The leftmost match from a run's start: kept while it lies ahead of the next run, so the line is searched once.
+  let found: RegExpExecArray | null | undefined
+
+  for (const run of rest.matchAll(RUN)) {
+    const start = run.index + (run[0].startsWith('`') ? 1 : 2)
+
+    if (found === undefined || (found !== null && found.index < start)) {
+      HIDDEN.lastIndex = start
+      found = HIDDEN.exec(rest)
+    }
+
+    if (found === null) {
+      break
+    }
+
+    if (found.index <= run.index + run[0].length) {
+      return true
+    }
+  }
+
+  if (/(^|\s)-[a-z]*(\$|`)/i.test(rest)) {
+    return true
+  }
+
+  // The old .* stopped at a line terminator other than \n, which `rest` can still hold: the opener and pip share a line.
+  return rest.split(/[\r\u2028\u2029]/).some(line => {
+    FILLED_FIRST.lastIndex = 0
+    const filled = FILLED_FIRST.exec(line)
+
+    if (filled === null) {
+      return false
+    }
+
+    PIP_WORD.lastIndex = filled.index + filled[0].length
+
+    return PIP_WORD.test(line)
+  })
+}
+
 const pythonNamed = (command: string) =>
   command.replace(/(^|[\s;&|(\\/])((?:python|pypy)w?[\d.]*|py)(\.exe)?([ \t][^;&|\n]*)/gi, (all, lead, name, exe = '', rest) =>
-    // pip or -m inside a substitution, a flag the shell finishes (-$(echo m)), or pip after a word the shell fills ($M pip).
-    /(\$\(|`)[^)`]*(pip|(^|[\s(`])-[a-z]*m)|(^|\s)-[a-z]*(\$|`)|(\$[({\w]|`).*\bpip\b/i.test(rest)
-      ? `${lead}${name}${exe} -m pip install ${MARK}`
-      : all,
+    hidesPip(rest) ? `${lead}${name}${exe} -m pip install ${MARK}` : all,
   )
 
 // npm reads npm_config_package_lock (any case, - or _) from the environment: set to anything but true, later installs skip the
