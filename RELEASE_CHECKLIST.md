@@ -1,6 +1,6 @@
 # Release checklist: v0.10.0
 
-Release branch: `release/v0.10.0` (from `origin/main` f422fb3). Draft PR: _not yet opened_.
+Release branch: `release/v0.10.0` (from `origin/main` f422fb3). Draft PR: https://github.com/DustyStudy/claude-code-guardrails/pull/86
 Goal: close every item in the README's "Still open after the 0.9 pass" and every "Known limits"
 item a text guard can close; document the rest with the control that covers it.
 The v0.9.0 checklist is in git history (`git show v0.9.0:RELEASE_CHECKLIST.md`).
@@ -11,16 +11,16 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
-| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | OPEN | |
-| C2 | CI "Mod tests" (Linux) passes on the release PR | OPEN | |
-| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | OPEN | |
-| C4 | Every fixable "Still open" / "Known limits" item is denied (or flagged), with a must-deny test per item | OPEN | |
-| C5 | Every item left open has a one-line reason and its compensating control in the README | OPEN | |
-| C6 | No existing deny relaxed; new false denies listed in the README | OPEN | |
-| C7 | `plugin.json` minor bump for each changed mod; CHANGELOG 0.10.0 section | OPEN | |
-| C8 | `shell.ts` copies byte-identical; fail-closed `.catch` and 4-tool coverage intact | OPEN | |
-| C9 | Hostile security review of the integrated diff; findings fixed or accepted by owner | OPEN | |
-| C10 | README updated (Known limits, Still open, test results) | OPEN | |
+| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at efd86c9, Claude Code 2.1.325: 5,418 pass, 0 fail |
+| C2 | CI "Mod tests" (Linux) passes on the release PR | PASS | PR #86 at efd86c9 |
+| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS | PR #86 at efd86c9 |
+| C4 | Every fixable "Still open" / "Known limits" item is denied (or flagged), with a must-deny test per item | PASS | Each implementer wrote failing tests first; see Integration log |
+| C5 | Every item left open has a one-line reason and its compensating control in the README | PASS | README "Still open after the 0.10 pass" |
+| C6 | No existing deny relaxed; new false denies listed in the README | PASS | Both Opus reviews found no regressions vs f422fb3; harmless denies listed per mod |
+| C7 | `plugin.json` minor bump for each changed mod; CHANGELOG 0.10.0 section | PASS | aws 0.8.0, secret-allow 0.6.0, secret-read 0.6.0, supply-chain 0.5.0, terraform 0.6.0, tf-lint 0.10.0 |
+| C8 | `shell.ts` copies byte-identical; fail-closed `.catch` and 4-tool coverage intact | PASS | `npm test`; a hook timeout (10 s) runs the deny-on-throw `.catch` |
+| C9 | Hostile security review of the integrated diff; findings fixed or accepted by owner | PASS (Fable pending) | Opus x2 + Codex reviews; every confirmed finding fixed with tests. Fable re-review not run (limit until 2026-11-28 16:00 CT): owner call |
+| C10 | README updated (Known limits, Still open, test results) | PASS | efd86c9 |
 | C11 | Merge to `main`, tag `v0.10.0`, GitHub release | BLOCKED | Needs owner approval |
 
 ## Decisions
@@ -64,4 +64,4 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 ## Resume here
 
-Six implementers running. Next: review and merge each branch, `npm test`, hostile review, draft PR.
+All code integrated and verified (C1-C10). Waiting on the owner: Fable re-review now or after the release, and approval for C11 (mark PR #86 ready, squash-merge, tag `v0.10.0`, release, date the CHANGELOG).
