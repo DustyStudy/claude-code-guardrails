@@ -12,8 +12,8 @@
 //   word a quoted substitution is part of ("$(x)" is one word), for a guard that must know what stands before the unread word. A
 //   DYNAMIC at the end is one that stood before the program (sudo $(x) prog).
 // - namedByShell(source): the argument list of every call whose program the shell names, which invocations cannot match by name:
-//   a variable ($NPM, ${NPM}, $env:NPM, "$NPM") or a substitution ($(which npm), "$(x)", ` `), first or as the first such word
-//   after a wrapper (sudo $NPM install x, env $(x) prog). Each list is in invocations(source, binary, true)'s form, the program
+//   a word with a variable in it ($NPM, ${NPM}, $env:NPM, "$NPM", $NPM.exe, $A$B) or a substitution ($(which npm), "$(x)", ` `),
+//   first or as the first such word after a wrapper (sudo $NPM install x, env $(x) prog, env PATH=$P prog). Each list is in invocations(source, binary, true)'s form, the program
 //   word itself left out: `$NPM install x` gives ['install', 'x'], `sudo $(x) terraform plan` ['terraform', 'plan']. Throws Unreadable.
 //   invocations is unchanged: it still passes over a variable first and takes the next word as the program.
 
@@ -32,9 +32,6 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
-
-// A word that is a variable as a whole, so the shell names what it holds: $NPM, ${NPM}, ${NPM:-npm}, $env:NPM.
-const VARIABLE = /^\$(\{.*\}|[\w:]+)$/s
 
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
@@ -697,11 +694,11 @@ const read = (source: string, depth: number, state: State): string[][] => {
 
       add(placed)
 
-      // A program the shell names: a variable first, which LEAD passes over as PowerShell's `$out =` ($NPM install x), or a
+      // A program the shell names: a word starting with a variable first, which LEAD passes over as PowerShell's `$out =` ($NPM install x), or a
       // substitution in the program's place ($(echo npm) install x). Kept for namedByShell, marked by a DYNAMIC first.
       // PowerShell's ( ) there is left out: (terraform plan) runs what is inside it.
       // shortcut: FOO=$(x) npm reads as a substitution in the program's place too; it errs toward a shell-named program.
-      const isNamed = raw.slice(0, from).some((word, i) => VARIABLE.test(word) && !/^[-+*/%]?=/.test(raw[i + 1] ?? ''))
+      const isNamed = raw.slice(0, from).some((word, i) => word.startsWith('$') && !/^[-+*/%]?=/.test(raw[i + 1] ?? ''))
 
       if (isNamed || (shell !== 'powershell' && marks.has(from))) {
         add([DYNAMIC, ...placed])
@@ -790,7 +787,8 @@ export const invocations = (source: string, binary: RegExp, inPlace = false): st
 
 /** The argument list of every call whose program is a variable or a substitution, first or after a wrapper. Throws Unreadable. */
 export const namedByShell = (source: string): string[][] => {
-  const isFilled = (word: string) => word === DYNAMIC || word.includes('\0') || VARIABLE.test(word)
+  // Any variable in the word counts, glued to other text too ($TF.exe, $T$F, TF_CLI_ARGS$A).
+  const isFilled = (word: string) => word.includes('\0') || /\$[\w{]/.test(word)
 
   return commandsOf(source).flatMap(placed => {
     const at =

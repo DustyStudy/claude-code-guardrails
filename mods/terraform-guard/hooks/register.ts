@@ -64,9 +64,29 @@ const isFed = (command: string) => {
   )
 }
 
-// An alias for a terraform program, as bash and PowerShell set one: alias tf=terraform, alias tf='terraform destroy', Set-Alias tf terraform.
-// shortcut: only an alias set in the same command is followed; one from a profile is not.
-const ALIAS = /\b(?:alias\s+(?:-\w+\s+)*([\w.-]+)=|(?:set|new)-alias\s+(?:-name\s+)?([\w.-]+)\s+(?:-value\s+)?)(['"]?)([^'"\n;&|]*)\3/gi
+// What a name set in the same command stands for: an alias (alias tf=terraform, alias -- tf='terraform destroy', Set-Alias, sal,
+// nal, -Name and -Value in any order) or a function (tf() { terraform "$@"; }, function tf { terraform $args }), as its words.
+// shortcut: only one set in the same command is followed; one from a profile or a sourced file is not.
+const BASH_ALIAS = /\balias\s+(?:-\S*\s+)*([\w.-]+)=(?:'([^']*)'|"([^"]*)"|([^\s;&|]*))/gi
+const PS_ALIAS = /\b(?:set-alias|new-alias|sal|nal)\s+([^;\n|&]*)/gi
+const FUNCTION = /(?:\bfunction\s+([\w.-]+)\s*(?:\(\s*\))?|\b([\w.-]+)\s*\(\s*\))\s*\{([^}]*)\}/gi
+const ALL_ARGS = /^\$(@|\*|args)$/i
+
+const named = (command: string): [string, string[]][] => [
+  ...[...command.matchAll(BASH_ALIAS)].map(([, name = '', ...value]): [string, string[]] => [name, value.join(' ').split(/\s+/)]),
+  ...[...command.matchAll(PS_ALIAS)].map(([, rest = '']): [string, string[]] => {
+    const words = rest.replace(/["']/g, '').split(/\s+/).filter(Boolean)
+    const flag = (re: RegExp) => {
+      const at = words.findIndex(word => re.test(word))
+
+      return at < 0 ? undefined : words[at + 1]
+    }
+    const plain = words.filter((word, i) => !word.startsWith('-') && !/^-/.test(words[i - 1] ?? ''))
+
+    return [flag(/^-n(ame?)?$/i) ?? plain[0] ?? '', [flag(/^-v(alue?)?$/i) ?? plain[1] ?? '']]
+  }),
+  ...[...command.matchAll(FUNCTION)].map(([, name, other, body = '']): [string, string[]] => [name ?? other ?? '', body.replace(/["';]/g, ' ').split(/\s+/)]),
+]
 
 // Every call of a terraform program: named itself, or after a launcher, whose quoted argument (npx -c "terraform ...") is split into words.
 // The arguments stay in place, DYNAMIC where the shell fills one in; one that stood before the program is put last.
@@ -76,16 +96,24 @@ const calls = (command: string) => [
     const words = args.flatMap(word => word.split(/\s+/)).filter(Boolean)
     const at = words.findIndex(word => BINARY.test(word))
 
-    return at < 0 ? [] : [[...words.slice(at + 1), ...(words.slice(0, at).some(isUnread) ? [DYNAMIC] : [])]]
+    // A variable before the program can add words too (noglob env $FLAGS terraform apply tfplan).
+    return at < 0 ? [] : [[...words.slice(at + 1), ...(words.slice(0, at).some(word => isUnread(word) || /\$[\w{]/.test(word)) ? [DYNAMIC] : [])]]
   }),
-  // A call of an alias is a call of what it stands for, the words written in the alias first.
-  ...[...command.matchAll(ALIAS)].flatMap(([, bashName, psName, , value = '']) => {
-    const words = value.split(/\s+/).filter(Boolean)
+  // A call of an alias or function is a call of what it stands for: its own words, the call's in place of "$@" or after them. A
+  // function's definition (tf() { ... }) is no call of it.
+  ...named(command).flatMap(([name, value]) => {
+    const words = value.filter(Boolean)
     const at = words.findIndex(word => BINARY.test(word))
-    const name = (bashName ?? psName ?? '').replace(/[.]/g, '\\.')
+    const rest = words.slice(at + 1)
 
-    return at < 0 ? [] : invocations(command, new RegExp(`^${name}$`, 'i'), true).map(args => [...words.slice(at + 1), ...args])
+    return at < 0 || name === ''
+      ? []
+      : invocations(command.replace(FUNCTION, ' '), new RegExp(`^${name.replace(/[^\w-]/g, '\\$&')}$`, 'i'), true).map(args =>
+          rest.some(word => ALL_ARGS.test(word)) ? rest.flatMap(word => (ALL_ARGS.test(word) ? args : [word])) : [...rest, ...args],
+        )
   }),
+  // A program the shell names ($TF destroy) gets every check a written one does, once it has an apply or destroy.
+  ...namedByShell(command).filter(args => args.some(word => VERB.test(word))),
 ]
 
 type Inherited = { all?: string; apply?: string; destroy?: string }
@@ -105,11 +133,6 @@ const refusal = (command: string, env: Inherited = {}): string | undefined => {
     // (env $(echo TF_CLI_ARGS=-auto-approve) terraform apply tfplan): any terraform call after one is denied.
     if (args.some(word => BINARY.test(word.replaceAll('\0', '')))) {
       return `a $VAR or $( ) before terraform, under a wrapper or as the program, can add its arguments or subcommand. Write it out. ${HOW}`
-    }
-
-    // A program named by a variable or a substitution may be terraform: TF=terraform; $TF destroy -auto-approve.
-    if (args.some(word => VERB.test(word)) && args.some(word => /^--?auto-approve(=.*)?$/.test(word) && !/=(0|f|false)$/i.test(word))) {
-      return `-auto-approve is not allowed on ${args.find(word => VERB.test(word))} of a program the shell names. ${HOW}`
     }
   }
 
