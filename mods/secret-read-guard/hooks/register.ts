@@ -568,15 +568,58 @@ const yieldsSecret = (text: string, next = '') => {
 // A hashtable handed to a parameter (irm $u -Headers @{ 'Authorization' = "Bearer $env:TOKEN" }) or assigned ($h = @{ ... })
 // is used, not printed: its contents are blanked. One alone as a statement, piped on, or in a writer's call is read.
 // One pass over the text, a stack of braces: linear.
+// An assignment prints nothing only where it is a statement: at the start of one, in $( ) or @( ), or itself assigned so
+// ($x = ($h = @{ ... }), $x = $h = @{ ... }). In grouping parentheses it prints what it assigns: ($h = @{ ... }).a,
+// [void]($h = ...), "{0}" -f ($h = ...).a, a ( on the line before. Read backwards from @{ over the 200 characters before it:
+// the targets ($h, [type]$h, $h.k, $h['k'], $h, $g) and their = , then what comes before them. A target cut off by the 200,
+// or a comment before it, is read. Anchored at @{, so each brace reads at most 200 characters.
+const ASSIGN_REVERSED = String.raw`=(?:\?\?|[-+*/%])?(?![=!<>])`
+const TARGET_REVERSED = String.raw`(?:\][^[\n]*\[|\w+\.)*[\w:]+\$(?:\s*\][\w.]+\[)*`
+const TARGETS_REVERSED = String.raw`(?:\s*${TARGET_REVERSED}\s*,)*\s*${TARGET_REVERSED}`
+const SILENT_REVERSED = new RegExp(
+  String.raw`^@\s*${ASSIGN_REVERSED}${TARGETS_REVERSED}(?:[ \t]*\(?\s*${ASSIGN_REVERSED}${TARGETS_REVERSED})*[ \t]*(?:[;{&]|\([$@]|(\n))`,
+)
+// parens: the open ( and braces, true for a ( whose contents are printed.
+const isSilentAssignment = (text: string, i: number, parens: readonly boolean[]) => {
+  // The text's own start reads as a line's.
+  const match = SILENT_REVERSED.exec(`${i > 200 ? text.slice(i - 200, i) : `\n${text.slice(0, i)}`}`.split('').reverse().join(''))
+  // At a line's start, the ( open around the assignment (past those the targets were read through) must not group.
+  const crossed = (match?.[0].match(/\(/g)?.length ?? 0) - (match?.[0].match(/\)/g)?.length ?? 0)
+
+  return match !== null && (match[1] === undefined || parens.at(-1 - crossed) !== true)
+}
+// PowerShell's operators look like parameters: "{0}" -f @{ ... }.a and -join @{ ... }.Values print what the table holds.
+const PARAM_TABLE =
+  /(?<![\w-])-(?!(?:[ic]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|join|f|as|is|isnot|and|or|xor|not|band|bor|bxor|bnot|shl|shr)(?![\w-]))\w+:?\s*@$/i
 const PRINTER_WORD = /^[ \t(]*(?:echo|printf|write|write-\w+|out-\w+|format-\w+)(?![\w-])/i
 const usedTables = (text: string) => {
   const chars = text.split('')
-  // Each open brace: whether its contents are a used table's (inherited by the braces inside it).
-  const stack: boolean[] = []
+  // Each open brace: true if its contents are a used table's (inherited by the braces inside it), 'table' for a printed @{ }.
+  const stack: (boolean | 'table')[] = []
+  // Parentheses in quotes or comments are text.
+  const isText = new Array<boolean>(text.length).fill(false)
+  for (const { index = 0, 0: part } of text.matchAll(QUOTED)) {
+    isText.fill(!isEscape(part), index, index + part.length)
+  }
+  const parens: boolean[] = []
+  let comment: '' | '#' | '<#' = ''
   let start = 0
   let isPrinter: boolean | undefined
 
   chars.forEach((char, i) => {
+    if (comment === '#' ? char === '\n' : comment === '<#' && char === '>' && text[i - 1] === '#') {
+      comment = ''
+    } else if (!comment && !isText[i] && stack.at(-1) !== true) {
+      if (char === '#') {
+        comment = text[i - 1] === '<' ? '<#' : /^\s?$/.test(text[i - 1] ?? '') ? '#' : ''
+      } else if (char === '(') {
+        // $( ), @( ) and an assigned $x = ( ) print nothing of an assignment in them.
+        parens.push(!/[$@]/.test(text[i - 1] ?? '') && !/(?<![=!<>])=[ \t]*$/.test(text.slice(Math.max(0, i - 20), i)))
+      } else if (char === ')') {
+        parens.pop()
+      }
+    }
+
     if (/[;\n&|]/.test(char) && stack.at(-1) !== true) {
       start = i + 1
       isPrinter = undefined
@@ -584,13 +627,19 @@ const usedTables = (text: string) => {
       isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40))
       // The 40 characters before @{ are enough to see -Param or = : anchored at their end, they are read once per brace.
       const before = text.slice(Math.max(start, i - 40), i)
-      const isUsed = !isPrinter && /(?:(?<![\w-])-\w+:?|(?<![=!<>])=)\s*@$/.test(before)
+      // A table that is a printed table's value (@{ 'a' = @{ ... } }) is printed with it.
+      const isUsed = !isPrinter && stack.at(-1) !== 'table' && (PARAM_TABLE.test(before) || isSilentAssignment(text, i, parens))
 
-      stack.push((stack.at(-1) ?? false) || isUsed)
+      stack.push(stack.at(-1) === true || isUsed ? true : text[i - 1] === '@' ? 'table' : false)
+      parens.push(false)
     } else if (char === '}') {
       stack.pop()
+      parens.pop()
     } else if (stack.at(-1) === true) {
       chars[i] = char === '\n' ? '\n' : ' '
+    } else if (stack.at(-1) === 'table' && char === '=') {
+      // A printed table's key = value is printed with it: the value is read as a statement of its own, @{a=$env:TOKEN} too.
+      chars[i] = ';'
     }
   })
 

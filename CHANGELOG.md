@@ -54,6 +54,19 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
   piped into them (`$env:GITHUB_TOKEN | ConvertTo-Json`).
+- secret-read-guard 0.6.3: an assignment in grouping parentheses prints the
+  value it assigns, so its hashtable is read, not skipped as used
+  (`($h = @{a=$env:GITHUB_TOKEN})`, `($h = @{...}).a`, `$(($h = @{...}))`,
+  `($x = $h = @{...})`, a `(` on the line above, past a comment too). A
+  hashtable after `-f` or `-join` is read (`'{0}' -f @{a=$env:GITHUB_TOKEN}.a`),
+  as are a printed hashtable's key with no quotes (`@{a=$env:GITHUB_TOKEN}`)
+  and a hashtable that is a printed one's value (`@{x=@{b=$env:GITHUB_TOKEN}}`).
+  `$h = @{...}`, `$x = ($h = @{...})`, `$x = $h = @{...}`, `$($h = @{...})`
+  and `-Headers @{...}` still run. Newly denied though harmless:
+  `[void]($h = @{...})`, `($h = @{...}) | Out-Null`, `$x = (($h = @{...}))`,
+  `-Headers ($h = @{...})`, `$o = [pscustomobject]@{a=$env:GITHUB_TOKEN}` (its
+  quoted-key form was already denied), an assignment after a comment on its
+  line (`<# x #> $h = @{...}`), and a target over 200 characters long.
 - supply-chain-guard 0.5.1: the check for pip handed to python by the shell
   runs in linear time; a 60 KB line of `$(` took over a second. Its own
   xargs marking is dropped for the shared parser's.
