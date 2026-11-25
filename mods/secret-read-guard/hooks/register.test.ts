@@ -871,7 +871,9 @@ for (const [tool, command, isAllowed] of ON_DISK) {
     const started = Date.now()
     world(on)
     on('fs.list', (_, e) => {
-      const names = LISTED[e.path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()]
+      // On Linux and macOS the engine reads C:\repos\app as a relative path and puts its own folder in front.
+      const path = e.path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+      const names = LISTED[Object.keys(LISTED).find(dir => path === dir || path.endsWith(dir.slice(2))) ?? '']
 
       if (names === undefined) {
         throw new Error('ENOENT')

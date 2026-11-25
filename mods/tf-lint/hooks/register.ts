@@ -165,11 +165,15 @@ const kmsFindings = (text: string): string[] => {
 
   // Terraform reads a label without its quotes too: resource aws_kms_key logs {.
   for (const body of bodiesOf(text, /resource\s+"?aws_kms_key"?\s+"?[\w-]*"?/)) {
-    const spec = /\b(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body)?.[2] ?? 'SYMMETRIC_DEFAULT'
-    const window = /\bdeletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body)
+    // Preserve offsets so quoted setting values can be read after locating real assignments.
+    const settings = eachString(body, quoted => ' '.repeat(quoted.length))
+    const specAt = settings.search(/\b(customer_master_key_spec|key_spec)\s*=/)
+    const windowAt = settings.search(/\bdeletion_window_in_days\s*=/)
+    const spec = specAt < 0 ? 'SYMMETRIC_DEFAULT' : /^(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body.slice(specAt))?.[2] ?? 'SYMMETRIC_DEFAULT'
+    const window = windowAt < 0 ? null : /^deletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body.slice(windowAt))
 
     // Only symmetric encryption keys rotate.
-    if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(body)) {
+    if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(settings)) {
       found.push('creates a KMS key without enable_key_rotation = true')
     }
 

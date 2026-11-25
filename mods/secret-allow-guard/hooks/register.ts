@@ -9,8 +9,8 @@ const SECRET = [
   // A value stops at `)` and `:`, which close a rule (`Bash(mysql -p)`, `Bash(mysql -p:*)`).
   /\bsshpass\b[^;&|]{0,400}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\b(?:mysql|mariadb)\w*\b[^;&|]{0,400}\s-p["']?(?!\$)[^\s"'):]/,
-  // A whole port mapping (`docker run --name login-proxy -p 8080:80`) is not a password.
-  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\blogin\b[^;&|]{0,200}\s-p\s*["']?(?!\$|(?:[\d.]{1,15}:)?\d{1,5}:\d{1,5}(?:\/(?:tcp|udp))?(?:[\s"')]|$))[^\s"'):]/,
+  // login must be a whole word, not part of a container name such as login-proxy.
+  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\slogin(?=\s)[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\bredis-cli\b[^;&|]{0,400}\s-a\s*["']?(?!\$)[^\s"'):]/,
   // -u user:password; `:*` ends a rule (`Bash(curl -u admin:*)`).
   /\b(?:curl|wget)\b[^;&|]{0,400}\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
@@ -37,9 +37,8 @@ const SECRET = [
   // user:password@host in a connection string or URL.
   /[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@"']+:(?!\$)[^\s@"'/]+@/i,
   // No leading \b, so a compound name like SUPABASE_SECRET_KEY= counts; a bare pass needs one (DB_PASS=, not bypass=).
-  // Three shapes pass, each only with a value of its own kind: PWD (the whole name) and a name ending _FILE with a path,
-  // a name ending _ENDPOINT with an http(s) url, and any name with the one word `bearer` (token_type=bearer).
-  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|(?!(?<![a-z0-9_])pwd\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/]))pwd|secret|token|api[_-]?key|access[_-]?key)(?!(?:_[a-z]{1,30}){0,5}_(?:file\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/])|endpoint\s*[=:]\s*["']?https?:\/\/))(?:_[a-z]{1,30}){0,6}\s*[=:]\s*["']?(?!\$|bearer(?:[&\s"')]|$))[^\s"',;)]{6,}/i,
+  // Only a whole PWD entry or a name ending _FILE exempts a path; only token_type exempts bearer.
+  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|(?!^pwd\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/]))pwd|secret|(?!(?<![a-z0-9_])token_type\s*[=:]\s*["']?bearer(?:[&\s"')]|$))token|api[_-]?key|access[_-]?key)(?!(?:_[a-z]{1,30}){0,5}_file\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/]))(?:_[a-z]{1,30}){0,6}\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
 ]
 
 const record = (value: unknown): Record<string, unknown> =>

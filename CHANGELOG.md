@@ -20,9 +20,10 @@ line says which.
   `-WhatIf` no longer allows a cmdlet in a command that holds a here-string.
 - secret-allow-guard 0.5.0: a settings file that does not parse as JSON is also
   scanned with its args joined, so a secret after a flag (`"args":["--api-key","…"]`)
-  is found. No longer flagged: a port mapping after the word login (`-p 8080:80`),
-  `token_type=bearer`, `*_FILE` and `PWD` with a path, `*_ENDPOINT` with an http(s)
-  url, and an `Authorization: Bearer <placeholder>` value.
+  is found. No longer flagged: a port mapping in a container named like
+  `login-proxy` (`login` now counts only as the subcommand), `token_type=bearer`,
+  `*_FILE` and a whole `PWD` entry with a path, and an
+  `Authorization: Bearer <placeholder>` value.
 - secret-read-guard 0.5.0: denies a credential variable printed as `${NAME}` or
   through a member call (`$env:GITHUB_TOKEN.ToString()`), a file read by a quoted
   substitution (`echo "$(<.env)"`), `kubectl get Secret` in any case, a credential
@@ -45,7 +46,8 @@ line says which.
   `\;`, `TF_CLI_ARGS` written with escapes, quotes or a shell-filled value, a
   substitution before the subcommand (`terraform -chdir=$(pwd) validate`; quote it),
   and `>|` / `&>` redirections. No longer denies a destroy after an unrelated pipe
-  that ended at a `;` or newline.
+  that ended at a `;` or newline, unless the command defines a function or holds a
+  `{ }` group or `( )` subshell, which can take a later pipe's input.
 - tf-lint 0.9.0: denies a secret key assigned through an index or a call
   (`os.environ[...]`, `props.put(...)`) or under a heredoc or block scalar, and a
   secret in a command that writes with `sed -i`, `perl -i`, `New-Item`, `sc`/`ac`/`ni`,
@@ -53,7 +55,9 @@ line says which.
   `writeFileSync`) or `git config`. No longer denies lower-case words starting
   `asia`/`akia` or Slack bot/user placeholders with no digit after the dash, no
   longer warns on `dynamic "egress"` or `egress = true`, and no longer cuts a line
-  at a `#` or `//` inside a double-quoted string.
+  at a `#` or `//` inside a double-quoted string. A KMS key's rotation, deletion
+  window and key spec are read outside quoted strings, so a description cannot
+  stand in for them.
 - Development: tests run on Claude Code 2.1.325 (was 2.1.322), the stable release
   the managed-settings baseline's minimum (2.1.324) accepts.
 

@@ -49,10 +49,13 @@ const ENDS = /[ \t]*(?!(?:while|until|if|for|case|select|do|then|else|elif|time|
 // Each pipe is read once from where it stands, not the rest of the command from every pipe.
 const isFed = (command: string) => {
   const lastDestroy = [...command.matchAll(DESTROY)].at(-1)?.index ?? -1
+  // Functions and groups can inherit stdin from a pipe anywhere in the command.
+  const grouped = /[{}()]|\bfunction\s+\w+/.test(command)
 
   return (
     command.includes('<') ||
     [...command.matchAll(PIPE)].some(pipe => {
+      if (grouped) return true
       ENDS.lastIndex = pipe.index + 1
       const plain = ENDS.exec(command)
 

@@ -148,6 +148,10 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform apply -lock-timeout 60s tfplan', true],
   // An approval fed to destroy is -auto-approve by another name; so is the flag set in the environment any other way.
   ['echo yes | terraform destroy', false],
+  ["f() { true | cat; terraform destroy; }; printf 'yes\\n' | f", false],
+  ["function f { true | cat; terraform destroy; }; printf 'yes\\n' | f", false],
+  ["printf 'yes\\n' | (true | cat; terraform destroy)", false],
+  ["printf 'yes\\n' | { true | cat; terraform destroy; }", false],
   ["'yes' | terraform destroy -target=aws_instance.x", false],
   ['yes | (cd stack && terraform destroy)', false],
   ['terraform destroy <<< yes', false],

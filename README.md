@@ -294,17 +294,17 @@ fails if the copies drift apart.
 ### Latest test results
 
 0.9.0 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
-release), `npm test`: all 6 mods pass, 4,500 tests, 0 failures; the four
+release), `npm test`: all 6 mods pass, 4,523 tests, 0 failures; the four
 `shell.ts` copies match.
 
 | Mod | Tests |
 |---|---|
 | aws-guard | 1,050 |
-| secret-allow-guard | 134 |
+| secret-allow-guard | 143 |
 | secret-read-guard | 1,609 |
 | supply-chain-guard | 490 |
-| terraform-guard | 571 |
-| tf-lint | 646 |
+| terraform-guard | 579 |
+| tf-lint | 652 |
 
 The tests run each guard through Claude Code's engine with mocked tool
 calls and a mocked file listing. secret-read-guard's folder listing was also
@@ -379,7 +379,8 @@ when it would be worth lifting.
   substitution or variable after it denies. `-WhatIf` is not honoured in a
   command that contains a here-string.
 - **terraform-guard** denies a destroy fed by a pipe, unless a plain command
-  and a `;` or newline end the pipe first. It denies an unquoted substitution
+  and a `;` or newline end the pipe first and the command defines no function
+  and holds no `{ }` or `( )`. It denies an unquoted substitution
   before the subcommand (`terraform -chdir=$(pwd) validate`; quote it), and a
   `$`, backtick or `{` anywhere in a command that sets `TF_CLI_ARGS` before an
   apply or destroy.
@@ -463,10 +464,9 @@ when it would be worth lifting.
   file in every repo on the machine, including ones cloned later, with
   `git config --global core.excludesfile ~/.gitignore_global` and
   `.claude/settings.local.json` as a line in that file. It passes a `*_FILE`
-  or `PWD` value that starts like a path, a `*_ENDPOINT` value that is an
-  http(s) url, a docker login `-p` value shaped like a port mapping, and the
-  values `bearer` and `<placeholder>`; a secret of exactly one of those shapes
-  is not flagged unless it has a known key format.
+  value or a whole `PWD` entry that starts like a path, `token_type=bearer`,
+  and a `Bearer <placeholder>`; a secret of exactly one of those shapes is not
+  flagged unless it has a known key format.
 
 ### Still open after the 0.9 pass
 
@@ -495,7 +495,8 @@ reproduced; most need the parser to expand variables, which it does not.
   credential-name read after `cd $VAR` or `cd "$(…)"`, and `cat .env.ex*` and
   `cat config.*`, which could match a real credential file.
 - **secret-allow-guard.** A flag such as `--token enabled-mode` in MCP args is
-  flagged: a word cannot be told from a passphrase.
+  flagged: a word cannot be told from a passphrase. `TOKEN_ENDPOINT` with a
+  plain url is flagged, since a signed url (`?sig=…`) holds a credential.
 - **tf-lint.** `python -c "print(KEY, file=open(...))"`, `Set-Item`, a `cp` or
   `mv` of a generated file, and a key transformed in the command (upper-cased,
   base64) pass.

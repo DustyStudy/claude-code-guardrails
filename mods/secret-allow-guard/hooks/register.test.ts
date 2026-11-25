@@ -59,6 +59,11 @@ const IGNORED = { 'ls-files': 1, 'check-ignore': 0 }
 
 // rule, then whether it reads as a literal secret
 const RULES: readonly (readonly [string, boolean])[] = [
+  ['Bash(docker login registry.example.com -u deploy -p 49152:32768)', true],
+  ['Bash(podman login registry.example.com -u deploy -p 49152:32768)', true],
+  ['Bash(nerdctl login registry.example.com -u deploy -p 49152:32768)', true],
+  ['Bash(helm registry login registry.example.com -u deploy --password 49152:32768)', true],
+  ['Bash(docker run --name login-proxy -p 8080:80)', false],
   ['Bash(PGPASSWORD=hunter2pw psql -h db.example.com -U app)', true],
   ['Bash(sshpass -p rootpass ssh root@203.0.113.7)', true],
   ['Bash(mysql -u root -pS3cretpw -h db.example.com)', true],
@@ -244,6 +249,9 @@ const MCP = '/repo/.mcp.json'
 
 // a file strict JSON rejects, or a name-based secret in one; then whether it is flagged
 const BROKEN: readonly (readonly [string, string, boolean])[] = [
+  ['a slash-prefixed PWD inside a connection string', '{"env":{"DB_CONNECTION":"Server=db;UID=app;PWD=/7Xq9mR2vL5sN8pK4;"}}', true],
+  ['a signed TOKEN_ENDPOINT', '{"env":{"TOKEN_ENDPOINT":"https://vault.example.com/access?sig=V3yG7mQ2kL9pN4sR8zX6"}}', true],
+  ['bearer as DB_PASSWORD', '{"env":{"DB_PASSWORD":"bearer"}}', true],
   ['a BOM', `﻿{"env":{"DB_PASSWORD":"${PASSWORD}"}}`, true],
   ['a trailing comma', `{"env":{"DB_PASSWORD":"${PASSWORD}",}}`, true],
   ['a BOM and a trailing comma', `﻿{"env":{"MYSQL_PWD":"${PASSWORD}"},}`, true],
@@ -291,9 +299,10 @@ const SERVERS: readonly (readonly [string, Record<string, unknown>, number])[] =
   ['token_type=bearer then a token in the url', { type: 'http', url: `https://mcp.example.com/mcp?token_type=bearer&token=${API_KEY}` }, 1],
   ['a token that starts with bearer', { type: 'http', url: `https://mcp.example.com/mcp?token=bearer-${API_KEY}` }, 1],
   ['a token that starts with bearer and no dash', { type: 'http', url: `https://mcp.example.com/mcp?access_token=bearer${API_KEY}` }, 1],
-  ['file, endpoint and folder names', { command: 'npx', env: { TOKEN_FILE: '/run/secrets/token', PASSWORD_FILE: 'C:\\secrets\\pw.txt', API_TOKEN_FILE: '~/.config/token', TOKEN_ENDPOINT: 'https://auth.example.com/oauth/token', PWD: '/home/me/project' } }, 0],
+  ['file and folder names', { command: 'npx', env: { TOKEN_FILE: '/run/secrets/token', PASSWORD_FILE: 'C:\\secrets\\pw.txt', API_TOKEN_FILE: '~/.config/token', PWD: '/home/me/project' } }, 0],
   ['a secret under TOKEN_FILE', { command: 'npx', env: { TOKEN_FILE: PASSWORD } }, 1],
   ['a secret under PASSWORD_FILE', { command: 'npx', env: { PASSWORD_FILE: API_KEY } }, 1],
+  ['an ordinary TOKEN_ENDPOINT url', { command: 'npx', env: { TOKEN_ENDPOINT: 'https://auth.example.com/oauth/token' } }, 1],
   ['a secret under TOKEN_ENDPOINT', { command: 'npx', env: { TOKEN_ENDPOINT: PASSWORD } }, 1],
   ['a password in a TOKEN_ENDPOINT url', { command: 'npx', env: { TOKEN_ENDPOINT: `https://user:${PASSWORD}@auth.example.com/token` } }, 1],
   ['a key in a TOKEN_ENDPOINT url', { command: 'npx', env: { TOKEN_ENDPOINT: `https://auth.example.com/token?api_key=${API_KEY}` } }, 1],
