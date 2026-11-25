@@ -40,6 +40,17 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   quotes or a real one in `<>` (`Basic <dXNl...>`), and on a quoted
   `login` (`docker "login" -p ...`). A placeholder in one case or with
   `-`/`.` (`<token>`, `<YOUR_TOKEN>`, `<base64-credentials>`) still passes.
+- aws-guard 0.8.3: checks a program the shell names (`$AWS`, `${AWS:-aws}`,
+  `"$AWS"`, `$(which aws)`, `& $aws`, `xargs -IX X`) like a written `aws`
+  once a word names a guarded service or a filled-in word stands before a
+  denied operation (`$AWS $SVC delete-role`); dry runs, `help` and reads
+  (`$AWS s3 ls`) still run. Newly denied though harmless: any other program
+  named by a variable with a guarded service's name among its arguments and
+  a filled-in word among its first two (`$G grep "$PAT" iam`). Still not
+  followed: an unquoted `$( )` right after the program (`$(which aws)
+  $(echo iam) delete-role`). Inline code attached to its flag
+  (`python -c"..."`, `-Ic'...'`, `node -e"..."`, `-pe'...'`,
+  `--eval=...`) is read for SDK calls, as code after `-c ` was.
 
 ## 0.10.0 (2026-11-24)
 

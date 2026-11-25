@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { DYNAMIC, invocations, unreadable } from './shell'
+import { DYNAMIC, invocations, namedByShell, unreadable } from './shell'
 
 const BINARY = /^(.*[\\/])?aws(\.exe|\.cmd)?$/i
 // The AWS CLI's container image, which takes the call as the binary does: docker run amazon/aws-cli iam delete-role.
@@ -473,7 +473,13 @@ const denied = (command: string, depth = 0): string | undefined => {
   }
 
   for (const text of new Set([command, marked])) {
-    const cli = invocations(text, BINARY).map(args => mutation(args, valued)).find(Boolean)
+    // A program the shell names ($AWS, $(which aws)) is read as aws once a word names a guarded service, or a filled-in word stands
+    // before a denied operation ($AWS $SVC delete-role); other programs ($EDITOR "$FILE") pass. PowerShell's array is one word: & $a @('iam','delete-role').
+    // shortcut: an unquoted $( ) right after the program ($(which aws) $(echo iam) delete-role) is lost by the parser and runs.
+    const shellNamed = namedByShell(text).filter(args =>
+      args.some((word, i) => word.split(',').some(part => GUARDED.has(part)) ||(FILLED.test(args[i - 1] ?? '') && [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(word)))),
+    )
+    const cli = [...invocations(text, BINARY), ...shellNamed].map(args => mutation(args, valued)).find(Boolean)
     if (cli !== undefined) {
       return `aws ${cli}`
     }
@@ -547,7 +553,8 @@ const throughVariables = (command: string): string | undefined => {
 const INTERPRETER = /(?<![\w.-])(i?python[\d.]*|py|node|deno|bun|pwsh|powershell|ruby)(\.exe)?(?=[\s"'`]|$)/gi
 // An interpreter runs code from the command line: an inline-code flag, clustered or not (python -Ic, node -pe, pwsh -Command),
 // deno eval, or stdin (`-`, a heredoc, a pipe into it).
-const INLINE_FLAG = /^(-\w*[cep]\w*|--eval|--print|-|eval)$/i
+// The code may be attached to the flag (-c"...", -Ic'...', node -pe'...', --eval=...), so only the flag's start is matched.
+const INLINE_FLAG = /^(-\w*[cep]|--(eval|print)(=|$)|-$|eval$)/i
 const SDK = /boto3|botocore|aws-sdk|AWSSDK|\bAmazon\.\w/i
 
 const runsInlineCode = (command: string): boolean | undefined => {
