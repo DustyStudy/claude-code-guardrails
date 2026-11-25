@@ -36,7 +36,7 @@ const WRITE_VERB =
 const r = String.raw
 // The operations denied, by AWS CLI service: what turns off logging or detection, opens S3 to the public, changes who can do what
 // in IAM or KMS, or destroys data that IAM often allows. Creating and deploying (create-role, put-object, run-instances) pass.
-// shortcut: the AWS CLI and AWS Tools for PowerShell; SDK scripts and cmdlets called through a variable pass, upgrade if those come into use.
+// shortcut: an SDK script file and a cmdlet name only known at run time pass (see sdkCall and throughVariables); upgrade if those come into use.
 // shortcut: a list of known calls, not a read allowlist, so a service or operation not named here runs; add the row when one bites.
 const OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // Any Organizations call but a read.
@@ -60,8 +60,14 @@ const OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // IAM Identity Center: any call but a read hands out account access; its directory's users and groups are who gets it.
   'sso-admin': [r`(?!describe-|list-|get-|help$)[a-z][\w-]*`],
   identitystore: [r`(create|update|delete)-[\w-]+`],
-  // A trust anchor or profile lets any certificate the anchor signs take a role.
-  rolesanywhere: ['(create|update|enable)-(trust-anchor|profile)'],
+  // A trust anchor or profile lets any certificate the anchor signs take a role; a CRL is what revokes one, and an attribute
+  // mapping decides which session tags a certificate sets.
+  rolesanywhere: [
+    '(create|update|enable)-(trust-anchor|profile)',
+    r`delete-[\w-]+`,
+    '(import|update|enable|disable)-crl',
+    'put-attribute-mapping',
+  ],
   // Writes a CSV's static keys into the credentials file.
   configure: ['import'],
   kms: [
@@ -152,7 +158,7 @@ const CMDLET_NAME = [
   r`(Publish|Update)-IAM(SSHPublicKey|SigningCertificate)`,
   // Identity Center's admin cmdlets but Get; the identity store's writes, by full noun (Find- and Assert-IDS* are reads).
   r`(?!Get-)[a-z]+-SSOADMN\w+|(New|Update|Remove)-IDS(User|Group(Membership)?|IdentityStore)`,
-  r`(New|Update|Enable)-IAMRA(TrustAnchor|Profile)`,
+  r`(New|Update|Enable)-IAMRA(TrustAnchor|Profile)|(Import|Update|Enable|Disable)-IAMRACrl|Write-IAMRAAttributeMapping`,
   r`Update-IAMAccountPasswordPolicy|(?!Get-)[a-z]+-IAM\w{0,40}(SAML|OpenIDConnect)Provider\w{0,40}`,
   r`Request-KMSKeyDeletion|Remove-KMSImportedKeyMaterial|Disable-KMSKey(Rotation)?|Write-KMSKeyPolicy`,
   r`(New|Revoke|Disable)-KMSGrant|(Remove|Disconnect)-KMSCustomKeyStore`,
@@ -512,6 +518,62 @@ const denied = (command: string, depth = 0): string | undefined => {
   })?.[1]
 }
 
+// A call through a variable (& $c, & ($c), . $c) that the same command sets to a name: read again with the name written in its
+// place, so a cmdlet denied by its arguments (Stop-EC2Instance -Terminate) is read with them. An assignment's name the parser
+// already reads as a call. shortcut: a name only known at run time (& $cmd alone, a name built from parts) is not followed.
+const CALL_THROUGH = /&\s*\(?\s*\$|(^|[;{\n])\s*\.\s+\(?\s*\$/
+const ASSIGNED_NAME = /\$([\w:]+)\s*=\s*(["'])([\w.\\-]+)\2/g
+
+const throughVariables = (command: string): string | undefined => {
+  if (!CALL_THROUGH.test(command)) {
+    return undefined
+  }
+
+  const assigned = [...command.matchAll(ASSIGNED_NAME)]
+
+  if (assigned.length > MOST) {
+    return `a call through a variable ${TOO_LONG}`
+  }
+
+  const text = assigned.reduce(
+    (text, [, name = '', , value = '']) => text.replace(new RegExp(r`\$${name}(?![\w:])(?!\s*=)`, 'g'), () => value),
+    command,
+  )
+
+  return text === command ? undefined : denied(text)
+}
+
+// Inline code an interpreter runs (python -c, node -e, pwsh -c) that loads an AWS SDK, read from that flag to the command's end.
+const INLINE = /(?<![\w.-])(py|python[\d.]*|node|deno|bun|pwsh|powershell|ruby)(\.exe)?\s[^;|&\n]*?(?<=\s)(-c\w*|-e|-p|--eval|--print)(?=[\s"'=])/i
+const SDK = /boto3|botocore|aws-sdk|AWSSDK|\bAmazon\.\w/i
+// The SDKs name a CLI operation delete_role (Python), deleteRole (JavaScript v2), DeleteRoleCommand (v3) or DeleteRoleAsync (.NET).
+// Organizations and Identity Center deny every word, and configure has no SDK call, so they are left out here.
+// shortcut: inline code only, by the deny list's operation names; a script file, and code built at run time, pass.
+const sdkCall = (command: string): string | undefined => {
+  const at = command.match(INLINE)?.index
+  const code = at === undefined ? '' : command.slice(at)
+
+  if (!SDK.test(code)) {
+    return undefined
+  }
+
+  for (const [identifier] of code.matchAll(/[A-Za-z][\w]*/g)) {
+    const operation = identifier
+      .replace(/(Command|Async|Request)$/, '')
+      .replace(/_/g, '-')
+      .replace(/([a-z\d])([A-Z])/g, '$1-$2')
+      .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+      .toLowerCase()
+    const isDenied = (service: string, operations: RegExp) => !ANY_WRITE.has(service) && service !== 'configure' && operations.test(operation)
+
+    if (operation.includes('-') && [...DENIED].some(([service, operations]) => isDenied(service, operations))) {
+      return `the AWS SDK's ${identifier}`
+    }
+  }
+
+  return undefined
+}
+
 // Every tool that hands a command line to a shell: Monitor runs it like Bash, the desktop app's terminal tool types it into the user's shell.
 const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
 // shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
@@ -528,7 +590,7 @@ export const register: Register = on => {
       return { deny: `${$.plugin.name}: ${why}, so it is not run unread. Give the user the exact command to run themselves with the \`!\` prefix.` }
     }
 
-    const call = denied(command)
+    const call = denied(command) ?? throughVariables(command) ?? sdkCall(command)
 
     return call === undefined
       ? next(e)
