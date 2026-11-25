@@ -41,6 +41,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | 1cb6b58, 3d3cb7f | aws-guard 0.8.3: shell-named program (C4) and attached inline-code flag (F3); a shell-named call led by a denied operation (`$(which aws) $(echo iam) delete-role`) | aws-guard 1,330 pass; full `npm test` in the implementer's worktree exit 0 |
 | 9c75ae3 | Shared parser (F1, F2): xargs/parallel long-option prefixes, `source` after prefix keywords, linear `SOURCE_LINE`; terraform 0.6.3, supply-chain 0.5.3 | Full `npm test` at 9c75ae3: aws 1,330 / secret-allow 176 / secret-read 1,950 / supply-chain 698 / terraform 828 / tf-lint 790, 0 fail, copies match |
+| 044d8ad, afd534a, 092516b | Parser F6 (function/alias sourcing input), supply-chain F5 (marked verb), secret-read 0.6.3 F4 (parenthesized assignment) | Full `npm test` at 092516b: aws 1,330 / secret-allow 176 / secret-read 2,100 / supply-chain 762 / terraform 870 / tf-lint 790, 0 fail, copies match |
 
 ## Security review log
 
@@ -61,6 +62,13 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
     a wrapper's script (`echo install | xargs -Ici sh -c 'npm ci evil'`). OPEN
   - Pre-existing, fixed in 9c75ae3: `SOURCE_LINE` backtracked exponentially (`'> -x '` x24 = 638 ms; 60 KB
     never finished). A hook timeout runs the deny `.catch`, so it failed closed, but long lines were unusable.
+  - F8 secret-read-guard (pre-existing, found by the F4 implementer): `$x = @{a=$env:GITHUB_TOKEN}.a | Write-Host`
+    prints the credential (assigned table blanked before the printer check). OPEN
+  - F9 secret-read-guard (pre-existing): a table given to a printing cmdlet's parameter
+    (`ConvertTo-Json -InputObject @{a=$env:...}`) prints it. OPEN
+  - Accepted, documented: pre-existing slow secret-read inputs (60 KB of ` <#` about 3.5 s), below the 10 s
+    hook timeout; a timeout runs the deny `.catch`, so this fails closed.
+  - F4 fixed in 092516b (also `-f`/`-join` tables, nested tables, unquoted keys in a printed table).
   - F1, F2 fixed in 9c75ae3; F6 fixed in 044d8ad; F5 fixed in afd534a; F3 fixed in 1cb6b58.
   - Accepted, documented: quadratic `a=;a=;…` source-line check, ~0.8 s at the 64 KB cap (bounded,
     below the 10 s hook timeout; a fix needs a quote-aware splitter).
