@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-Fixes from the review of 0.10.0. Nothing that was denied now runs.
+## 0.10.1 (2026-11-25)
+
+Fixes from the reviews of 0.10.0 and of this release's own changes. Every
+line closes a way past a guard; nothing that was denied now runs. Mods:
+aws-guard 0.8.3, secret-allow-guard 0.6.1, secret-read-guard 0.6.3,
+supply-chain-guard 0.5.3, terraform-guard 0.6.3 (tf-lint unchanged at
+0.10.0).
 
 - Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
   terraform-guard): a call run through `xargs` or `parallel` has arguments
