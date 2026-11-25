@@ -86,6 +86,17 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ["echo 'terraform apply -auto-approve' | { time source /dev/stdin; }", false],
   ["case x in x) source /dev/stdin;; esac <<'EOF'\nterraform apply -auto-approve\nEOF", false],
   ["f() { source /dev/stdin; }; f <<'EOF'\nterraform apply -auto-approve\nEOF", false],
+  // A string xargs or parallel replace is the input's in a script a wrapper they run runs too.
+  ["echo apply | xargs -Iplan sh -c 'terraform plan -auto-approve'", false],
+  ["echo apply | xargs -Iplan sh -c 'terraform plan -auto-approve' sh", false],
+  ['echo apply | xargs -I plan bash -c "terraform plan -auto-approve"', false],
+  ["echo apply | xargs --rep=plan pwsh -c 'terraform plan -auto-approve'", false],
+  ["echo terraform | xargs -IX sh -c 'X apply -auto-approve'", false],
+  ["echo apply | parallel -I plan sh -c 'terraform plan -auto-approve'", false],
+  ["echo apply | sudo xargs -Iplan env sh -c 'terraform plan -auto-approve'", false],
+  ["echo apply | xargs -Iplan sh -c 'eval \"terraform plan -auto-approve\"'", false],
+  ["echo apply | xargs sh -c 'terraform $0 -auto-approve'", false],
+  ["ls *.tf | xargs -I{} sh -c 'terraform fmt {}'", true],
   // A function or alias defined earlier in the command that runs source, . or a shell reads what is handed to it as a script.
   ["f() { source /dev/stdin; }\nf <<'EOF'\nterraform apply -auto-approve\nEOF", false],
   ["f () { source /dev/stdin; }; f <<'EOF'\nterraform apply -auto-approve\nEOF", false],

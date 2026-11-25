@@ -49,7 +49,10 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   s='. /dev/stdin'`, `f() { eval "$(cat)"; }` then `echo ... | f`). Newly
   denied though harmless: such a command that also hands a denied command
   as text to any call (`f() { . x; }; echo 'terraform apply' | grep -c .`).
-  Still not followed: `f < <(...)` and `f < file`.
+  Still not followed: `f < <(...)` and `f < file`. A string `xargs` or
+  `parallel` replace is the input's in a script the wrapper they run runs
+  too (`echo install | xargs -Ici sh -c 'npm ci evil'`, `xargs -Iplan
+  bash -c "terraform plan -auto-approve"`), nested scripts included.
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is

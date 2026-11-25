@@ -170,6 +170,20 @@ const replacements = (words: readonly string[]): { found: string[]; program: num
   return { found: found.filter(Boolean), program }
 }
 
+// The strings replaced in a call through a wrapper, from its words as written and from each script split into words, so one
+// standing feeder does not hide a script's (sh -c 'xargs -Iplan "$@"' xargs terraform plan); and where the first feeder's
+// program stands.
+const replacedBy = (words: readonly string[]) => {
+  const tokens = words.flatMap(word => word.replace(/\$?["']|\\/g, '').split(/\s+/)).filter(Boolean)
+  const { found, program } = replacements(words)
+
+  return { replaced: [...new Set([...found, ...replacements(tokens).found])], program }
+}
+
+// DYNAMIC for each word from `start` on that holds a replaced string, or for every one past MOST_REPLACED strings.
+const marked = (words: readonly string[], replaced: readonly string[], start: number) =>
+  words.map((word, at) => (at >= start && word !== DYNAMIC && (replaced.length > MOST_REPLACED || replaced.some(one => word.includes(one))) ? DYNAMIC : word))
+
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
 
@@ -748,12 +762,18 @@ const read = (source: string, depth: number, state: State): string[][] => {
       found.push(words)
     }
   }
-  // A command line fed by xargs or parallel has arguments the shell fills in: each call in it ends in DYNAMIC.
-  const nested = (body: string, isFed = false) => {
+  // A command line fed by xargs or parallel has arguments the shell fills in: each call in it ends in DYNAMIC, and a second
+  // reading marks each word holding a string they replace, the program's name too (xargs -Ici sh -c 'npm ci evil').
+  const nested = (body: string, isFed = false, replaced: readonly string[] = []) => {
     const { isAnsi } = state
 
     for (const words of read(body, depth + 1, state)) {
       add(isFed ? [...words, DYNAMIC] : words)
+
+      if (isFed && replaced.length > 0) {
+        spend(state, words.length * Math.min(replaced.length, MOST_REPLACED))
+        add([...marked(words, replaced, 0), DYNAMIC])
+      }
     }
 
     state.isAnsi = isAnsi
@@ -812,6 +832,7 @@ const read = (source: string, depth: number, state: State): string[][] => {
       // Quotes and backslashes go first, as the script's own shell drops them (sh -c 'x""args "$@"').
       // shortcut: any word counts, so a harmless one (find -name xargs) marks the call too; narrow it if that bites.
       const isFed = WRAPPER_NAME.test(kept[0] ?? '') && kept.some(word => FEEDER.test(word.replace(/\$?["']|\\/g, '')))
+      const fedBy = isFed ? replacedBy(kept).replaced : []
 
       // source or . reads a here-string as its script too (source /dev/stdin <<< "..."), so its words are read as a wrapper's are;
       // so does any call with one in a command that defines a reader (f() { source /dev/stdin; }; f <<< "...").
@@ -822,7 +843,7 @@ const read = (source: string, depth: number, state: State): string[][] => {
         // here-string (bash <<< "...") too.
         // Every word for source: its here-string may stand before it (<<< "..." source /dev/stdin).
         for (const word of (readsAll ? words : words.slice(from + 1)).filter(one => /\s/.test(one))) {
-          nested(word.replace(/^(--?[\w-]+=|<<<)/, ''), isFed)
+          nested(word.replace(/^(--?[\w-]+=|<<<)/, ''), isFed, fedBy)
         }
       }
 
@@ -854,19 +875,13 @@ const read = (source: string, depth: number, state: State): string[][] => {
         // A second reading where a word holding a string xargs or parallel replace is the input's, the program's name too
         // (xargs -IX X apply); the first, as written, still names the program for a guard that reads it. The strings come from
         // a script a wrapper runs too (sh -c 'xargs -Iplan "$@"' sh terraform plan), whose words are then all after its program.
-        // The strings from the words as written and from each script split into words, so one standing feeder does not hide a
-        // script's (sh -c 'xargs -Iplan "$@"' xargs terraform plan).
         const direct = placed.some(word => FEEDER_NAME.test(word))
-        const tokens = placed.flatMap(word => word.replace(/\$?["']|\\/g, '').split(/\s+/)).filter(Boolean)
-        const { found: written, program } = replacements(placed)
-        const replaced = [...new Set([...written, ...replacements(tokens).found])]
-        const isAll = replaced.length > MOST_REPLACED
-        const start = direct ? program : 1
+        const { replaced, program } = replacedBy(placed)
 
         spend(state, placed.length * Math.min(replaced.length, MOST_REPLACED))
 
-        if (isAll || replaced.length > 0) {
-          add(placed.map((word, at) => (at >= start && word !== DYNAMIC && (isAll || replaced.some(one => word.includes(one))) ? DYNAMIC : word)))
+        if (replaced.length > 0) {
+          add(marked(placed, replaced, direct ? program : 1))
         }
       }
 
