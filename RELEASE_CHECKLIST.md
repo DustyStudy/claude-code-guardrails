@@ -11,8 +11,8 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
 | C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at b376281: Claude Code 2.1.325, 4,523 pass, 0 fail, shell.ts copies match |
-| C2 | CI "Mod tests" (ubuntu, Node 24, pinned Claude Code) passes on the release PR | OPEN | Failed at c52df84 (Linux-only test fixture, fixed in 8bcc811). Result for the final commit not yet read: your CLAUDE.md says not to poll CI |
-| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS (c52df84) | All passed on c52df84; recheck with C2 |
+| C2 | CI "Mod tests" (ubuntu, Node 24, pinned Claude Code) passes on the release PR | PASS | ae80826: Mod tests pass (run 45516421243). Earlier | Failed at c52df84 (Linux-only test fixture, fixed in 8bcc811). Result for the final commit not yet read: your CLAUDE.md says not to poll CI |
+| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS | ae80826: all five pass |
 | C4 | Every **let-through** item under README "Found by the 0.8 hardening audit" is denied, with a must-deny test (Bash and PowerShell) per item | PASS | Each item reproduced as a failing test first, then fixed; sub-case `sudo $NPM install` kept and listed in README "Still open". Per-mod reports in Integration log |
 | C5 | Every **false-positive** item from that list is either allowed with a must-allow test and a hostile-review pass, or kept as a documented limit | PASS | Every loosening went through a Codex hostile review; its 7 findings are fixed with must-deny tests. Kept as limits: README "Still open" |
 | C6 | Every mod whose shipped files changed has a `plugin.json` version bump (minor for more denies, patch for fixes) | PASS | aws 0.6.0→0.7.0, secret-allow 0.4.0→0.5.0, secret-read 0.4.0→0.5.0, supply-chain 0.3.0→0.4.0, terraform 0.4.0→0.5.0, tf-lint 0.8.0→0.9.0 |
@@ -22,7 +22,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | C10 | Every command guard covers `Bash`, `PowerShell`, `Monitor`, `mcp__terminal__run_in_terminal` | PASS | `SHELL_TOOLS` in aws, secret-read, supply-chain, terraform, tf-lint |
 | C11 | Workflows: `contents: read` default, actions pinned by SHA, no new permissions | PASS | `git diff 7e7c617 HEAD -- .github` empty; existing workflows already meet it |
 | C12 | No open code-scanning, Dependabot or secret-scanning alerts | PASS | 2026-11-24: 0 / 0 / 0 via `gh api` |
-| C13 | Independent security review of the integrated diff, findings fixed or accepted by owner | BLOCKED | Codex reviewed the loosenings in all 6 mods: 7 findings, all fixed. Not yet done: an independent re-review of the 7 fixes, and a review of the new *deny* logic (the planned Fable pass hit its usage limit). Owner decision: accept the residual risk or wait for Fable (resets 2026-11-28 16:00 CT) |
+| C13 | Independent security review of the integrated diff, findings fixed or accepted by owner | PASS (owner accepted residual risk 2026-11-24) | Codex reviewed the loosenings in all 6 mods: 7 findings, all fixed. Not yet done: an independent re-review of the 7 fixes, and a review of the new *deny* logic (the planned Fable pass hit its usage limit). Owner decision: accept the residual risk or wait for Fable (resets 2026-11-28 16:00 CT) |
 | C14 | README updated: audit section reflects what was fixed, test results summary | PASS | c52df84: "Still open after the 0.9 pass", Known limits, "Latest test results" |
 | C15 | Merge to `main`, tag `v0.9.0`, GitHub release | BLOCKED | Needs owner approval (merge to default branch, publish) |
 
@@ -51,6 +51,9 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
   loosened narrowly, pending hostile review (C13).
 - D7 Kept as documented limits (not fixed): supply-chain `npx tsc` and substitution-anywhere denies;
   secret-allow `--token <word>`.
+
+- D9 (2026-11-24) Owner accepted the residual review risk (C13): the 7 review fixes and the new deny logic
+  get no further independent review before release. Owner approved merge, tag and release.
 
 ## Integration log
 

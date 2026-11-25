@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 (unreleased)
+## 0.9.0 (2026-11-24)
 
 Works through the bypasses and false positives the 0.8 hardening audit reproduced.
 Most guards now deny more, so commands that used to run may be denied; each mod's
