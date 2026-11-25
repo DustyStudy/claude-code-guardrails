@@ -7,6 +7,10 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ["echo 'aws iam delete-role --role-name x' | source /dev/stdin", false],
   ["echo 'aws iam delete-role --role-name x' | . /dev/stdin", false],
   ['ls *.json | xargs wc -l', true],
+  // A string xargs -I replaces is the input's, the operation's name too.
+  ['echo delete-role | xargs -Iget-role aws iam get-role --role-name x', false],
+  ["source /dev/stdin <<< 'aws iam delete-role --role-name x'", false],
+  ["echo 'aws iam delete-role --role-name x' | eval source /dev/stdin", false],
   ['aws iam delete-role --role-name it-admin', false],
   ['aws --profile security iam delete-role-policy --role-name x --policy-name y', false],
   ['aws iam delete-policy-version --policy-arn x --version-id v1', false],
