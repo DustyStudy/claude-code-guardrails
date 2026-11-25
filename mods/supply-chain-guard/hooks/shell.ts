@@ -33,7 +33,10 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 // VAR=x, a redirection, builtin, command, eval, exec, sudo and their flags. Matched against the line as written and with its
 // quotes and backslashes gone, as the shell drops them from a name (sou""rce, b\ash).
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
-const SOURCE_LINE = /(^|[;|&(])\s*((\w+=\S*|\d*[<>]+&?\s*[^\s;|&]+|builtin|command|eval|exec|sudo|-[\w-]*)\s+)*(source|\.)(?=\s)/
+// A redirection is one word (2>/dev/null, <<<x) or a bare one and its target (2> /dev/null); the target is never a redirection
+// itself (2> 2>), so no text matches two ways and a run of them stays linear.
+const SOURCE_LINE =
+  /(^|[;|&(])\s*((\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|command|eval|exec|sudo|-[\w-]*)\s+)*(source|\.)(?=\s)/
 const readsHeredoc = (line: string) => [line, line.replace(/\$?["']|\\/g, '')].some(one => SHELL.test(one) || SOURCE_LINE.test(one))
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
