@@ -54,7 +54,8 @@ const OIDC_WORKFLOW =
 const KEY = `${'AKIA'}${'ABCDEFGHIJKLMNOP'}`
 const TOKEN = `${'ghp'}_${'c'.repeat(36)}`
 const K = `${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl`
-const EKS = 'oidc.eks.us-east-1.amazonaws.com/id/ABC'
+const WORD = `${'asia'}pacificnortheast`
+const EKS ='oidc.eks.us-east-1.amazonaws.com/id/ABC'
 const BY_REFERENCE = (conditions: string) => ROLE(conditions).replace('.github.', '.this.')
 const KEY_OUTPUTS =
   'outputs:\n  aws-access-key-id:\n    description: The temporary key id\n    value: ${{ steps.assume.outputs.aws-access-key-id }}\n  aws-secret-access-key:\n    value: ${{ steps.assume.outputs.aws-secret-access-key }}\nruns:\n  using: composite\n  steps:\n    - id: assume\n      uses: aws-actions/configure-aws-credentials@v4\n      with:\n        role-to-assume: ${{ inputs.role }}\n        output-credentials: true'
@@ -72,6 +73,9 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['all-protocol named only in a trailing comment', 'sg.tf', 'ingress {\n  protocol = "tcp" # protocol = "-1"\n  from_port = 443\n  to_port = 443\n  cidr_blocks = ["0.0.0.0/0"]\n}', null],
   ['clean Terraform', 'sg.tf', CLEAN, null],
   ['an ingress rule resource with tags', 'sg.tf', 'resource "aws_vpc_security_group_ingress_rule" "ssh" {\n  from_port = 22\n  to_port = 22\n  cidr_ipv4 = "0.0.0.0/0"\n  tags = { Name = "ssh" }\n}', /port 22 /],
+  ['a KMS key with rotation only in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "logs # enable_key_rotation = true"\n  deletion_window_in_days = 30\n}', /enable_key_rotation/],
+  ['a KMS key with a window only in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "logs # deletion_window_in_days = 30"\n  enable_key_rotation = true\n}', /7 to 30/],
+  ['a KMS key with a key spec only in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "logs # key_spec = \\"RSA_2048\\""\n  deletion_window_in_days = 30\n}', /enable_key_rotation/],
   ['a KMS key with neither setting', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "logs"\n  tags = {\n    team = "sec"\n  }\n}', /enable_key_rotation = true; and .*deletion_window_in_days of 7 to 30/],
   ['a KMS key whose rotation sits only in a nested block', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  deletion_window_in_days = 30\n  dynamic "x" {\n    content {\n      enable_key_rotation = true\n    }\n  }\n}', /enable_key_rotation/],
   ['a compliant KMS key with a brace in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "closing } brace"\n  enable_key_rotation     = true\n  deletion_window_in_days = 30\n}', null],
@@ -287,6 +291,50 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   // Every action, spelled *:*.
   ['a policy granting *:*', 'iam.tf', 'policy = jsonencode({\n  Statement = [{\n    Effect   = "Allow"\n    Action   = "*:*"\n    Resource = "*"\n  }]\n})', /grants every action/],
   ['a policy document listing *:*', 'iam.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    actions = ["s3:GetObject", "*:*"]\n  }\n}', /grants every action/],
+  // Found by the 0.8 audit. Secrets: a key assigned through a call, an index, a heredoc or a block scalar.
+  ['a secret key assigned through os.environ', 'app.py', `os.environ["AWS_SECRET_ACCESS_${'KEY'}"] = "${K}"`, undefined],
+  ['a secret key assigned through a single-quoted index', 'app.js', `process.env['AWS_SECRET_ACCESS_${'KEY'}']='${K}'`, undefined],
+  ['a secret key put in Java properties', 'App.java', `props.put("aws.secret.${'key'}", "${K}");`, undefined],
+  ['a secret key handed to os.putenv', 'app.py', `os.putenv("AWS_SECRET_ACCESS_${'KEY'}", "${K}")`, undefined],
+  ['a secret key in a literal block scalar', 'values.yaml', `aws_secret_access_${'key'}: |\n  ${K}`, undefined],
+  ['a secret key in a folded block scalar', 'values.yaml', `aws-secret-access-${'key'}: >-\n    ${K}\n`, undefined],
+  ['a secret key in a Terraform heredoc', 'terraform.tfvars', `secret_${'key'} = <<EOT\n${K}\nEOT`, undefined],
+  ['a secret key in an indented, quoted heredoc', 'setup.sh', `AWS_SECRET_ACCESS_${'KEY'}=<<-'EOT'\n\t${K}\nEOT`, undefined],
+  ["AWS's sample secret key through os.environ", 'README.md', `os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/${'bPxRfiCY'}EXAMPLEKEY"`, null],
+  ["AWS's sample secret key in a block scalar", 'README.md', `aws_secret_access_key: |\n  wJalrXUtnFEMI/K7MDENG/${'bPxRfiCY'}EXAMPLEKEY`, null],
+  ['a secret key read from the environment by index', 'app.py', 'key = os.environ["AWS_SECRET_ACCESS_KEY"]\nprops.put("aws.secret.key", System.getenv("AWS_SECRET_ACCESS_KEY"));', null],
+  ['prose with a comma after the secret key', 'README.md', 'Rotate the secret key, then run the deploy job again and check its output.', null],
+  // The key id is upper case; a lower-case word of its length is a word. A Slack bot, user or legacy token leads with a digit.
+  // Built in parts: the installed copy of this mod denies the whole words until this fix reaches it.
+  ['a lower-case word that starts with asia', 'regions.md', WORD, null],
+  ['a lower-case word that starts with akia', 'notes.md', `see ${'akia'}channelsettings1 for the list`, null],
+  ['a mixed-case word that starts with Asia', 'regions.md', `${'Asia'}PacificNorthEast`, null],
+  ['a session key id', 'notes.md', `key ${'ASIA'}${'ABCDEFGHIJKLMNOP'}`, undefined],
+  ['an access key between lower-case words', 'notes.md', `id=${KEY} and more`, undefined],
+  ['a Slack bot token placeholder', 'README.md', `SLACK_BOT_TOKEN=${'xoxb'}-your-bot-token-here`, null],
+  ['a Slack user token placeholder', 'README.md', `SLACK_TOKEN=${'xoxp'}-xxxxxxxxxxxx-xxxxxxxxxxxx`, null],
+  ['a Slack user token', 'config.yml', `slack: ${'xoxp'}-1234567890-1234567890-abcdef`, undefined],
+  ['a Slack bot token after a placeholder', 'config.yml', `a: ${'xoxb'}-your-bot-token-here\nb: ${'xoxb'}-1234567890-abcdef`, undefined],
+  ['a legacy Slack workspace token with no digit', 'config.yml', `slack: ${'xoxa'}-${'aBcDeFgHiJkL'}`, undefined],
+  ['a Slack refresh token with no leading digit', 'config.yml', `slack: ${'xoxr'}-${'aBcDeFgHiJkL'}9`, undefined],
+  // Ports: a dynamic block's content takes its direction, and a network ACL rule says egress = true.
+  ['a dynamic egress block', 'sg.tf', 'resource "aws_security_group" "web" {\n  dynamic "egress" {\n    for_each = var.out\n    content {\n      from_port   = 0\n      to_port     = 0\n      protocol    = "-1"\n      cidr_blocks = ["0.0.0.0/0"]\n    }\n  }\n}', null],
+  ['a dynamic ingress block open to the world', 'sg.tf', 'resource "aws_security_group" "egress" {\n  dynamic "ingress" {\n    for_each = var.in\n    content {\n      from_port   = 0\n      to_port     = 0\n      protocol    = "-1"\n      cidr_blocks = ["0.0.0.0/0"]\n    }\n  }\n}', /port 22 and 3389/],
+  ['a content block outside a dynamic block, in a resource named egress', 'sg.tf', 'resource "aws_x" "egress" {\n  content {\n    from_port = 22\n    to_port = 22\n    cidr_blocks = ["0.0.0.0/0"]\n  }\n}', /port 22 /],
+  ['a dynamic ingress block whose iterator is named egress', 'sg.tf', 'dynamic "ingress" {\n  for_each = var.egress\n  iterator = egress\n  content {\n    from_port = 22\n    to_port = 22\n    cidr_blocks = ["0.0.0.0/0"]\n  }\n}', /port 22 /],
+  ['a network ACL egress rule', 'nacl.tf', 'resource "aws_network_acl_rule" "out" {\n  rule_number = 100\n  egress      = true\n  protocol    = "-1"\n  rule_action = "allow"\n  cidr_block  = "0.0.0.0/0"\n}', null],
+  ['a network ACL ingress rule open to the world', 'nacl.tf', 'resource "aws_network_acl_rule" "in" {\n  rule_number = 100\n  egress      = false\n  protocol    = "-1"\n  rule_action = "allow"\n  cidr_block  = "0.0.0.0/0"\n}', /port 22 and 3389/],
+  ['an SSH ingress rule whose description says egress = true', 'sg.tf', 'ingress {\n  description = "egress = true"\n  from_port = 22\n  to_port = 22\n  cidr_blocks = ["0.0.0.0/0"]\n}', /port 22 /],
+  ['an SSH ingress rule with egress = true in a comment', 'sg.tf', 'ingress {\n  from_port = 22 # egress = true\n  to_port = 22\n  cidr_blocks = ["0.0.0.0/0"]\n}', /port 22 /],
+  ['an SSH ingress rule with not_egress = true', 'sg.tf', 'ingress {\n  not_egress = true\n  from_port = 22\n  to_port = 22\n  cidr_blocks = ["0.0.0.0/0"]\n}', /port 22 /],
+  // A # inside a string is not a comment.
+  ['a KMS key with a # in its one-line tags', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  tags = { Name = "DB #1" }\n}', /enable_key_rotation = true; and .*7 to 30/],
+  ['a secret variable on one line with a # in its description', 'variables.tf', 'variable "db_password" { description = "DB #1" }', /variable "db_password" without sensitive = true/],
+  ['an SSH rule on one line after a description with a //', 'sg.tf', 'ingress { description = "see //wiki", from_port = 22, to_port = 22, cidr_blocks = ["0.0.0.0/0"] }', /port 22 /],
+  ['a compliant KMS key with a # in its description', 'kms.tf', 'resource "aws_kms_key" "logs" {\n  description = "DB #1"\n  enable_key_rotation     = true\n  deletion_window_in_days = 30\n}', null],
+  ['a trailing comment after a string with a #', 'sg.tf', 'ingress {\n  description = "rule #1" # protocol = "-1"\n  from_port = 443\n  to_port = 443\n  cidr_blocks = ["0.0.0.0/0"]\n}', null],
+  ['a trailing comment after a string with an escaped quote', 'sg.tf', 'ingress {\n  description = "the \\"web\\" rule" # protocol = "-1"\n  from_port = 443\n  to_port = 443\n  cidr_blocks = ["0.0.0.0/0"]\n}', null],
+  ['a workflow with a # in a string before a stored key', '.github/workflows/deploy.yml', 'steps:\n  - run: echo "build #1"; export AWS_ACCESS_KEY_ID=${{ secrets.K }}', /static AWS key/],
   // A finding is listed once, however often the text repeats it, and a long list is cut short.
   ['a secret variable repeated to 100 KB', 'variables.tf', 'variable "password" {}\n'.repeat(4500), /^tf-lint: the text just written to variables\.tf declares variable "password" without sensitive = true\. Fix it before finishing\.$/],
   ['more findings than are listed', 'variables.tf', Array.from({ length: 30 }, (_, i) => `variable "password_${i}x" {}`).join('\n'), /variable "password_19x" without sensitive = true; and has 10 more finding\(s\) not listed\. Fix/],
@@ -333,6 +381,35 @@ test('a notebook cell with a token is denied', async ($, on) => {
 })
 
 // What the deny says, or null when the call runs.
+// Found by the 0.8 audit: the other ways a command writes a file. Each runs through every shell tool.
+const WRITERS: readonly (readonly [string, string, RegExp | null])[] = [
+  ['sed -i with a key', `sed -i "s|^key=.*|key=${KEY}|" creds.ini`, /AWS access key into a file/],
+  ['sed --in-place with a key', `sed -e "s/x/${KEY}/" --in-place creds.ini`, /AWS access key into a file/],
+  ['sed -Ei.bak with a token', `sed -Ei.bak "s/x/${TOKEN}/" .npmrc`, /private key or API token into a file/],
+  ['perl -pi with a key', `perl -pi -e "s/x/${KEY}/" creds.ini`, /AWS access key into a file/],
+  ['WriteAllText with a key', `[IO.File]::WriteAllText("creds.txt", "${KEY}")`, /AWS access key into a file/],
+  ['AppendAllText with a token', `[System.IO.File]::AppendAllText('.npmrc', '${TOKEN}')`, /private key or API token into a file/],
+  ['New-Item -Value with a token', `New-Item -Path .npmrc -ItemType File -Value "${TOKEN}"`, /private key or API token into a file/],
+  ['ni -Value with a key', `ni creds.txt -Value ${KEY}`, /AWS access key into a file/],
+  ['a key piped to sc', `"${KEY}" | sc creds.txt`, /AWS access key into a file/],
+  ['a token piped to ac', `"${TOKEN}" |ac .npmrc`, /private key or API token into a file/],
+  ['sc -Value with a key', `cd repo; sc creds.txt -Value ${KEY}`, /AWS access key into a file/],
+  ['a key piped to dd', `echo ${KEY} | dd of=creds.txt`, /AWS access key into a file/],
+  ['python -c writing a key', `python -c "open('creds.txt','w').write('${KEY}')"`, /AWS access key into a file/],
+  ['python -c writing a secret key through os.environ', `python3 -c "import os; os.environ['AWS_SECRET_ACCESS_${'KEY'}'] = '${K}'; open('creds.txt','w').write(str(os.environ))"`, /AWS access key into a file/],
+  ['node -e writing a token', `node -e "require('fs').writeFileSync('.npmrc', '${TOKEN}')"`, /private key or API token into a file/],
+  ['git config with a token', `git config --global user.token ${TOKEN}`, /private key or API token into a file/],
+  ['git -C config with a token', `git -C repo config user.token ${TOKEN}`, /private key or API token into a file/],
+  ['sed -i with no key', "sed -i 's/us-east-1/us-gov-west-1/' main.tf", null],
+  ["sed -i with AWS's sample key", "sed -i 's/KEY/AKIAIOSFODNN7EXAMPLE/' README.md", null],
+  ['git config with a name', 'git config user.name "A Person"', null],
+  ['dd copying an image', 'dd if=disk.img of=copy.img bs=1M', null],
+  ['New-Item with ordinary text', 'New-Item -Path notes.txt -Value "lunch at noon"', null],
+  ['python -c writing an ordinary word', `python -c "open('notes.txt','w').write('${WORD}')"`, null],
+  ['sed printing lines that hold a key', `sed -n "/${KEY}/p" access.log`, null],
+  ['git grep for a key', `git grep -c ${KEY}`, null],
+]
+
 const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: string }, RegExp | null])[] = [
   ['Bash echoing a key into a file', { tool: 'Bash', command: `echo ${KEY} > creds.txt` }, /command would write an AWS access key into a file/],
   ['Bash writing a key with a heredoc', { tool: 'Bash', command: `cat <<EOF\naws_access_key_id = ${KEY}\nEOF` }, /AWS access key into a file/],
@@ -373,6 +450,9 @@ const CALLS: readonly (readonly [string, Record<string, unknown> & { tool: strin
   ['an MCP call with a token in a JSON string of a JSON string', { tool: 'mcp__http__post', body: JSON.stringify(JSON.stringify({ t: `${'ghp'}_\u0063${'c'.repeat(35)}` })) }, /send a private key or API token to mcp__http__post/],
   ['an MCP call with ordinary nested JSON', { tool: 'mcp__http__post', body: JSON.stringify({ cfg: JSON.stringify({ note: 'lunch at noon', secret_key: 'from the vault' }) }) }, null],
   ['an MCP call with a string that only looks like JSON', { tool: 'mcp__notes__create', note: '{ not json at all' }, null],
+  ...['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal'].flatMap(tool =>
+    WRITERS.map(([name, command, expected]) => [name, { tool, command }, expected] as const),
+  ),
   ['an MCP call with a secret key in a nested string', { tool: 'mcp__notes__create', note: { text: `secret_${'key'} = "${'wJalrXUtnFEMIK7MDENGbPxRfiCY'}abcdefghijkl"` } }, /send an AWS access key to mcp__notes__create/],
 ]
 

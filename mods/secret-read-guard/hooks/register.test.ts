@@ -463,6 +463,53 @@ const DENIED = [
   "git add ':(top).env'",
   "git add ':(glob)**/.env'",
   'git add :/.env',
+  // Found in the 0.8 hardening audit.
+  'echo ${GITHUB_TOKEN}',
+  'echo "key ${AWS_SECRET_ACCESS_KEY}"',
+  'echo ${env:GITHUB_TOKEN}',
+  'echo ${GITHUB_TOKEN:-none}',
+  'echo "$(<.env)"',
+  'echo "$( < .env)"',
+  'x="$(<deploy/key.pem)"; echo "$x"',
+  'echo "`<.env`"',
+  'cat < a`b.pem',
+  '${X} env',
+  '${X}printenv',
+  'kubectl get Secret -o yaml',
+  'kubectl get SECRETS db -o json',
+  'kubectl get cm,Secret -o yaml',
+  '$env:GITHUB_TOKEN.ToString()',
+  '$env:GITHUB_TOKEN.Substring(0, 8)',
+  '$env:GITHUB_TOKEN.ToCharArray() | Out-String',
+  '$env:GITHUB_TOKEN.Length.ToString()',
+  '($env:GITHUB_TOKEN).Length; $env:GITHUB_TOKEN.Trim()',
+  '$env:NPM_TOKEN[0..7]',
+  '($env:GITHUB_TOKEN).Trim()',
+  // Folders that are a credential's only under the home folder, four moves and more away.
+  'cd /c && cd Users && cd me && cd .claude && rg token',
+  'cd /c; cd Users; cd me; cd AppData; cd Roaming; cd gcloud; cat *',
+  'cd C:\\ ; cd Users; cd me; cd repos; cd ..; cd .codex; cat *',
+  'cd /c && cd Users && cd me && cd .terraform.d && cd . && cd . && cd . && cd . && cd . && rg token',
+  'cd && rg aws_secret_access_key',
+  'cd; grep -r token .',
+  'cd && cd .azure && cat msal*',
+  // A brace after export is text only on export's own line: each of these still dumps.
+  'export { a, b }; export',
+  'export { a, b }; env',
+  'export {a,b}; printenv',
+  "bash -c 'export { a; }; export -p'",
+  "echo 'export { a, b }' && env",
+  'export; { a; }',
+  // A brace list with nothing in it expands to a bare export.
+  'export {,}',
+  'export {,,}',
+  'export {,} | cat',
+  "echo 'x' && export {,}",
+  'export {\nenv\n}',
+  'export { $(env) }',
+  'export { `printenv` }',
+  'export { a | env }',
+  'echo "export { a, b }"; export',
 ] as const
 
 // Ordinary work: runs.
@@ -743,6 +790,11 @@ const ALLOWED = [
   "git add ':(top)src' ':!.env'",
   "git add . ':(exclude).env'",
   'git add .',
+  // Found in the 0.8 hardening audit: text that names export before a brace is no environment dump.
+  "echo 'export { a, b }'",
+  "echo 'export { a, b }' > index.ts",
+  'grep -rn "export { a, b }" src',
+  'kubectl get secretstores -o yaml',
   // Known false positives, left denied on purpose: echo $MAX_TOKENS, echo $TOKENIZERS_PARALLELISM and
   // echo "token: ${GITHUB_TOKEN:+set}" name a variable the guard reads as a credential.
 ] as const
@@ -765,6 +817,84 @@ for (const tool of ['Bash', 'PowerShell'] as const) {
       expect(/guard failed/.test(JSON.stringify(ran))).toBe(false)
     })
   }
+}
+
+// Found in the 0.8 hardening audit: a wildcard that writes no credential name (cat *, cat prod*) is tried against the folder's files.
+const LISTED: Record<string, string[]> = {
+  'c:/repos/app': ['.env', 'README.md', 'main.tf', 'prod.tfvars', 'notes.txt', 'docs', 'deploy'],
+  'c:/repos/app/deploy': ['server.key', 'run.sh'],
+  'c:/repos/app/docs': ['README.md', 'intro.md'],
+  'c:/repos/app/web': ['.env', 'index.html'],
+  // Slow to match one by one: many long names, none a credential's, and a few that are but do not match.
+  'c:/repos/app/big': [...Array.from({ length: 1000 }, (_, i) => `${'a'.repeat(200)}${i}.txt`), ...Array.from({ length: 20 }, (_, i) => `${'a'.repeat(200)}${i}.pem`)],
+  'c:/repos/app/huge': Array.from({ length: 2001 }, (_, i) => `f${i}.txt`),
+}
+const ON_DISK = [
+  ['Bash', 'cat prod*', false],
+  ['Bash', 'cat *', false],
+  ['Bash', 'head -3 p*', false],
+  ['Bash', 'cat deploy/*', false],
+  ['Bash', 'cat deploy/s*', false],
+  ['Bash', 'cd deploy && cat *', false],
+  ['Bash', 'cd docs/../deploy; tail ser*', false],
+  ['Bash', 'grep -i password pro*', false],
+  ['PowerShell', 'Get-Content *', false],
+  ['PowerShell', 'gc prod*', false],
+  ['PowerShell', 'gc ?env', false],
+  ['PowerShell', 'Get-Content deploy\\*', false],
+  ['Monitor', 'tail -f prod*', false],
+  ['mcp__terminal__run_in_terminal', 'cat *', false],
+  ['Bash', 'cat README*', true],
+  ['Bash', 'cat ma*', true],
+  ['Bash', 'cat n*', true],
+  ['Bash', 'cat docs/*', true],
+  // Which folder a read runs in is not followed: after a cd the wildcard is tried in the starting folder too.
+  ['Bash', 'cd docs && cat *', false],
+  ['Bash', 'cd nowhere; cat *', false],
+  ['Bash', 'cd docs && cat intro*', true],
+  ['Bash', 'grep -rn TODO docs/*', true],
+  ['PowerShell', 'gc docs\\*', true],
+  ['PowerShell', 'Get-Content READ*', true],
+  // A dot file counts under Bash too: dotglob, or a PowerShell inside it, takes it.
+  ['Bash', 'cat web/*', false],
+  ['Bash', 'shopt -s dotglob; cat web/*', false],
+  ['Bash', 'cd web && shopt -s dotglob && cat *', false],
+  ['Bash', "pwsh -c 'Get-Content web/*'", false],
+  ['Bash', 'cat web/in*', true],
+  ['Bash', `cat big/${'*a'.repeat(100)}*z`, true],
+  // More files than are checked: denied.
+  ['Bash', 'cat huge/f*', false],
+] as const
+
+for (const [tool, command, isAllowed] of ON_DISK) {
+  test(`with the folder listed, ${tool} ${isAllowed ? 'runs' : 'is denied'}: ${command.slice(0, 60)}`, async ($, on) => {
+    const started = Date.now()
+    world(on)
+    on('fs.list', (_, e) => {
+      // On Linux and macOS the engine reads C:\repos\app as a relative path and puts its own folder in front.
+      const path = e.path.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+      const names = LISTED[Object.keys(LISTED).find(dir => path === dir || path.endsWith(dir.slice(2))) ?? '']
+
+      if (names === undefined) {
+        throw new Error('ENOENT')
+      }
+
+      return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
+    })
+    let hasRun = false
+
+    on('tool.call', { tool: [tool] }, () => {
+      hasRun = true
+
+      return { result: {} as never }
+    })
+
+    const ran = await $.tool.call({ tool, command } as never)
+
+    expect(hasRun).toBe(isAllowed)
+    expect(/guard failed/.test(JSON.stringify(ran))).toBe(false)
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
 }
 
 // Found in red-team: Monitor and the desktop terminal tool ran unread.

@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.9.0 (2026-11-24)
+
+Works through the bypasses and false positives the 0.8 hardening audit reproduced.
+Most guards now deny more, so commands that used to run may be denied; each mod's
+line says which.
+
+- Shared parser (aws-guard, secret-read-guard, supply-chain-guard, terraform-guard):
+  decodes bash `$'…'` escapes and reads the line both with and without them, marks
+  brace sequences, keeps a comma-less brace pair literal, reads `>|` and `&>` as
+  redirections, refuses (denies) a `case` inside `$( )`, and can report where a
+  substitution stood.
+- aws-guard 0.7.0: denies an AWS CLI call whose service or operation the shell fills
+  in: a substitution, variable, glob or splat anywhere up to the operation
+  (`aws s3 $(echo rb) …`, `aws iam del$()ete-role`, `aws $OPTS …`), an unquoted
+  substitution or variable as a global option's value before the operation
+  (`aws --profile $P …`; `"$P"` still runs), Organizations or Identity Center filled
+  in as a global option's value, and the binary as a container's `--entrypoint`.
+  `-WhatIf` no longer allows a cmdlet in a command that holds a here-string.
+- secret-allow-guard 0.5.0: a settings file that does not parse as JSON is also
+  scanned with its args joined, so a secret after a flag (`"args":["--api-key","…"]`)
+  is found. No longer flagged: a port mapping in a container named like
+  `login-proxy` (`login` now counts only as the subcommand), `token_type=bearer`,
+  `*_FILE` and a whole `PWD` entry with a path, and an
+  `Authorization: Bearer <placeholder>` value.
+- secret-read-guard 0.5.0: denies a credential variable printed as `${NAME}` or
+  through a member call (`$env:GITHUB_TOKEN.ToString()`), a file read by a quoted
+  substitution (`echo "$(<.env)"`), `kubectl get Secret` in any case, a credential
+  folder reached by a bare `cd` or a chain of more than three `cd` moves, and a
+  wildcard that writes no credential name (`cat *`, `cat prod*`) when the folder
+  holds a credential file: the shell guard now lists that folder, dot files
+  included, and denies a wildcard in a folder of more than 2,000 entries.
+  `echo 'export { a, b }'` is no longer read as an environment dump
+  (`export {,}`, which bash runs as a bare `export`, still is).
+- supply-chain-guard 0.4.0: denies npm's shortened verbs (`npm upd`, `npm exe`,
+  `npm creat`); any number of unlisted options before the verb; a URL with a version
+  after `@`; a verb or tool the shell fills in (`npm $(echo install) x`,
+  `npm $VERB x`, `$(which pip) install x`, `$NPM install x`); a tool run through a
+  runner (`npx --no-install npm install x`, `pnpm exec pip install x`,
+  `yarn run pip install x`); `pip install --require-hashes -r https://…`;
+  `composer require` without an exact version; `go run pkg@latest`; and
+  `--package-lock=0`. Also newly denied: a substitution before the verb
+  (`npm --prefix "$(pwd)/web" ci`) and `$(which make) install`.
+- terraform-guard 0.5.0: denies a help flag given as a flag's value or after find's
+  `\;`, `TF_CLI_ARGS` written with escapes, quotes or a shell-filled value, a
+  substitution before the subcommand (`terraform -chdir=$(pwd) validate`; quote it),
+  and `>|` / `&>` redirections. No longer denies a destroy after an unrelated pipe
+  that ended at a `;` or newline, unless the command defines a function or holds a
+  `{ }` group or `( )` subshell, which can take a later pipe's input.
+- tf-lint 0.9.0: denies a secret key assigned through an index or a call
+  (`os.environ[...]`, `props.put(...)`) or under a heredoc or block scalar, and a
+  secret in a command that writes with `sed -i`, `perl -i`, `New-Item`, `sc`/`ac`/`ni`,
+  `dd of=`, a write or append method call (`WriteAllText`, `open().write`,
+  `writeFileSync`) or `git config`. No longer denies lower-case words starting
+  `asia`/`akia` or Slack bot/user placeholders with no digit after the dash, no
+  longer warns on `dynamic "egress"` or `egress = true`, and no longer cuts a line
+  at a `#` or `//` inside a double-quoted string. A KMS key's rotation, deletion
+  window and key spec are read outside quoted strings, so a description cannot
+  stand in for them.
+- Development: tests run on Claude Code 2.1.325 (was 2.1.322), the stable release
+  the managed-settings baseline's minimum (2.1.324) accepts.
+
 ## 0.8.0 (2026-11-21)
 
 - tf-lint 0.8.0: flags more non-human-identity risks. In Terraform: a

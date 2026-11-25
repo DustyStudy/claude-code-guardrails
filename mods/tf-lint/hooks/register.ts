@@ -6,12 +6,15 @@ const TERRAFORM = /\.(tf|tfvars|hcl|tofu)(\.json)?$/i
 const SAMPLE_BODIES = ['wJalrXUtnFEMI/K7MDENG/' + 'bPxRfiCYEXAMPLEKEY', 'je7MtGbClwBF/2Zp9Utk/' + 'h3yCo8nvbEXAMPLEKEY'].join('|')
 // A quote, plain or escaped for JSON, a shell or PowerShell: " \" \\\" `"
 const QUOTE = String.raw`(?:[\\\x60]{0,8}["'])?`
-// The key id with no letter or digit on either side (KEY_AKIA... is one). The secret key by each of its names: the provider's
-// secret_key, the CLI's aws_secret_access_key, the API's SecretAccessKey, an action's aws-secret-access-key and Java's
-// aws.secret.key; then =, :, the > of an XML tag or the space of aws configure set.
+// The key id with no letter or digit on either side (KEY_AKIA... is one), in upper case only: a lower-case word of its length
+// is a word.
+const KEY_ID = /(?<![A-Za-z0-9])(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}(?![A-Za-z0-9])/
+// The secret key by each of its names: the provider's secret_key, the CLI's aws_secret_access_key, the API's SecretAccessKey,
+// an action's aws-secret-access-key and Java's aws.secret.key; then the ] of an index (os.environ["..."]), and =, :, the > of
+// an XML tag, the comma of a call (props.put("...", ) or the space of aws configure set. The value may sit under a block
+// scalar (|, >-) or a heredoc.
 const SECRET = new RegExp(
-  String.raw`(?<![A-Z0-9])(?:AKIA|ASIA)(?![A-Z0-9]{9}EXAMPLE)[A-Z0-9]{16}(?![A-Z0-9])|` +
-    String.raw`secret[_.-]?(?:access[_.-]?)?key${QUOTE}(?:\s*[=:>]+|\s)\s*${QUOTE}(?!(?:${SAMPLE_BODIES})(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
+  String.raw`secret[_.-]?(?:access[_.-]?)?key${QUOTE}\]?(?:\s*[=:>,]+|\s)\s*(?:[|>][-+\d]*\s*|<<[-~]?${QUOTE}\w+${QUOTE}\s*)?${QUOTE}(?!(?:${SAMPLE_BODIES})(?![A-Za-z0-9/+]))[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])`,
   'i',
 )
 // The other secrets the rule names: private keys and the API tokens with a fixed shape. This is secret-allow-guard's list of
@@ -26,7 +29,10 @@ const TOKENS = new RegExp(
     String.raw`\bgithub_pat_[A-Za-z0-9_]{60,}`,
     String.raw`\bglpat-[A-Za-z0-9_-]{20,}`,
     String.raw`\bnpm_[A-Za-z0-9]{36}\b`,
-    String.raw`\bxox[abprs]-[A-Za-z0-9-]{10,}`,
+    // A Slack bot, user or legacy token leads with a digit, so a placeholder made of words passes; a workspace or refresh
+    // token may not, so those two are read as before.
+    String.raw`\bxox[bps]-\d[A-Za-z0-9-]{9,}`,
+    String.raw`\bxox[ar]-[A-Za-z0-9-]{10,}`,
     String.raw`\bxapp-\d-[A-Za-z0-9-]{10,}`,
     String.raw`hooks\.slack\.com/services/T[A-Za-z0-9]+/B[A-Za-z0-9]+/[A-Za-z0-9]{20,}`,
     // Anthropic and OpenAI: sk-ant-..., sk-proj-..., and the older bare sk- with one long run (a CSS class sk-fade-in-... has none).
@@ -43,14 +49,25 @@ const TOKENS = new RegExp(
 const hasToken = (text: string) =>
   (text.match(TOKENS) ?? []).some(found => found.replace(/EXAMPLE/g, 'X').match(TOKENS) !== null)
 const secretIn = (text: string) =>
-  SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
+  KEY_ID.test(text) || SECRET.test(text) ? 'an AWS access key' : hasToken(text) ? 'a private key or API token' : undefined
 // Any prefix, either slash: C:\repo\.github\workflows\ci.yaml too. A composite action under .github/actions is read the same way.
 const WORKFLOW = /(^|[\\/])\.github[\\/](?:workflows[\\/][^\\/]+|actions[\\/](?:[^\\/]+[\\/])*action)\.ya?ml$/i
 // The tools that hand a command line to a shell, and the parts of one that write a file. 2>&1, >&-, -> and >= are not
 // redirections; >&file and =>file are. tee counts only as a command after a pipe, not in a filename like tee.log.
-// aws configure set and npm config set write a credentials file with no redirection.
+// aws configure set and npm config set write a credentials file with no redirection. So do New-Item -Value, the aliases sc, ac
+// and ni where a command starts, dd of=, and a call to a write or append method: [IO.File]::WriteAllText(, open().write(,
+// fs.writeFileSync(.
 const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', 'mcp__terminal__run_in_terminal']
-const WRITES = /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File)\b|\bconfig(?:ure)?\s+set\b/i
+const WRITES =
+  /(?<!-)>>?(?!=|&[\d-])|\|\s*(?:sudo\s+)?tee\b|<<|\b(?:Set-Content|Add-Content|Out-File|New-Item)\b|(?:^|[|;&({\n])\s*(?:sc|ac|ni)\s|\bof=|(?:\.|::)(?:write|append)\w*\s*\(|\bconfig(?:ure)?\s+set\b/i
+// sed -i and perl -pi edit a file in place, and git config writes one. Each is two words anywhere in the command, read apart.
+// shortcut: no shell parser here, so grep -i KEY f | sed 1q is denied too; upgrade to shell.ts if that matters.
+const WRITE_PAIRS = [
+  [/\b(?:sed|perl)\b/i, /\s-[a-z0-9]*i|--in-place/i],
+  [/\bgit\b/i, /\bconfig\b/i],
+] as const
+const writes = (command: string) =>
+  WRITES.test(command) || WRITE_PAIRS.some(([tool, flag]) => tool.test(command) && flag.test(command))
 const WORLD = /0\.0\.0\.0\/0|::\/0/
 const MANAGEMENT_PORTS = [22, 3389]
 
@@ -148,11 +165,15 @@ const kmsFindings = (text: string): string[] => {
 
   // Terraform reads a label without its quotes too: resource aws_kms_key logs {.
   for (const body of bodiesOf(text, /resource\s+"?aws_kms_key"?\s+"?[\w-]*"?/)) {
-    const spec = /\b(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body)?.[2] ?? 'SYMMETRIC_DEFAULT'
-    const window = /\bdeletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body)
+    // Preserve offsets so quoted setting values can be read after locating real assignments.
+    const settings = eachString(body, quoted => ' '.repeat(quoted.length))
+    const specAt = settings.search(/\b(customer_master_key_spec|key_spec)\s*=/)
+    const windowAt = settings.search(/\bdeletion_window_in_days\s*=/)
+    const spec = specAt < 0 ? 'SYMMETRIC_DEFAULT' : /^(customer_master_key_spec|key_spec)\s*=\s*"([^"]*)"/.exec(body.slice(specAt))?.[2] ?? 'SYMMETRIC_DEFAULT'
+    const window = windowAt < 0 ? null : /^deletion_window_in_days\s*=\s*"?(-?\d+(?![\w.]))?/.exec(body.slice(windowAt))
 
     // Only symmetric encryption keys rotate.
-    if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(body)) {
+    if (spec === 'SYMMETRIC_DEFAULT' && !/\benable_key_rotation\s*=\s*true\b/.test(settings)) {
       found.push('creates a KMS key without enable_key_rotation = true')
     }
 
@@ -282,9 +303,20 @@ const WORKFLOW_RULES = [
   ],
 ] as const
 
+// Each line without its comment: a mark at the line's start or after a space, and not inside a string ("DB #1" is a value).
+// A string the line cuts off runs to the line's end.
+const comment = (marks: string) => new RegExp(String.raw`("(?:\\.|[^"\\])*"?)|(?:^|\s)(?:${marks})[^]*`, 'g')
+const HCL_COMMENT = comment('#|//')
+const YAML_COMMENT = comment('#')
+const uncomment = (text: string, pattern: RegExp) =>
+  text
+    .split('\n')
+    .map(line => line.replace(pattern, (_all: string, quoted?: string) => quoted ?? ''))
+    .join('\n')
+
 const workflowFindings = (source: string): string[] => {
-  // Comments go, full-line and trailing: a # at the line's start or after a space.
-  const text = source.replace(/(^|\s)#.*$/gm, '$1')
+  // shortcut: only "double" quotes are read as strings; a # after a space inside 'single' quotes still cuts the line.
+  const text = uncomment(source, YAML_COMMENT)
 
   return WORKFLOW_RULES.flatMap(([pattern, finding]) => (pattern.test(text) ? [finding] : []))
 }
@@ -342,10 +374,19 @@ const portFindings = (text: string): string[] => {
   // A tags map is not a block: dropped, it leaves the resource body innermost. Other maps may hold rules (locals), so they stay.
   const rest = text.replace(/\b(tags|tags_all)\s*=\s*\{[^{}]*\}/g, '$1 = null')
   // Every block at its own level, the blocks inside it cut out: a rule resource with a lifecycle block is read too.
-  const blocks = [...blocksIn(rest).values()].map(block => ({
-    head: rest.slice(block.start, block.open),
-    body: ownText(rest, block, ''),
-  }))
+  const closed = [...blocksIn(rest).values()]
+  const parents = new Map(closed.flatMap(block => block.kids.map(kid => [kid, block] as const)))
+  const headOf = (block: Block) => rest.slice(block.start, block.open)
+  const blocks = closed.map(block => {
+    const head = headOf(block)
+    const parent = parents.get(block)
+
+    // The content of dynamic "egress" is an egress block: it is read under its parent's head.
+    return {
+      head: parent !== undefined && /^\s*content\s*$/.test(head) && /^\s*dynamic\s/.test(headOf(parent)) ? headOf(parent) : head,
+      body: ownText(rest, block, ''),
+    }
+  })
 
   for (const { head, body } of blocks.length > 0 ? blocks : [{ head: '', body: text }]) {
     if (!WORLD.test(body)) {
@@ -355,7 +396,11 @@ const portFindings = (text: string): string[] => {
     // A rule's direction is its type (the block's keyword, or a resource's type label) or type = "egress", never its name:
     // aws_vpc_security_group_ingress_rule "egress_proxy" is an ingress rule.
     const kind = /^\s*(?:(?:resource|data|dynamic)\s+)?"?([\w-]+)/.exec(head)?.[1] ?? ''
-    const isEgress = /egress/.test(kind) || /type\s*=\s*"egress"/.test(body)
+    // A network ACL rule says egress = true; in a description those words are text.
+    const isEgress =
+      /egress/.test(kind) ||
+      /type\s*=\s*"egress"/.test(body) ||
+      /(?<![\w-])egress\s*=\s*true\b/.test(eachString(body, () => '""'))
     const from = port(body, 'from_port')
     const to = port(body, 'to_port')
     // Protocol -1 is every port, whatever from_port and to_port say.
@@ -373,14 +418,7 @@ const portFindings = (text: string): string[] => {
 // shortcut: reads only the text being written, block by block; a rule split across edits or built from variables is missed, upgrade to checkov on the file if that matters.
 const findings = (source: string): string[] => {
   // A block comment, only when it starts its line: "bucket/*" and "cron(0 */2 * * ? *)" in strings are not one.
-  const text = cut(
-    cut(source, /^[^\S\n]*\/\*/gm, '*/')
-      .split('\n')
-      .map(line => line.replace(/(^|\s)(#|\/\/).*$/, ''))
-      .join('\n'),
-    /\$\{/g,
-    '}',
-  )
+  const text = cut(uncomment(cut(source, /^[^\S\n]*\/\*/gm, '*/'), HCL_COMMENT), /\$\{/g, '}')
   const bare = eachString(text, quoted => quoted.replace(/[{}]/g, ''))
   const found: string[] = []
   let hasFailed = false
@@ -459,7 +497,7 @@ export const register: Register = on => {
 
     if (SHELL_TOOLS.includes(tool)) {
       const command = String(args.command ?? '')
-      const secret = WRITES.test(command) ? secretIn(command) : undefined
+      const secret = writes(command) ? secretIn(command) : undefined
 
       return secret === undefined
         ? next(e)

@@ -9,7 +9,8 @@ const SECRET = [
   // A value stops at `)` and `:`, which close a rule (`Bash(mysql -p)`, `Bash(mysql -p:*)`).
   /\bsshpass\b[^;&|]{0,400}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\b(?:mysql|mariadb)\w*\b[^;&|]{0,400}\s-p["']?(?!\$)[^\s"'):]/,
-  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\blogin\b[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
+  // login must be a whole word, not part of a container name such as login-proxy.
+  /\b(?:docker|podman|nerdctl|helm)\b[^;&|]{0,200}\slogin(?=\s)[^;&|]{0,200}\s-p\s*["']?(?!\$)[^\s"'):]/,
   /\bredis-cli\b[^;&|]{0,400}\s-a\s*["']?(?!\$)[^\s"'):]/,
   // -u user:password; `:*` ends a rule (`Bash(curl -u admin:*)`).
   /\b(?:curl|wget)\b[^;&|]{0,400}\s(?:-u\s*|--user[= ])["']?[^\s"':]+:(?![$*])[^\s"')]/,
@@ -18,8 +19,8 @@ const SECRET = [
   /--[\w-]{0,40}(?:token|api[_-]?key|access[_-]?key|secret[_-]?key)\s+["']?(?![$*-])[^\s"'):]{6,}/i,
   /secret_access_key\s+["']?(?!\$)[A-Za-z0-9/+]{40}\b/i,
   /\bbearer\s+(?!\$)[A-Za-z0-9._~+/-]{8,}/i,
-  // Any other scheme: Basic, token.
-  /\bauthorization:\s*\w+\s+(?!\$)[^\s"']{8,}/i,
+  // Any other scheme: Basic, token. A value that is all one `<placeholder>` passes.
+  /\bauthorization:\s*\w+\s+(?!\$|<[^<>\s"']{0,80}>(?:[\s"')]|$))[^\s"']{8,}/i,
   /\b(?:[sr]k_live_[A-Za-z0-9]{20,}|AIza[\w-]{35}|eyJ[\w-]{10,1000}\.eyJ[\w-]{10,}\.)/,
   /\bsb_secret_[A-Za-z0-9_-]{20,}/,
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
@@ -36,7 +37,8 @@ const SECRET = [
   // user:password@host in a connection string or URL.
   /[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@"']+:(?!\$)[^\s@"'/]+@/i,
   // No leading \b, so a compound name like SUPABASE_SECRET_KEY= counts; a bare pass needs one (DB_PASS=, not bypass=).
-  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|pwd|secret|token|api[_-]?key|access[_-]?key)(?:_[a-z]{1,30}){0,6}\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
+  // Only a whole PWD entry or a name ending _FILE exempts a path; only token_type exempts bearer.
+  /(?:pass(?:word|wd|phrase)|(?<![a-z])pass|(?!^pwd\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/]))pwd|secret|(?!(?<![a-z0-9_])token_type\s*[=:]\s*["']?bearer(?:[&\s"')]|$))token|api[_-]?key|access[_-]?key)(?!(?:_[a-z]{1,30}){0,5}_file\s*[=:]\s*["']?(?:[~.]{0,2}[\\/]|[a-z]:[\\/]))(?:_[a-z]{1,30}){0,6}\s*[=:]\s*["']?(?!\$)[^\s"',;)]{6,}/i,
 ]
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -65,7 +67,8 @@ const parse = (text: string): unknown => {
 }
 
 // Permission rules, env, and MCP servers (also per project, in ~/.claude.json). A file that still does not parse is scanned
-// whole, as written and with "NAME": "value" turned into NAME=value, so the name-based matchers apply to it too.
+// whole: as written, with "NAME": "value" turned into NAME=value so the name-based matchers apply to it too, and with
+// ["a", "b" turned into a b so a flag in args meets its value.
 const entries = (text: string): string[] => {
   try {
     const parsed = record(parse(text.replace(/^﻿/, '')))
@@ -83,7 +86,7 @@ const entries = (text: string): string[] => {
       ...Object.values(record(parsed.projects)).flatMap(project => servers(record(project).mcpServers)),
     ]
   } catch {
-    return [`${text}\n${text.replace(/"\s*:\s*"/g, '=')}`]
+    return [`${text}\n${text.replace(/"\s*:\s*"/g, '=')}\n${text.replace(/"\s*,\s*"|\[\s*"/g, ' ')}`]
   }
 }
 

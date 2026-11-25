@@ -1,6 +1,6 @@
 {
   "name": "secret-allow-guard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "At session start, warns when a Claude settings file holds a permission rule with a literal secret in it, or when settings.local.json is not git-ignored",
   "author": {
     "name": "Dustin Arrington",

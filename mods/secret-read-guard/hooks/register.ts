@@ -31,7 +31,16 @@ const HOME_VAR =
   /^(~|\$(HOME|USERPROFILE)|\$\{(HOME|USERPROFILE)\}|\$env:(USERPROFILE|HOME)|\$\{env:(USERPROFILE|HOME)\}|%USERPROFILE%|%HOMEDRIVE%%HOMEPATH%)(?=[\\/]|$)/i
 
 // moved: the folder a cd in the command leads to. globs: the wildcards already judged in this command.
-type World = { cwd: string; home: string; allow: readonly RegExp[]; moved?: boolean; globs: Map<string, boolean> }
+// asked: the folders a wildcard was tried in. files: their names, once listed.
+type World = {
+  cwd: string
+  home: string
+  allow: readonly RegExp[]
+  moved?: boolean
+  globs: Map<string, boolean>
+  asked: Set<string>
+  files?: ReadonlyMap<string, readonly string[]>
+}
 
 const resolve = (path: string, { cwd, home }: World) => {
   // C:.env is .env in drive C's current folder: read as a name in this one.
@@ -194,6 +203,9 @@ const isWild = (path: string) => /[*?[]/.test(path)
 // The longest wildcard, and the most of them in one command, that are worked out; past that the answer is yes.
 const MAX_GLOB = 260
 const MAX_GLOBS = 32
+// The most folders listed for one command; past that the command is denied.
+const MAX_LISTED = 64
+const MAX_ENTRIES = 2000
 
 const takesSecret = (path: string, world: World) => {
   const home = norm(world.home)
@@ -226,6 +238,26 @@ const takesSecret = (path: string, world: World) => {
   )
 }
 
+// cat * and cat prod* write no credential name: they are tried against the files the folder holds, once the guard has listed it.
+// shortcut: a wildcard in a folder's name (cat */prod*) is not listed; walk the folders if one is seen in use.
+const takesListed = (path: string, world: World) => {
+  const at = path.lastIndexOf('/')
+  const dir = path.slice(0, at) || '/'
+
+  if (isWild(dir)) {
+    return false
+  }
+
+  world.asked.add(dir)
+
+  const name = tokensOf(path.slice(at + 1))
+
+  return (world.files?.get(dir) ?? []).some(
+    // A dot file counts in every shell: bash's * takes one under dotglob. The name is judged first: the match is the costly part.
+    file => isSecretFile(`${dir}/${file}`, world) && witness(name, [...file]) !== undefined,
+  )
+}
+
 // Whether a resolved path names a credential file, a folder of them, or a wildcard that takes one in.
 const isSecret = (path: string, world: World) => {
   if (isSecretFile(path, world) || SECRET_DIR.test(path) || HOME_DIRS.some(dir => path === norm(world.home) + dir)) {
@@ -236,7 +268,7 @@ const isSecret = (path: string, world: World) => {
     return false
   }
 
-  const known = world.globs.get(path) ?? (path.length > MAX_GLOB || world.globs.size >= MAX_GLOBS || takesSecret(path, world))
+  const known = world.globs.get(path) ?? (path.length > MAX_GLOB || world.globs.size >= MAX_GLOBS || takesSecret(path, world) || takesListed(path, world))
 
   world.globs.set(path, known)
 
@@ -375,6 +407,8 @@ const statementsOf = (command: string, depth = 0): string[][][] => {
   const text = command
     .replace(QUOTED, quoted => (isEscape(quoted) ? quoted : quoted.replace(/[;|&\n(){}`<>]/g, ' ')))
     .replace(/(?<!\d)\d*>&\d|(?<!\d)\d*>>?\s*[^\s|;&]+/g, ' ')
+    // export { a, b } is a line of JavaScript, or an error to bash: the brace is export's argument, so it is no bare export.
+    .replace(/(?<![\w-])export[ \t]+\{(?=\s)/g, 'export \u0001')
   const own = text.split(/\|\||&&|[;&\n(){}`]/).map(statement =>
     statement
       .split('|')
@@ -456,8 +490,11 @@ const ENDS = String.raw`\s*(?:\|\s*(?<next>[^\s|;&]+)|(?=$|[;\n&}>]|\d>))`
 // The variable, or [Environment]::GetEnvironmentVariable('NAME'), alone as a statement, in quotes or parentheses too
 // ("$env:TOKEN", ($env:TOKEN)): PowerShell prints it, bash runs it and prints the value in its error. After a keyword
 // (if ($env:TOKEN)) it is a test.
+// A member or index on it prints it too: $env:TOKEN.ToString(), ($env:TOKEN).Trim(), $env:TOKEN[0..7]. Its .Length alone runs,
+// as it did.
+const MEMBERS = String.raw`(?!\.length(?![\w.[(]))(?:\.\w+(?:\([^()\n]*\))?|\[[^\]\n]*\])*`
 const BARE_VAR = new RegExp(
-  String.raw`(?:^|[;\n&{]|\|\|)[ \t]*(?:[("]+[ \t]*)?(?:\$\{?(?:env:)?${SECRET_NAME}\}?|%${SECRET_NAME}%|\[(?:system\.)?environment\]::getenvironmentvariable\(\s*['"]${SECRET_NAME}['"][^)]*\))\s*(?:[)"]+\s*)?${ENDS}`,
+  String.raw`(?:^|[;\n&{]|\|\|)[ \t]*(?:[("]+[ \t]*)?(?:\$\{?(?:env:)?${SECRET_NAME}\}?|%${SECRET_NAME}%|\[(?:system\.)?environment\]::getenvironmentvariable\(\s*['"]${SECRET_NAME}['"][^)]*\))${MEMBERS}\s*(?:[)"]+${MEMBERS}\s*)?${ENDS}`,
   'gi',
 )
 // A string alone as a statement is printed the same way: "token: $env:GITHUB_TOKEN". One with no space ("$KEY_DIR/run.sh") is
@@ -611,9 +648,10 @@ const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean
     bin('kubectl|oc'),
     args =>
       (says(args, / config view /) && args.some(arg => /^--(raw|flatten)/.test(arg))) ||
-      // A secret among several kinds (get cm,secret), and any output that prints its data (custom-columns=D:.data).
+      // A secret among several kinds (get cm,secret), in any case (get Secret), and any output that prints its data
+      // (custom-columns=D:.data).
       (says(args, / get /) &&
-        args.some(arg => /(^|,)secrets?([/,.]|$)/.test(arg)) &&
+        args.some(arg => /(^|,)secrets?([/,.]|$)/i.test(arg)) &&
         / (-o|--output)[= ]?(yaml|json|jsonpath|go-template|custom-columns)| --template/.test(` ${args.join(' ')}`)),
   ],
 ]
@@ -663,8 +701,14 @@ const finding = (command: string, world: World): string | undefined => {
   const read =
     readers.map(args => secretIn(args, world)).find(Boolean) ??
     [...copies, ...(copies.length > 0 ? braces.map(braced) : [])].map(args => copiedOut(args, world)).find(Boolean) ??
-    // cat < .env, cat 0<.env, cat <>.env, $(< key.pem): the file reaches the program without being its argument.
-    secretIn([...command.replace(QUOTED, quoted => quoted.replace(/</g, ' ')).matchAll(/(?<!<)<(?![<(&])>?\s*([^\s<>|;&()]+)/g)].map(([, file = '']) => file), world) ??
+    // cat < .env, cat 0<.env, cat <>.env, $(< key.pem): the file reaches the program without being its argument. A < in quotes
+    // is text, but for the one that opens a substitution: "$(<.env)".
+    secretIn(
+      [...command.replace(QUOTED, quoted => quoted.replace(/(?<!(?:\$\(|\x60)\s*)</g, ' ')).matchAll(/(?<!<)<(?![<(&])>?\s*([^\s<>|;&()\x60]+)/g)].map(
+        ([, file = '']) => file,
+      ),
+      world,
+    ) ??
     (READ_CALL.test(command) ? secretIn(command.split(/[\s;|&()<>`,[\]"']+/), world) : undefined) ??
     (readers.length > 0 ? secretIn(braces, world) : undefined)
 
@@ -744,7 +788,8 @@ const finding = (command: string, world: World): string | undefined => {
 
   if (
     !intoSecret &&
-    (statements.some(printsVar) ||
+    // ${NAME} is read as $NAME as well: to the statement parser its braces end a statement.
+    ([...statements, ...statementsOf(command.replace(/\$\{([^{}]*)\}/g, '$$$1'))].some(printsVar) ||
       [command, ...scripts].some(text => [...text.matchAll(BARE_VAR)].some(isPrinted)) ||
       [...command.matchAll(BARE_STRING)].some(found => /\s/.test(found.groups?.text ?? '') && SECRET_VAR.test(found.groups?.text ?? '') && isPrinted(found)) ||
       invocations(command, CODE_RUNNER).some(args => args.some(arg => NAMED_IN_CODE.test(arg))))
@@ -771,6 +816,7 @@ const worldOf = (cwd: string, home: string, allowed = ''): World => ({
   cwd,
   home,
   globs: new Map(),
+  asked: new Set(),
   allow: allowed
     .split(',')
     .map(glob => glob.trim())
@@ -807,7 +853,8 @@ const SHELL_TOOLS = ['Bash', 'PowerShell', 'Monitor', TERMINAL]
 // shortcut: any other MCP tool that runs a command is not read; deny it by name in managed settings (permissions.deny) or add it here.
 
 // The folders a cd, Set-Location, pushd or chdir in the command leads to: a name after it is read in each, since which
-// one applies to which read is not followed. One that cannot be resolved (cd $DIR, cd "$(...)", cd -) is NOWHERE.
+// one applies to which read is not followed. One that cannot be resolved (cd $DIR, cd "$(...)", cd -) is NOWHERE. A bare cd
+// is the home folder to bash and PowerShell 7, and NOWHERE as well, as it was.
 // shortcut: git -C, env -C, make -C and Start-Process -WorkingDirectory are not followed; add them if one is seen in use.
 const MOVER = bin('cd|chdir|pushd|Set-Location|sl|Push-Location')
 const MOVES = /(?<![\w-])(cd|chdir|pushd|set-location|sl|push-location)(?![\w-])/i
@@ -827,13 +874,27 @@ const worldsOf = (command: string, world: World): World[] => {
       .replace(HOME_ANYWHERE, '')
       .split(/[\n;|&]/)
       .some(part => MOVES.test(part) && /[$\x60(%]|(^|\s)["']?(-|~\S+)["']?(\s|$)/.test(part))
+  const targets = moves.slice(0, MAX_MOVES).map(args => (args.length === 0 ? ['~'] : args.slice(0, 4)))
   const dirs = new Set<string>()
   let from = [world.cwd]
 
-  // cd ~ && cd .aws: each move is tried from where the ones before it led.
+  // cd ~ && cd .aws: each move is tried from where the ones before it led, in any order for three moves.
   for (let round = 0; round < Math.min(moves.length, 3); round++) {
-    from = from.flatMap(cwd => moves.slice(0, MAX_MOVES).flatMap(args => args.slice(0, 4).flatMap(arg => pathsOf(arg, { ...world, cwd })))).filter(dir => !dirs.has(dir))
+    from = from.flatMap(cwd => targets.flatMap(args => args.flatMap(arg => pathsOf(arg, { ...world, cwd })))).filter(dir => !dirs.has(dir))
     from.slice(0, 2 * MAX_MOVES - dirs.size).forEach(dir => dirs.add(dir))
+  }
+
+  // A longer chain is followed one move after the other. The parser hands the calls back last first; both orders are walked,
+  // so that this holds whichever way it does.
+  for (const chain of [[...targets].reverse(), targets]) {
+    let at = [world.cwd]
+
+    for (const args of chain) {
+      const next = [...new Set(at.flatMap(cwd => args.flatMap(arg => pathsOf(arg, { ...world, cwd }))))].slice(0, 4)
+
+      at = next.length > 0 ? next : at
+      at.forEach(dir => dirs.add(dir))
+    }
   }
 
   return [world, ...[...dirs, ...(isLost ? [NOWHERE] : [])].map(cwd => ({ ...world, cwd, moved: true }))]
@@ -906,8 +967,30 @@ export const register: Register = on => {
   on('tool.call', { tool: SHELL_TOOLS }, async ($, e, next) => {
     // A Monitor that opens a WebSocket has no command.
     const written = String((e as { command?: unknown }).command ?? '')
-    const world = worldOf(await $.session.cwd(), (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
-    const found = denial(e.tool, written, world)
+    const cwd = await $.session.cwd()
+    const world = worldOf(cwd, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~', await $.env.get('SECRET_READ_ALLOW'))
+    let found = denial(e.tool, written, world)
+
+    if (found === undefined && world.asked.size > MAX_LISTED) {
+      found = 'it names wildcards in more folders than are checked for a credential file. Run it as shorter commands.'
+    } else if (found === undefined && world.asked.size > 0) {
+      // A folder that is not there, or cannot be listed, holds nothing to this check: the wildcard is judged by its text alone, as before.
+      // shortcut: a path is lower-cased when resolved, so on a case-sensitive disk only the working folder and lower-case
+      // folders are listed; keep the written case if that bites.
+      // The call is written whole, $.fs.list(: the host lets a mod make only the calls it finds in its source.
+      const list = async (dir: string) => {
+        try {
+          return (await $.fs.list(dir === norm(cwd) ? cwd : dir)).map(entry => entry.name.toLowerCase())
+        } catch {
+          return []
+        }
+      }
+      const files = new Map(await Promise.all([...world.asked].map(async dir => [dir, await list(dir)] as const)))
+
+      found = [...files.values()].some(names => names.length > MAX_ENTRIES)
+        ? 'it names a wildcard in a folder with more files than are checked for a credential file. Name the files instead.'
+        : denial(e.tool, written, { ...world, files, globs: new Map() })
+    }
 
     return found === undefined ? next(e) : { deny: `${$.plugin.name}: ${found}` }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: `${$.plugin.name}: its guard failed.` }))

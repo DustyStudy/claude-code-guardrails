@@ -20,6 +20,19 @@ const NO_VALUE = /^--(debug|no-verify-ssl|no-paginate|no-sign-request|no-cli-pag
 const MOST = 64
 const TOO_LONG = 'with more options than the guard reads'
 const UNREAD = 'with an operation the shell fills in'
+// Put in a second reading of the command before each $( ), ` ` and ( ), so the word a substitution stands in or is joined to is
+// known: the parser says only that a call has one. A Unicode noncharacter, so no command is written with it.
+const MARK = '\uFDD3'
+// A word the shell fills in: a marked substitution, a variable ($OP, ${OP}, $env:OP, cmd's %OP% and !OP!), a glob (r? is rb
+// beside a file of that name) or PowerShell's @splat.
+const FILLED = new RegExp(String.raw`[$${MARK}*?[]|[%!]\w+[%!]|^@\w`)
+// Put in that second reading before each $ and opening backtick that is not surely inside double quotes: bash splits what an
+// unquoted one leaves into words, so `--profile $P` can be `--profile x iam delete-role`. cmd pastes %P% in as text, quoted or not.
+const UNQUOTED = '\uFDD4'
+const SPLIT = new RegExp(String.raw`${UNQUOTED}|[%!]\w+[%!]`)
+// The verbs of the Organizations and Identity Center writes: no service's name starts with one.
+const WRITE_VERB =
+  /^(accept|attach|cancel|close|create|decline|delete|deregister|detach|disable|enable|invite|leave|move|provision|put|register|remove|tag|untag|update)-/
 const r = String.raw
 // The operations denied, by AWS CLI service: what turns off logging or detection, opens S3 to the public, changes who can do what
 // in IAM or KMS, or destroys data that IAM often allows. Creating and deploying (create-role, put-object, run-instances) pass.
@@ -172,11 +185,86 @@ const CMDLET_WITH: readonly (readonly [string, string, (args: readonly string[])
   ['Initialize-AWSDefault(Configuration|s)', 'Initialize-AWSDefaultConfiguration', hasKey],
 ]
 
+// The command with UNQUOTED put in, quotes read as bash does.
+// shortcut: quotes are followed on one line only, and not past a substitution inside double quotes; in a command of several lines,
+// or after such a substitution, every $ counts as unquoted, so a quoted global option's value before the operation is denied there.
+const markUnquoted = (text: string): string => {
+  let out = ''
+  let quote = ''
+  let isAnsi = false
+  let inBackticks = false
+  let isLost = text.includes('\n')
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+
+    // A backslash escapes nothing inside '...', but does inside $'...'.
+    if (c === '\\' && (quote !== "'" || isAnsi)) {
+      out += text.slice(i, i + 2)
+      i++
+      continue
+    }
+
+    const opens = c === '`' && quote !== "'" && !inBackticks
+
+    if (c === '$' || opens) {
+      out += quote !== '"' || isLost ? UNQUOTED : ''
+      // Its body has quotes of its own, and where it ends is not read.
+      isLost ||= quote === '"' && (opens || text[i + 1] === '(')
+    }
+
+    if (c === '`' && quote !== "'") {
+      inBackticks = !inBackticks
+    } else if (quote === '') {
+      if (c === '"' || c === "'") {
+        quote = c
+        isAnsi = c === "'" && text[i - 1] === '$'
+      }
+    } else if (c === quote) {
+      quote = ''
+    }
+
+    out += c
+  }
+
+  return out
+}
+
+// A filled-in word where the service or the operation may stand: any word up to the second one that no option can take as its
+// value, but an option-led word and a known global option's value that is one word. After those two, a filled-in word is an argument.
+// An option a substitution is joined to (--x=$(echo 1 rb)) can end in any words too.
+const isFilled = (args: readonly string[]): boolean => {
+  let positional = 0
+
+  for (const [i, word] of args.entries()) {
+    const before = args[i - 1] ?? ''
+
+    if (word.startsWith('-') ? !word.includes(MARK) : VALUE_OPTION.test(before) && !SPLIT.test(word)) {
+      continue
+    }
+
+    if (FILLED.test(word)) {
+      return true
+    }
+
+    if ((!before.startsWith('-') || NO_VALUE.test(before)) && ++positional === 2) {
+      return false
+    }
+  }
+
+  return false
+}
+
 // The service and operation are the first two bare words, wherever the global options sit.
 // `valued` holds the options the command's text gives a substitution for a value (--region $(...)).
 const mutation = (written: readonly string[], valued: ReadonlySet<string>): string | undefined => {
   // A shell drops an escape inside a word: delete\-role (bash), delete`-role (PowerShell), delete^-role (cmd).
   const args = written.map(word => word.replace(/[\\^`]/g, ''))
+
+  if (isFilled(args)) {
+    return UNREAD
+  }
+
   const isSkeleton = args.includes('--generate-cli-skeleton')
   // A $( ), ` ` or PowerShell ( ) stood among the arguments: the shell can put any word there, the operation or an option.
   const isDynamic = args.includes(DYNAMIC)
@@ -196,7 +284,8 @@ const mutation = (written: readonly string[], valued: ReadonlySet<string>): stri
   let unread = isDynamic && !isValued ? UNREAD : undefined
   let pairs = 0
 
-  if (isValued && (first === undefined || [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(first)))) {
+  // The same for a service with every write denied, by the operation's verb: any word matches its pattern.
+  if (isValued && (first === undefined || WRITE_VERB.test(first) || [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(first)))) {
     return UNREAD
   }
 
@@ -253,10 +342,27 @@ const mutation = (written: readonly string[], valued: ReadonlySet<string>): stri
 const inRunner = (args: readonly string[], depth: number, valued: ReadonlySet<string>): string | undefined => {
   let starts = 0
 
-  for (const [i, word] of args.entries()) {
+  for (const [i, written] of args.entries()) {
+    const word = written.replace(/^--entrypoint=/, '')
     const from =
       BINARY.test(word) || IMAGE.test(word) || /^-\w*mawscli$/.test(word) ? i + 1 : /^-\w*m$/.test(word) && args[i + 1] === 'awscli' ? i + 2 : -1
-    const cli = from < 0 ? undefined : ++starts > MOST ? TOO_LONG : mutation(args.slice(from), valued)
+    // As a container's entrypoint (docker run --entrypoint aws image iam delete-role) the call starts after the image, which is
+    // any word: read from each. shortcut: a substitution or variable anywhere after such an entrypoint denies; place the image if that bites.
+    const isEntry = word !== written || args[i - 1] === '--entrypoint'
+    const isEntrypoint = isEntry && BINARY.test(word)
+
+    // The entrypoint's other forms (podman's JSON list '["aws","iam","delete-role"]') are not read.
+    if (isEntry && !isEntrypoint && /aws/i.test(word)) {
+      return `aws ${UNREAD}`
+    }
+
+    const rest = args.length - from
+    const cli =
+      from < 0
+        ? undefined
+        : ++starts > MOST || (isEntrypoint && rest > MOST)
+          ? TOO_LONG
+          : Array.from({ length: isEntrypoint ? rest : 1 }, (_, n) => mutation(args.slice(from + n), valued)).find(Boolean)
     const call = cli === undefined ? (/\s/.test(word) ? denied(word, depth + 1) : undefined) : `aws ${cli}`
 
     if (call !== undefined) {
@@ -352,18 +458,31 @@ const denied = (command: string, depth = 0): string | undefined => {
   }
 
   const valued = new Set([...command.matchAll(/(--[\w-]+)\s+["']?(?:\$\(|`|\()/g)].map(([, option = '']) => option))
-  const cli = invocations(command, BINARY).map(args => mutation(args, valued)).find(Boolean)
-  if (cli !== undefined) {
-    return `aws ${cli}`
+  // Read as written, and again with each substitution marked (a nested command line comes from a marked one): the second reading
+  // only adds denies, since a mark can part a word (PowerShell's delete`-role).
+  const marked = depth > 0 ? command : markUnquoted(command).replace(/`([^`\n]*)`/g, `${MARK}\`$1\``).replace(/\$?\(/g, `${MARK}$&`)
+
+  if (unreadable(marked) !== undefined) {
+    return 'a command with more substitutions than the guard reads'
   }
 
-  const viaRunner = invocations(command, RUNNER).map(args => inRunner(args, depth, valued)).find(Boolean)
-  if (viaRunner !== undefined) {
-    return viaRunner
+  for (const text of new Set([command, marked])) {
+    const cli = invocations(text, BINARY).map(args => mutation(args, valued)).find(Boolean)
+    if (cli !== undefined) {
+      return `aws ${cli}`
+    }
+
+    const viaRunner = invocations(text, RUNNER).map(args => inRunner(args, depth, valued)).find(Boolean)
+    if (viaRunner !== undefined) {
+      return viaRunner
+    }
   }
 
   // The parser hands back a call's arguments, not its name, so the name is found in the text.
-  if (cmdletCalls(command, CMDLET).some(([, strict]) => !isWhatIf(strict))) {
+  // A here-string's body is a value the parser reads as words, so in a command with one a -WhatIf allows nothing.
+  const hasHereString = /@["'][ \t]*\r?\n/.test(command)
+
+  if (cmdletCalls(command, CMDLET).some(([, strict]) => hasHereString || !isWhatIf(strict))) {
     return command.match(CMDLET_IN_TEXT)?.[0] ?? 'an AWS Tools for PowerShell call'
   }
 
