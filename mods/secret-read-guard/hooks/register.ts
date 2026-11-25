@@ -319,7 +319,14 @@ const EDITOR = bin('sed|yq')
 const isInPlace = (args: readonly string[]) => args.some(arg => /^(-i|--in-place)/.test(arg))
 // By case: grep's -a, -b, -c and -F take no value, and one read as taking it let the file pass for the pattern. -T and -E take one
 // only in rg, so they are left out.
-const isRecursive = (args: readonly string[]) => args.some(arg => (/^-[a-zA-Z]+$/.test(arg) && /[rR]/.test(arg)) || /^--(dereference-)?recursive$/.test(arg))
+// -d recurse and --directories=recurse are -r spelled out.
+const isRecursive = (args: readonly string[]) =>
+  args.some(
+    (arg, i) =>
+      (/^-[a-zA-Z]+$/.test(arg) && /[rR]/.test(arg)) ||
+      /^(--(dereference-)?recursive|-drecurse|--directories=recurse)$/.test(arg) ||
+      (/^(-d|--directories)$/.test(arg) && args[i + 1] === 'recurse'),
+  )
 const isValueFlag = (arg: string) =>
   /^(-[ABCmtgf]|--(after-context|before-context|context|max-count|type|type-not|glob|iglob|file))$/.test(arg) || /^-((literal)?path|context)$/i.test(arg)
 const operands = (args: readonly string[], hasShortFlags = true) => {
@@ -380,17 +387,22 @@ const tarred = (args: readonly string[]) => {
 
   return [...args.filter((arg, i) => !isFlags(arg, i) && (at < 0 || i !== at + 1)), file]
 }
-// tar -xOf x.tgz .env (or xOf, or --extract --to-stdout) prints the members it names.
+// tar -xOf x.tgz .env (or xOf, --extract --to-stdout, or --to-command=cat) prints the members it names.
 const untarred = (args: readonly string[]) => {
   const flags = args.filter((arg, i) => arg.startsWith('-') || i === 0)
   const short = flags.filter(arg => /^-?[A-Za-z]+$/.test(arg)).join('')
-  const isPrinted = (/x/.test(short) || flags.some(arg => /^--(extract|get)$/.test(arg))) && (/O/.test(short) || flags.includes('--to-stdout'))
+  const isPrinted =
+    (/x/.test(short) || flags.some(arg => /^--(extract|get)$/.test(arg))) && (/O/.test(short) || flags.some(arg => /^--(to-stdout|to-command)(=|$)/.test(arg)))
 
   return isPrinted ? args.filter((arg, i) => !arg.startsWith('-') && i > 0) : []
 }
-// git show rev:.env, cat-file -p :.env, and diff, blame or log -p naming one print its content, now or as it was.
+// git show rev:.env, cat-file -p :.env, and diff, blame, archive, format-patch --stdout or log -p naming one print its content,
+// now or as it was. rev-parse rev:.env names the blob for a cat-file to print.
 const gitShown = (args: readonly string[]) =>
-  says(args, / (show|cat-file|diff|blame) /) || (says(args, / log /) && args.some(arg => /^(-p|-u|-U\d*|--unified(=\d+)?|--patch(-with-\w+)?|-L\S*)$/.test(arg)))
+  says(args, / (show|cat-file|diff|blame|archive|rev-parse) /) ||
+  (says(args, / format-patch /) && args.includes('--stdout')) ||
+  (says(args, / (log|whatchanged) /) &&
+    args.some(arg => /^(-p|-u|-c|-m|-U\d*|--cc|--dd|--remerge-diff|--unified(=\d+)?|--patch(-with-\w+)?|--word-diff(=\S*)?|--color-words(=\S*)?|-L\S*)$/.test(arg)))
     ? args.filter(arg => !arg.startsWith('-')).flatMap(arg => [arg, arg.slice(arg.indexOf(':') + 1), arg.slice(arg.lastIndexOf(':') + 1)])
     : []
 const copiedOut = (args: readonly string[], world: World) => {
@@ -526,20 +538,51 @@ const BARE_STRING = new RegExp(String.raw`(?:^|[;\n&{]|\|\|)[ \t(]*"(?<text>[^"\
 // "x" + $env:TOKEN, [string]$env:TOKEN, and a writer's argument the statement parser splits off: Write-Output ("x" + $env:TOKEN).
 // A statement opens as an expression with $, a quote, @, a digit, a unary , or +, -join or -split, or a [type]; [ -n "$TOKEN" ]
 // is bash's test.
-// It is read with continued lines joined: a line that goes on a command (\ or ` at its end) holds its arguments.
-const EXPRESSION = new RegExp(
-  String.raw`(?:^|[;\n&{]|\|\|)[ \t]*(?<text>(?:(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]|[( \t]*(?:-[ic]?(?:join|split)(?![\w-])|[$"'@\d,+]|\[\w))[^;\n&|]*)${ENDS}`,
-  'gi',
-)
+// Each statement is read once, and every pattern on it is anchored with no two runs that can take the same characters: a long
+// line of spaces or operators is read in linear time.
+const STATEMENT = /(?:^|\|\||[;\n&{}])([^;\n&{}|]*)(?:\|(?!\|)[ \t]*([^\s|;&{}]*))?/g
+const EXPRESSION_START = /^[ \t(]*(?:-[ic]?(?:join|split)(?![\w-])|[$"'@\d,+]|\[\w)/
+const WRITER_START = /^[ \t]*(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]/i
+// What reaches the screen whatever is done with the statement's value: $x = $env:TOKEN | Write-Host, $x = Write-Host $env:TOKEN.
+const HOST_WRITER = /(?<![\w-])(?:write-host|out-host|write-information)(?![\w-])/i
 const SECRET_VARS = new RegExp(SECRET_VAR.source, 'gi')
-// An assignment yields nothing ($t = $env:TOKEN, [string]$t = ..., 'Authorization' = ... in a hashtable), nor does a
-// test ([string]::IsNullOrEmpty($env:TOKEN)) or $env:TOKEN.Length, as before.
-const ASSIGNED = /^[ \t]*(?:\[[\w.]+\][ \t]*)*(?:\$[\w:]+(?:\.\w+|\[[^\]]*\])*|"")[ \t]*(?:[-+*/%]|\?\?)?=(?!=)/
+const LENGTH = /\}?\.length(?![\w.[(])/iy
+// An assignment yields nothing ($t = $env:TOKEN, [string]$t = ...), nor does a test ([string]::IsNullOrEmpty($env:TOKEN)) or
+// $env:TOKEN.Length outside quotes, as before. A hashtable's 'key' = $env:TOKEN is printed with the table, so it is no assignment.
+const ASSIGNED = /^[ \t]*(?:\[[\w.]+\][ \t]*)*\$[\w:]+(?:\.\w+|\[[^\]]*\])*[ \t]*(?:[-+*/%]|\?\?)?=(?!=)/
 const TEST_CALL = /^[ \t(]*\[[\w.]+\]::Is\w+\([^()]*\)[ \t)]*$/i
-const yieldsSecret = (text: string) =>
-  !ASSIGNED.test(text.replace(QUOTED, quoted => (isEscape(quoted) ? quoted : '""'))) &&
-  !TEST_CALL.test(text) &&
-  [...text.matchAll(SECRET_VARS)].some(({ index = 0, 0: found }) => !/^\}?\.length(?![\w.[(])/i.test(text.slice(index + found.length)))
+const yieldsSecret = (text: string, next = '') => {
+  // Same length, with the quoted runs blanked: a .Length inside "..." is text after the value.
+  const outside = text.replace(QUOTED, quoted => (isEscape(quoted) ? quoted : ' '.repeat(quoted.length)))
+
+  return (
+    (!ASSIGNED.test(outside) || HOST_WRITER.test(text) || HOST_WRITER.test(next)) &&
+    !TEST_CALL.test(text) &&
+    [...text.matchAll(SECRET_VARS)].some(({ index = 0, 0: found }) => {
+      LENGTH.lastIndex = index + found.length
+
+      return outside[index] !== '$' || !LENGTH.test(text)
+    })
+  )
+}
+// Any expression as a statement is printed by PowerShell, and run by bash. Continued lines are joined first (` in both, \ but for
+// PowerShell, neither on a comment line), and separators inside quotes are text: "a;b" + $env:TOKEN.
+const printsExpression = (command: string, isPowerShell: boolean) => {
+  const lines = command.split('\n')
+  const joined = lines
+    .map((line, i) => {
+      const isComment = /^\s*#/.test(line) || /\s#/.test(line)
+      const goesOn = i < lines.length - 1 && !isComment && (/`\r?$/.test(line) || (!isPowerShell && /\\\r?$/.test(line)))
+
+      return goesOn ? `${line.replace(/[\\`]\r?$/, '')} ` : `${line}\n`
+    })
+    .join('')
+  const text = joined.replace(/\$\{([^{}]*)\}/g, '$$$1').replace(QUOTED, quoted => (isEscape(quoted) ? quoted : quoted.replace(/[;|&\n{}]/g, ' ')))
+
+  return [...text.matchAll(STATEMENT)].some(
+    ([, body = '', next]) => (EXPRESSION_START.test(body) || WRITER_START.test(body)) && yieldsSecret(body, next) && (!next || printsInput(next)),
+  )
+}
 // Code handed to an interpreter that names one: os.environ['GITHUB_TOKEN'], process.env.GITHUB_TOKEN, $ENV{GITHUB_TOKEN}.
 const CODE_RUNNER = bin(String.raw`python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|awk|gawk|mawk|nawk`)
 const NAMED_IN_CODE = new RegExp(
@@ -651,8 +694,10 @@ const aboveHome = (words: readonly string[], world: World) => {
 // grep -r x ., gci -Recurse | sls x and aws s3 sync . read or send every file the folder holds, a credential file among them,
 // unless a filter leaves it out. rg, git grep and the Grep tool skip what .gitignore names, so they are not read here.
 // shortcut: only the files directly in the folder are listed, not those in its subfolders; walk them if one is seen in use.
+// The working folder by its variable: $PWD, ${PWD}, $pwd, $(pwd), and the same in quotes.
+const PWD = /^["']?(\$\{?pwd\}?|\$\(\s*pwd\s*\)|\$\{?env:pwd\}?)["']?(?=[\\/]|$)/i
 const heldIn = (dirs: readonly string[], world: World, isLeftOut: (name: string) => boolean = () => false) => {
-  for (const dir of dirs.flatMap(word => pathsOf(word, world))) {
+  for (const dir of dirs.flatMap(word => pathsOf(word.replace(PWD, '.'), world))) {
     // A wildcard is tried against the folder's files by isSecret.
     if (!isWild(dir)) {
       world.asked.set(dir, world.cased.get(dir) ?? dir)
@@ -687,9 +732,11 @@ const uploaded = (args: readonly string[], world: World) => {
   const filters = args.flatMap((arg, i) =>
     /^--(exclude|include)(=|$)/.test(arg) ? [[arg.startsWith('--exclude'), tokensOf((arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : (args[i + 1] ?? '')).replace(/["']/g, '').toLowerCase())] as const] : [],
   )
-  const local = args.slice(sub + 1, bucket).filter((arg, i, all) => !arg.startsWith('-') && !/^--(exclude|include)$/.test(all[i - 1] ?? ''))
+  const local = args.slice(sub + 1, bucket).filter((arg, i, all) => (!arg.startsWith('-') || arg === DYNAMIC) && !/^--(exclude|include)$/.test(all[i - 1] ?? ''))
+  // A folder that cannot be resolved ($SRC, $(…)) may be the one with the credential: denied.
+  const unknown = local.find(arg => /[$`\u0000]/.test(arg.replace(/["']/g, '').replace(PWD, '.').replace(HOME_VAR, '~')))
 
-  return heldIn(local, world, name => [...filters].reverse().find(([, glob]) => witness(glob, [...name]) !== undefined)?.[0] === true)
+  return unknown ?? heldIn(local, world, name => [...filters].reverse().find(([, glob]) => witness(glob, [...name]) !== undefined)?.[0] === true)
 }
 const searchDeny = (root: string) =>
   `this would search every file under ${root}, the credentials in your home folder among them, and put what matches ${WHERE} Search the project or a folder in it instead.`
@@ -698,9 +745,11 @@ const searchDeny = (root: string) =>
 const says = (args: readonly string[], phrase: RegExp) => phrase.test(` ${args.filter(arg => !arg.startsWith('-')).join(' ')} `)
 const composeConfig = (args: readonly string[], isCompose: boolean) =>
   isCompose &&
-  args.filter((arg, i) => !arg.startsWith('-') && !/^(-f|--file|-p|--project-name|--env-file|--profile|--project-directory|--ansi|--progress|--parallel)$/.test(args[i - 1] ?? ''))[0] ===
-    'config' &&
-  !args.some(arg => /^(-q|--quiet|--services|--volumes|--profiles|--images|--networks|--hash)(=|$)/.test(arg))
+  /^(config|convert)$/.test(
+    args.filter((arg, i) => !arg.startsWith('-') && !/^(-f|--file|-p|--project-name|--env-file|--profile|--project-directory|--ansi|--progress|--parallel)$/.test(args[i - 1] ?? ''))[0] ?? '',
+  ) &&
+  // A names-only flag counts written bare; one given a value (--services=false) may turn it off.
+  !(args.some(arg => /^(-q|--quiet|--services|--volumes|--profiles|--images|--networks)$/.test(arg)) && !args.some(arg => /^(-q|--quiet|--services|--volumes|--profiles|--images|--networks)=/.test(arg)))
 const PRINTERS: readonly (readonly [RegExp, (args: readonly string[]) => boolean])[] = [
   [
     bin('aws'),
@@ -768,7 +817,7 @@ const fileDeny = (file: string, how = 'this would put') => `${how} ${file} ${WHE
 // shortcut: a path is found only as written (whole, with ~ or a home variable, or as a wildcard); one built from pieces
 // (Join-Path), read through a symlink or an 8.3 short name, or by a script file that opens it, slips past.
 /** Why the command would put a secret into the conversation, or undefined. */
-const finding = (command: string, world: World): string | undefined => {
+const finding = (command: string, world: World, tool = 'Bash'): string | undefined => {
   // rg x C:\Users, grep -r x /c/Users: a search of whole folders. After a cd, one that names no folder searches the folder
   // moved to: cd ~ && rg aws_secret.
   const searches = [...invocations(command, bin('rg')), ...invocations(command, bin('grep|egrep|fgrep')).filter(isRecursive)]
@@ -790,6 +839,7 @@ const finding = (command: string, world: World): string | undefined => {
     ...invocations(command, bin('openssl')).map(args => fileOf(args, /^-in$/)),
     ...invocations(command, bin('git')).map(gitShown),
     ...invocations(command, bin('tar|bsdtar')).map(untarred),
+    ...invocations(command, bin('7z|7za|7zr|7zz')).map(args => (args.some(arg => /^-so$/i.test(arg)) ? args.filter(arg => !arg.startsWith('-')) : [])),
     ...invocations(command, bin('unzip')).map(args => (args.some(arg => /^-[a-zA-Z]*[pc][a-zA-Z]*$/.test(arg)) ? args.filter(arg => !arg.startsWith('-')) : [])),
   ]
   const statements = statementsOf(command)
@@ -819,7 +869,9 @@ const finding = (command: string, world: World): string | undefined => {
     invocations(command, bin('grep|egrep|fgrep'))
       .filter(args => isRecursive(args) && !isNamesOnly(args))
       .map(args => {
-        const named = operands(args).filter((arg, i, all) => !arg.startsWith('-') && !isValueFlag(all[i - 1] ?? '') && !/^--(include|exclude|exclude-dir|exclude-from)$/.test(all[i - 1] ?? ''))
+        const named = operands(args).filter(
+          (arg, i, all) => !arg.startsWith('-') && !isValueFlag(all[i - 1] ?? '') && !/^(--(include|exclude|exclude-dir|exclude-from|directories|devices)|-[dD])$/.test(all[i - 1] ?? ''),
+        )
 
         return heldIn(named.length > 0 ? named : ['.'], world, leftOutBy(globsOf(args, /^--include([=:]|$)/), globsOf(args, /^--exclude([=:]|$)/)))
       })
@@ -864,7 +916,11 @@ const finding = (command: string, world: World): string | undefined => {
   const walked =
     readers.length > 0
       ? listers
-          .filter(([program, ...args]) => /^(gci|get-childitem|dir|ls)$/.test(nameOf(program)) && args.some(arg => /^-r(e(c(u(r(se?)?)?)?)?)?$/i.test(arg)) && !args.some(arg => /^-name$/i.test(arg)))
+          // -Recurse:$true and -Depth 2 walk the folder too.
+          .filter(
+            ([program, ...args]) =>
+              /^(gci|get-childitem|dir|ls)$/.test(nameOf(program)) && args.some(arg => /^-(r(e(c(u(r(se?)?)?)?)?)?|de\w*)(:\S*)?$/i.test(arg)) && !args.some(arg => /^-name$/i.test(arg)),
+          )
           .map(([, ...args]) => {
             const named = args.filter((arg, i) => !arg.startsWith('-') && !/^-(inc|ex|filt|de|at)\w*$/i.test(args[i - 1] ?? ''))
 
@@ -926,7 +982,8 @@ const finding = (command: string, world: World): string | undefined => {
     ([...statements, ...statementsOf(command.replace(/\$\{([^{}]*)\}/g, '$$$1'))].some(printsVar) ||
       [command, ...scripts].some(text => [...text.matchAll(BARE_VAR)].some(isPrinted)) ||
       [...command.matchAll(BARE_STRING)].some(found => /\s/.test(found.groups?.text ?? '') && SECRET_VAR.test(found.groups?.text ?? '') && isPrinted(found)) ||
-      [command, ...scripts].some(text => [...text.replace(/[\\`]\r?\n/g, ' ').matchAll(EXPRESSION)].some(found => yieldsSecret(found.groups?.text ?? '') && isPrinted(found))) ||
+      // \ continues a line in bash, not in PowerShell; the terminal tool's shell may be either.
+      [command, ...scripts].some(text => (tool === TERMINAL ? [true, false] : [tool === 'PowerShell']).some(isPowerShell => printsExpression(text, isPowerShell))) ||
       invocations(command, CODE_RUNNER).some(args => args.some(arg => NAMED_IN_CODE.test(arg))))
   ) {
     return `this would put the value of a variable named for a credential ${WHERE} Hand it to the program that needs it ("$NAME" as its argument, or piped to its --with-token or --password-stdin) instead of printing it.`
@@ -1068,7 +1125,7 @@ const denial = (tool: string, written: string, world: World): string | undefined
 
   for (const text of texts) {
     for (const one of worldsOf(text, world)) {
-      const found = finding(text, one)
+      const found = finding(text, one, tool)
 
       if (found !== undefined) {
         return found
