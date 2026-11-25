@@ -272,7 +272,8 @@ const oidcFindings = (text: string, isGithub: boolean): string[] => {
   }
 
   if (wild.length > 0) {
-    found.push(`trusts GitHub Actions OIDC for a wildcard repository (${wild.join(', ')}); name the repo in :sub`)
+    // The count, never the values: a finding goes into the context, and a value may hold a secret.
+    found.push(`trusts GitHub Actions OIDC for a wildcard repository (${wild.length} :sub value${wild.length === 1 ? '' : 's'}); name the repo in :sub`)
   }
 
   if (!hasAud) {
@@ -351,17 +352,21 @@ const trustFindings = (text: string): string[] => {
 }
 
 // Each wildcard principal needs a condition in its own statement: the block around Principal = "*", or the block around the
-// principal map or principals block that holds AWS = "*" or identifiers = ["*"]. Takes the text with the braces inside
-// strings gone. A principal whose statement the text cuts off is read as before, against a condition anywhere in the text.
+// principal map or principals block that holds AWS = "*" or identifiers = ["*"]. A principal whose statement the text cuts
+// off is read against a condition anywhere in the text.
 // shortcut: a policy in an escaped JSON string (.tf.json) is not read; upgrade to checkov for those.
-const principalFindings = (text: string): string[] => {
+const principalFindings = (source: string): string[] => {
+  // Braces inside strings become spaces, so offsets hold and no word is joined across a removed brace (Condi{tion}).
+  const text = eachString(source, quoted => quoted.replace(/[{}]/g, ' '))
   const wild = [...text.matchAll(/\b(Principal|AWS)"?\s*[=:]\s*\[?\s*"\*"|\bidentifiers\s*=\s*\[\s*"\*"/g)]
 
   if (wild.length === 0) {
     return []
   }
 
-  const conditions = [...text.matchAll(/\bCondition\b|\bcondition\s*\{/g)].map(match => match.index ?? 0)
+  // A Condition key, bare or quoted ("Condition": in JSON); every other string is blanked, so its text never counts.
+  const keys = eachString(text, quoted => (quoted === '"Condition"' ? quoted : `"${' '.repeat(quoted.length - 2)}"`))
+  const conditions = [...keys.matchAll(/\bCondition"?\s*[=:]|\bcondition\s*\{/g)].map(match => match.index ?? 0)
   const closed = blocksIn(text)
   const parents = new Map([...closed.values()].flatMap(block => block.kids.map(kid => [kid, block] as const)))
   // The innermost { open at each match, in one pass.
@@ -588,7 +593,7 @@ const findings = (source: string): string[] => {
     () => secretNameFindings(bare),
     () => resourceFindings(text),
     () => trustFindings(text),
-    () => principalFindings(bare),
+    () => principalFindings(text),
     () => policyFindings(text),
     () => portFindings(text),
     () => jsonFindings(source),
@@ -611,8 +616,13 @@ const MOST = 20
 // drop every warning.
 const lint = (file: string, texts: string[]): string[] => {
   try {
+    // A finding that names a variable or output carries text from the file: one that looks like a secret is not echoed.
     const found = [
-      ...new Set(texts.flatMap(text => (TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : []))),
+      ...new Set(
+        texts
+          .flatMap(text => (TERRAFORM.test(file) ? findings(text) : WORKFLOW.test(file) ? workflowFindings(text) : []))
+          .map(one => (secretIn(one) === undefined ? one : 'names a value that looks like a secret (not shown); review it by hand')),
+      ),
     ]
 
     return found.length > MOST ? [...found.slice(0, MOST), `has ${found.length - MOST} more finding(s) not listed`] : found
