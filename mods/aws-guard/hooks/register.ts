@@ -521,8 +521,8 @@ const denied = (command: string, depth = 0): string | undefined => {
 // A call through a variable (& $c, & ($c), . $c) that the same command sets to a name: read again with the name written in its
 // place, so a cmdlet denied by its arguments (Stop-EC2Instance -Terminate) is read with them. An assignment's name the parser
 // already reads as a call. shortcut: a name only known at run time (& $cmd alone, a name built from parts) is not followed.
-const CALL_THROUGH = /&\s*\(?\s*\$|(^|[;{\n])\s*\.\s+\(?\s*\$/
-const ASSIGNED_NAME = /\$([\w:]+)\s*=\s*(["'])([\w.\\-]+)\2/g
+const CALL_THROUGH = /&\s*\(?\s*["']?\$|(^|[;{\n])\s*\.\s+\(?\s*["']?\$/
+const ASSIGNED_NAME = /\$\{?([\w:]+)\}?\s*=\s*(["'])([\w.\\-]+)\2/g
 
 const throughVariables = (command: string): string | undefined => {
   if (!CALL_THROUGH.test(command)) {
@@ -536,28 +536,69 @@ const throughVariables = (command: string): string | undefined => {
   }
 
   const text = assigned.reduce(
-    (text, [, name = '', , value = '']) => text.replace(new RegExp(r`\$${name}(?![\w:])(?!\s*=)`, 'g'), () => value),
+    // $c, ${c} and $C are one variable: PowerShell's names ignore case.
+    (text, [, name = '', , value = '']) => text.replace(new RegExp(r`\$(\{${name}\}|${name}(?![\w:]))(?!\s*=)`, 'gi'), () => value),
     command,
   )
 
   return text === command ? undefined : denied(text)
 }
 
-// Inline code an interpreter runs (python -c, node -e, pwsh -c) that loads an AWS SDK, read from that flag to the command's end.
-const INLINE = /(?<![\w.-])(py|python[\d.]*|node|deno|bun|pwsh|powershell|ruby)(\.exe)?\s[^;|&\n]*?(?<=\s)(-c\w*|-e|-p|--eval|--print)(?=[\s"'=])/i
+const INTERPRETER = /(?<![\w.-])(i?python[\d.]*|py|node|deno|bun|pwsh|powershell|ruby)(\.exe)?(?=[\s"'`]|$)/gi
+// An interpreter runs code from the command line: an inline-code flag, clustered or not (python -Ic, node -pe, pwsh -Command),
+// deno eval, or stdin (`-`, a heredoc, a pipe into it).
+const INLINE_FLAG = /^(-\w*[cep]\w*|--eval|--print|-|eval)$/i
 const SDK = /boto3|botocore|aws-sdk|AWSSDK|\bAmazon\.\w/i
-// The SDKs name a CLI operation delete_role (Python), deleteRole (JavaScript v2), DeleteRoleCommand (v3) or DeleteRoleAsync (.NET).
-// Organizations and Identity Center deny every word, and configure has no SDK call, so they are left out here.
-// shortcut: inline code only, by the deny list's operation names; a script file, and code built at run time, pass.
-const sdkCall = (command: string): string | undefined => {
-  const at = command.match(INLINE)?.index
-  const code = at === undefined ? '' : command.slice(at)
 
-  if (!SDK.test(code)) {
+const runsInlineCode = (command: string): boolean | undefined => {
+  let seen = 0
+
+  for (const match of command.matchAll(INTERPRETER)) {
+    // Each one reads to its statement's end, so more than are read is denied, not read on: the work stays linear.
+    if (++seen > MOST) {
+      return undefined
+    }
+
+    const rest = command.slice((match.index ?? 0) + match[0].length)
+    const end = rest.search(/[;|&\n]/)
+    const statement = end < 0 ? rest : rest.slice(0, end)
+    const isPiped = command.slice(0, match.index).trimEnd().endsWith('|')
+
+    if (isPiped || statement.includes('<<') || statement.split(/\s+/).some(word => INLINE_FLAG.test(word))) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// The SDKs name a CLI operation delete_role (Python), deleteRole (JavaScript v2), DeleteRoleCommand (v3) or DeleteRoleAsync (.NET);
+// a boto3 resource or a client's object deletes with .delete(), .terminate() or .remove().
+// Organizations and Identity Center deny every word, and configure has no SDK call, so they are left out here.
+// shortcut: code on the command line or stdin, read whole once an interpreter runs some, by the deny list's operation names; a
+// script file, and code built at run time, pass.
+const sdkCall = (command: string): string | undefined => {
+  if (!SDK.test(command)) {
     return undefined
   }
 
-  for (const [identifier] of code.matchAll(/[A-Za-z][\w]*/g)) {
+  const runs = runsInlineCode(command)
+
+  if (runs === undefined) {
+    return `inline code ${TOO_LONG}`
+  }
+
+  if (!runs) {
+    return undefined
+  }
+
+  const removal = /resource\(|client\(/i.test(command) ? command.match(/\.(delete|terminate|remove)\s*\(/)?.[0] : undefined
+
+  if (removal !== undefined) {
+    return `the AWS SDK's ${removal}`
+  }
+
+  for (const [identifier] of command.matchAll(/[A-Za-z][\w]*/g)) {
     const operation = identifier
       .replace(/(Command|Async|Request)$/, '')
       .replace(/_/g, '-')
