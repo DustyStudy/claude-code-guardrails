@@ -52,6 +52,11 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
   on stdin, boto3 resource `.delete()`); traced, unconfirmed gaps in supply-chain (lockfile env spellings,
   `${X:-npx}`, `python $M`, conda create/update/run, `go get -u`) and terraform (the `namedByShell` path
   checks only `-auto-approve`, `$TF.exe`, `sal`/`nal`, same-line function). Sent back to the three implementers.
+  Fixed: supply-chain c796f57 (666 pass), aws-guard 86a6b58 (1,194 pass), terraform + parser 4b78a94 (668 pass).
+  Full `npm test` at 4b78a94: 5,299 pass, 0 fail, shell.ts copies match. Left open:
+  `$TF $(echo destroy -auto-approve)` (program and verb both shell-filled).
+- Opus reviewer (worktree, edit access) on secret-read-guard 0.6.0: no regressions; a quadratic regex
+  (60 KB input, 9.8 s) and 12 bypasses of the new denies. Sent back to the implementer.
 
 ## Resume here
 
