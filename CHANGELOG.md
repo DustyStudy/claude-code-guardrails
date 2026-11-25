@@ -26,9 +26,8 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   (`source /dev/stdin <<< '...'`, a quoted `sou""rce` too), and are found
   after `eval`, other wrappers and a redirection (`| eval source
   /dev/stdin`, `2> /dev/null source ...`); a `.` that is only an argument
-  (`cp x . <<EOF`) reads no heredoc. Still not covered: aws-guard does
-  not check a program the shell names (`$AWS iam delete-role`,
-  `xargs -IX X iam delete-role`).
+  (`cp x . <<EOF`) reads no heredoc. aws-guard's gap for a program the
+  shell names (`$AWS iam delete-role`) is closed in 0.8.3 below.
 - Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
   terraform-guard), from the review of 53be7a6 (supply-chain-guard 0.5.3,
   terraform-guard 0.6.3): `xargs` and `parallel` take any unique prefix of
@@ -97,8 +96,9 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   `parallel -I@@ npm @@ evil`, `xargs -Ilist pip list evil`). A written
   verb still runs with the input after it (`xargs -I{} npm view {} version`).
   Newly denied though harmless: a replaced word before the verb
-  (`xargs -Iweb npm --prefix web ci`). Still not covered: a replaced word
-  inside a script a wrapper runs (`xargs -Ici sh -c 'npm ci evil'`).
+  (`xargs -Iweb npm --prefix web ci`). A replaced word inside a script a
+  wrapper runs (`xargs -Ici sh -c 'npm ci evil'`) is covered by the shared
+  parser line above.
 
 ## 0.10.0 (2026-11-24)
 
