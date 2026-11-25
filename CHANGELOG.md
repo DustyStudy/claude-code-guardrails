@@ -58,6 +58,10 @@ supply-chain-guard 0.5.3, terraform-guard 0.6.3 (tf-lint unchanged at
   `parallel` replace is the input's in a script the wrapper they run runs
   too (`echo install | xargs -Ici sh -c 'npm ci evil'`, `xargs -Iplan
   bash -c "terraform plan -auto-approve"`), nested scripts included.
+  `source` and `.` are found past a `coproc` name and the `{` or `(` of
+  its body, heredoc and piped input alike (`coproc JOB { source /dev/stdin
+  <<EOF`, `echo ... | coproc JOB { source /dev/stdin; }`), and piped
+  input reaches a `{ }` body after `time` or `!` too.
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is

@@ -31,14 +31,14 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
 // source and . read it too where they are the program (. /dev/stdin <<EOF, not cp x . <<EOF or cat > source <<EOF), after
 // VAR=x, a redirection, builtin, a wrapper (command, eval, exec, sudo, time, coproc), !, {, a keyword (if, then, do, while) and
-// their flags, at the line's start or after ; | & ( or ) (case x in x) source, f() { source). Matched against the line as
+// their flags, at the line's start or after ; | & ( ) or { (case x in x) source, f() { source, coproc JOB { source). Matched against the line as
 // written and with its quotes and backslashes gone, as the shell drops them from a name (sou""rce, b\ash).
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 // A redirection is one word (2>/dev/null, <<<x) or a bare one and its target (2> /dev/null); the target is never a redirection
 // itself (2> 2>). Each word is taken once, by the first way that reads it ((?=(...))\2 does not backtrack): a target that also
 // reads as a word of its own (2> -x, 2> time) would otherwise double the work for each one.
 const SOURCE_LINE = new RegExp(
-  String.raw`(^|[;|&()])\s*(?:(?=((?:\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|${WRAPPER.source.slice(1, -1)}|!|\{|if|then|else|elif|do|while|until|-[\w-]*)\s+))\2)*(source|\.)(?=\s)`,
+  String.raw`(^|[;|&(){])\s*(?:(?=((?:\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|${WRAPPER.source.slice(1, -1)}|!|\{|if|then|else|elif|do|while|until|-[\w-]*)\s+))\2)*(source|\.)(?=\s)`,
 )
 const readsHeredoc = (line: string) => [line, line.replace(/\$?["']|\\/g, '')].some(one => SHELL.test(one) || SOURCE_LINE.test(one))
 // A function or alias defined anywhere in the command (f() { source /dev/stdin; }, function f { . x; }, alias s='bash') whose
@@ -63,15 +63,13 @@ const VALUED = 'adELnPsRSjN'
 
 // Whether `list` runs source or . : first, or after wrappers, builtin, command, their flags, VAR=x, a redirection and its target
 // and the like (eval source x, 2> /dev/null source x).
+// A coproc's name and a { or ( that opens a body pass too (coproc JOB { source /dev/stdin; }).
+const leads = (list: readonly string[]) =>
+  list.every((word, i) => BUILTIN.test(word) || WRAPPER_NAME.test(word) || LEAD.test(word) || /^[{(]$/.test(word) || /^(\d*[<>]+[&|]?|coproc)$/.test(list[i - 1] ?? ''))
 const sources = (list: readonly string[]) => {
   const at = list.findIndex(word => SOURCER.test(word))
 
-  return (
-    at >= 0 &&
-    list
-      .slice(0, at)
-      .every((word, i) => BUILTIN.test(word) || WRAPPER_NAME.test(word) || LEAD.test(word) || /^\d*[<>]+[&|]?$/.test(list[i - 1] ?? ''))
-  )
+  return at >= 0 && leads(list.slice(0, at))
 }
 
 // More replacement strings than this, or one we cannot read, and every word after the program counts as replaced: it bounds
@@ -806,11 +804,13 @@ const read = (source: string, depth: number, state: State): string[][] => {
     for (let i = commands.length - 1; i >= 0; i--) {
       const { raw = [], words = [], dynamic = [], isPiped = false } = commands[i] ?? {}
       const next = commands[i + 1]?.words ?? []
+      // A { ends a command: what is piped to coproc JOB { source /dev/stdin; } or time { bash; } reaches the one after it.
+      const body = next.length > 0 && leads(next) ? (commands[i + 2]?.words ?? []) : []
 
       // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
       feeds =
         isPiped &&
-        (next.some(word => READER.test(word)) || sources(next) || ((feeds || state.isReader) && next.length > 0))
+        ([next, body].some(list => list.some(word => READER.test(word)) || sources(list)) || ((feeds || state.isReader) && next.length > 0))
 
       let from = 0
 
