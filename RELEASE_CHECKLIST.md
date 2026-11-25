@@ -69,6 +69,15 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
   - Accepted, documented: pre-existing slow secret-read inputs (60 KB of ` <#` about 3.5 s), below the 10 s
     hook timeout; a timeout runs the deny `.catch`, so this fails closed.
   - F4 fixed in 092516b (also `-f`/`-join` tables, nested tables, unquoted keys in a printed table).
+  - F7 fixed in 697e2d4; F8, F9 fixed in 1e57d0e. Lead re-ran its own probes on 697e2d4 (F1-F4, `$AWS`,
+    `xargs -IX X`, `sh -c "$(echo npm ci evil)"`): all denied.
+- Codex confirm pass (gpt-6-astra, read-only) on `53be7a6..1e57d0e`: no regressions in 4,322 old/new
+  comparisons; no catastrophic backtracking. 3 pre-existing bypasses, all confirmed by the lead on the engine:
+  - F10 shared parser: `coproc JOB { source /dev/stdin <<EOF ... }`. OPEN
+  - F11 aws-guard: `python "-cimport boto3; ...delete_role(...)"` (quoted attached flag). OPEN
+  - F12 secret-read-guard: `Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject @{a=$env:T}`. OPEN
+- Flaky test found by the lead: secret-read T09/T10 (60 KB) took 1,351/1,131 ms under load against a 1 s
+  limit (780/513 ms unloaded). Release blocker for CI; perf fix assigned, limit not raised. OPEN
   - F1, F2 fixed in 9c75ae3; F6 fixed in 044d8ad; F5 fixed in afd534a; F3 fixed in 1cb6b58.
   - Accepted, documented: quadratic `a=;a=;…` source-line check, ~0.8 s at the 64 KB cap (bounded,
     below the 10 s hook timeout; a fix needs a quote-aware splitter).
