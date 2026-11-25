@@ -482,7 +482,10 @@ const refusal = (command: string): string | undefined => {
     // One pass finds whether any tool is called at all: most commands call none.
     for (const [label, check, binary] of invocations(source, ANY).length > 0 ? BINARIES : []) {
       // Where the shell fills arguments in ($( ), a backtick, PowerShell ( )), any word can stand there: read as a package named.
-      if (invocations(source, binary).some(args => denies(check, args.map(arg => (arg === DYNAMIC ? MARK : arg))))) {
+      // Read again with each such word where it stands, so a verb xargs or parallel replace (xargs -Ici npm ci evil) is the shell's.
+      const calls = [...invocations(source, binary), ...invocations(source, binary, true)]
+
+      if (calls.some(args => denies(check, args.map(arg => (arg === DYNAMIC ? MARK : arg.replaceAll('\0', MARK)))))) {
         return `\`${label}\` would install or run a package no lockfile or hash pins. Install from the lockfile (npm ci, pip install --require-hashes -r), run a tool that is already installed (npx --no-install) or one exact version (npx pkg@1.2.3), or give the user the exact command to run themselves with the \`!\` prefix.`
       }
     }

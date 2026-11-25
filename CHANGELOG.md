@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-Fixes from the review of 0.10.0. Nothing that was denied now runs.
+## 0.10.1 (2026-11-25)
+
+Fixes from the reviews of 0.10.0 and of this release's own changes. Every
+line closes a way past a guard; nothing that was denied now runs. Mods:
+aws-guard 0.8.3, secret-allow-guard 0.6.1, secret-read-guard 0.6.3,
+supply-chain-guard 0.5.3, terraform-guard 0.6.3 (tf-lint unchanged at
+0.10.0).
 
 - Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
   terraform-guard): a call run through `xargs` or `parallel` has arguments
@@ -26,13 +32,71 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   (`source /dev/stdin <<< '...'`, a quoted `sou""rce` too), and are found
   after `eval`, other wrappers and a redirection (`| eval source
   /dev/stdin`, `2> /dev/null source ...`); a `.` that is only an argument
-  (`cp x . <<EOF`) reads no heredoc. Still not covered: aws-guard does
-  not check a program the shell names (`$AWS iam delete-role`,
-  `xargs -IX X iam delete-role`).
+  (`cp x . <<EOF`) reads no heredoc. aws-guard's gap for a program the
+  shell names (`$AWS iam delete-role`) is closed in 0.8.3 below.
+- Shared parser (aws-guard, secret-read-guard, supply-chain-guard,
+  terraform-guard), from the review of 53be7a6 (supply-chain-guard 0.5.3,
+  terraform-guard 0.6.3): `xargs` and `parallel` take any unique prefix of
+  a long option, so `--rep=plan` and `--r=plan` are xargs' `--replace`;
+  every value of a `parallel` long option now counts as a replaced string,
+  as too many of them set one (`--er`, `--bnr`, `--rpl`). `source` and `.`
+  read a heredoc after `time`, `time -p`, `!`, `{`, `coproc`, any other
+  wrapper, `if`/`then`/`do`/`while`/`until`, and after `)` (`case x in x)
+  source ...`, `f() { source ...; }; f <<EOF`). The check for a `source`
+  line runs in linear time: a 60 KB run of `> -x ` never finished. Newly
+  denied though harmless: `parallel --jobs 4 terraform plan ...` where a
+  later word holds `4`, and a heredoc body with a denied command given to
+  a wrapper whose next word is `.` (`find . -name x <<EOF`). A command
+  that defines a function or alias anywhere in it (`f() { ... }`,
+  `function f`, `alias s=...`) and names `source`, `.`, a shell, `eval`,
+  `read` or `xargs` reads every heredoc, here-string and piped input in it
+  as a script (`f() { source /dev/stdin; }` then `f <<EOF`, `alias
+  s='. /dev/stdin'`, `f() { eval "$(cat)"; }` then `echo ... | f`). Newly
+  denied though harmless: such a command that also hands a denied command
+  as text to any call (`f() { . x; }; echo 'terraform apply' | grep -c .`).
+  Still not followed: `f < <(...)` and `f < file`. A string `xargs` or
+  `parallel` replace is the input's in a script the wrapper they run runs
+  too (`echo install | xargs -Ici sh -c 'npm ci evil'`, `xargs -Iplan
+  bash -c "terraform plan -auto-approve"`), nested scripts included.
+  `source` and `.` are found past a `coproc` name and the `{` or `(` of
+  its body, heredoc and piped input alike (`coproc JOB { source /dev/stdin
+  <<EOF`, `echo ... | coproc JOB { source /dev/stdin; }`), and piped
+  input reaches a `{ }` body after `time` or `!` too.
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
   piped into them (`$env:GITHUB_TOKEN | ConvertTo-Json`).
+- secret-read-guard 0.6.3: an assignment in grouping parentheses prints the
+  value it assigns, so its hashtable is read, not skipped as used
+  (`($h = @{a=$env:GITHUB_TOKEN})`, `($h = @{...}).a`, `$(($h = @{...}))`,
+  `($x = $h = @{...})`, a `(` on the line above, past a comment too). A
+  hashtable after `-f` or `-join` is read (`'{0}' -f @{a=$env:GITHUB_TOKEN}.a`),
+  as are a printed hashtable's key with no quotes (`@{a=$env:GITHUB_TOKEN}`)
+  and a hashtable that is a printed one's value (`@{x=@{b=$env:GITHUB_TOKEN}}`).
+  `$h = @{...}`, `$x = ($h = @{...})`, `$x = $h = @{...}`, `$($h = @{...})`
+  and `-Headers @{...}` still run. Newly denied though harmless:
+  `[void]($h = @{...})`, `($h = @{...}) | Out-Null`, `$x = (($h = @{...}))`,
+  `-Headers ($h = @{...})`, `$o = [pscustomobject]@{a=$env:GITHUB_TOKEN}` (its
+  quoted-key form was already denied), an assignment after a comment on its
+  line (`<# x #> $h = @{...}`), and a target over 200 characters long.
+  A table assigned in a pipeline that ends in a host writer is read too
+  (`$x = @{a=$env:GITHUB_TOKEN}.a | Write-Host`, also `Out-Host`, `oh`,
+  `Out-Default`, `Write-Information`, `[Console]::Write*`, `$host.UI.Write*`,
+  past a `|` at a line's end or start), and so is a table handed to a cmdlet
+  that prints or serializes it (`ConvertTo-*`, `Join-String`, `select`,
+  `*-Object` such as `New-Object psobject -Property @{...}` and
+  `Select-Object`, `Format-*`, `Out-*`, `Write-*`), at a block's start, after
+  `return`, `throw`, `$(` or `@(` too. `Invoke-RestMethod -Headers @{...}`,
+  `$o = New-Object ... -Property @{...}` and `$j = ConvertTo-Json -InputObject
+  @{...}` still run. Newly denied though harmless: a used table in any
+  pipeline or block with a host writer in it (`irm -Headers @{...} |
+  Write-Host`), `ConvertTo-Json -InputObject @{...} | Set-Content x`, and a
+  table after a printer earlier on the line past `|` or `&&`
+  (`Write-Output x | irm -Headers @{...}`). A cmdlet named with its module
+  is the same cmdlet (`Microsoft.PowerShell.Utility\ConvertTo-Json
+  -InputObject @{...}`, `...\Write-Output ("x" + $env:GITHUB_TOKEN)`), also
+  after any run of blanks. A long command is read faster: the home folder is
+  normalized once per path, each statement split and each word judged once.
 - supply-chain-guard 0.5.1: the check for pip handed to python by the shell
   runs in linear time; a 60 KB line of `$(` took over a second. Its own
   xargs marking is dropped for the shared parser's.
@@ -40,6 +104,31 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   quotes or a real one in `<>` (`Basic <dXNl...>`), and on a quoted
   `login` (`docker "login" -p ...`). A placeholder in one case or with
   `-`/`.` (`<token>`, `<YOUR_TOKEN>`, `<base64-credentials>`) still passes.
+- aws-guard 0.8.3: checks a program the shell names (`$AWS`, `${AWS:-aws}`,
+  `"$AWS"`, `$(which aws)`, `& $aws`, `xargs -IX X`) like a written `aws`
+  once a word names a guarded service or a filled-in word stands before a
+  denied operation (`$AWS $SVC delete-role`); dry runs, `help` and reads
+  (`$AWS s3 ls`) still run. Newly denied though harmless: any other program
+  named by a variable with a guarded service's name among its arguments and
+  a filled-in word among its first two (`$G grep "$PAT" iam`). A call led by
+  a denied operation (`$(which aws) $(echo iam) delete-role`, where the
+  parser drops the `$( )`) is read with each service that has it; newly
+  denied though harmless: `$PY remove-dupes "$IN"`. Still not followed: a
+  service and operation both filled in (`$AWS $(echo iam delete-role)`),
+  as terraform-guard's `$TF $(echo destroy -auto-approve)`. Inline code attached to its flag
+  (`python -c"..."`, `-Ic'...'`, `node -e"..."`, `-pe'...'`,
+  `--eval=...`) is read for SDK calls, as code after `-c ` was, and so is
+  a flag in quotes or escaped (`python "-c..."`, `'-c...'`, `-"c"...`,
+  `\-c`, `node "-e..."`, `'-pe...'`).
+- supply-chain-guard 0.5.3: a verb `xargs` or `parallel` replace is the
+  input's, read as an install, for every package manager it checks
+  (`echo install | xargs -Ici npm ci evil`, `xargs --rep=ci`,
+  `parallel -I@@ npm @@ evil`, `xargs -Ilist pip list evil`). A written
+  verb still runs with the input after it (`xargs -I{} npm view {} version`).
+  Newly denied though harmless: a replaced word before the verb
+  (`xargs -Iweb npm --prefix web ci`). A replaced word inside a script a
+  wrapper runs (`xargs -Ici sh -c 'npm ci evil'`) is covered by the shared
+  parser line above.
 
 ## 0.10.0 (2026-11-24)
 

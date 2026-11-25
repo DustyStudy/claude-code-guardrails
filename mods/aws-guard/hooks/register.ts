@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { DYNAMIC, invocations, unreadable } from './shell'
+import { DYNAMIC, invocations, namedByShell, unreadable } from './shell'
 
 const BINARY = /^(.*[\\/])?aws(\.exe|\.cmd)?$/i
 // The AWS CLI's container image, which takes the call as the binary does: docker run amazon/aws-cli iam delete-role.
@@ -473,7 +473,29 @@ const denied = (command: string, depth = 0): string | undefined => {
   }
 
   for (const text of new Set([command, marked])) {
-    const cli = invocations(text, BINARY).map(args => mutation(args, valued)).find(Boolean)
+    // A program the shell names ($AWS, $(which aws)) is read as aws once a word names a guarded service, or a filled-in word stands
+    // before a denied operation ($AWS $SVC delete-role); other programs ($EDITOR "$FILE") pass. PowerShell's array is one word: & $a @('iam','delete-role').
+    const named = namedByShell(text)
+    const shellNamed = named.filter(args =>
+      args.some(
+        (word, i) =>
+          word.split(',').some(part => GUARDED.has(part)) ||
+          (FILLED.test(args[i - 1] ?? '') && [...DENIED].some(([service, operations]) => !ANY_WRITE.has(service) && operations.test(word))),
+      ),
+    )
+    // The parser drops an unquoted $( ) right after a filled-in program ($(which aws) $(echo iam) delete-role gives delete-role
+    // first): a list led by a denied operation is read once with each service that has it, so a dry run or help still runs.
+    // shortcut: a service and operation both filled in ($X $(echo iam delete-role)) run; terraform-guard leaves the same open.
+    const lost = named.flatMap(args => {
+      const operation = (args[0] ?? '').replace(/[\\^`]/g, '')
+      const services = [
+        ...[...DENIED].filter(([service, operations]) => !ANY_WRITE.has(service) && operations.test(operation)).map(([service]) => service),
+        ...[...DENIED_WITH.keys()].filter(call => call.endsWith(` ${operation}`)).map(call => call.split(' ')[0] ?? ''),
+      ]
+
+      return services.map(service => [service, ...args])
+    })
+    const cli = [...invocations(text, BINARY), ...shellNamed, ...lost].map(args => mutation(args, valued)).find(Boolean)
     if (cli !== undefined) {
       return `aws ${cli}`
     }
@@ -547,25 +569,30 @@ const throughVariables = (command: string): string | undefined => {
 const INTERPRETER = /(?<![\w.-])(i?python[\d.]*|py|node|deno|bun|pwsh|powershell|ruby)(\.exe)?(?=[\s"'`]|$)/gi
 // An interpreter runs code from the command line: an inline-code flag, clustered or not (python -Ic, node -pe, pwsh -Command),
 // deno eval, or stdin (`-`, a heredoc, a pipe into it).
-const INLINE_FLAG = /^(-\w*[cep]\w*|--eval|--print|-|eval)$/i
+// The code may be attached to the flag (-c"...", -Ic'...', node -pe'...', --eval=...), so only the flag's start is matched.
+const INLINE_FLAG = /^(-\w*[cep]|--(eval|print)(=|$)|-$|eval$)/i
 const SDK = /boto3|botocore|aws-sdk|AWSSDK|\bAmazon\.\w/i
 
 const runsInlineCode = (command: string): boolean | undefined => {
   let seen = 0
 
-  for (const match of command.matchAll(INTERPRETER)) {
-    // Each one reads to its statement's end, so more than are read is denied, not read on: the work stays linear.
-    if (++seen > MOST) {
-      return undefined
-    }
+  // Read as written, and again with the quotes the shell drops gone: "-cimport ...", -"c"..., py""thon. A backslash is dropped
+  // per word only (\-c), since a Windows path keeps it (C:\Python\python.exe).
+  for (const text of new Set([command, command.replace(/["'`]/g, '')])) {
+    for (const match of text.matchAll(INTERPRETER)) {
+      // Each one reads to its statement's end, so more than are read is denied, not read on: the work stays linear.
+      if (++seen > MOST) {
+        return undefined
+      }
 
-    const rest = command.slice((match.index ?? 0) + match[0].length)
-    const end = rest.search(/[;|&\n]/)
-    const statement = end < 0 ? rest : rest.slice(0, end)
-    const isPiped = command.slice(0, match.index).trimEnd().endsWith('|')
+      const rest = text.slice((match.index ?? 0) + match[0].length)
+      const end = rest.search(/[;|&\n]/)
+      const statement = end < 0 ? rest : rest.slice(0, end)
+      const isPiped = text.slice(0, match.index).trimEnd().endsWith('|')
 
-    if (isPiped || statement.includes('<<') || statement.split(/\s+/).some(word => INLINE_FLAG.test(word))) {
-      return true
+      if (isPiped || statement.includes('<<') || statement.split(/\s+/).some(word => INLINE_FLAG.test(word.replace(/\\/g, '')))) {
+        return true
+      }
     }
   }
 

@@ -293,17 +293,19 @@ fails if the copies drift apart.
 
 ### Latest test results
 
-0.10.0 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
-release), `npm test`: all 6 mods pass, 5,418 tests, 0 failures; the four
-`shell.ts` copies match. Every new deny was first written as a failing test.
+0.10.1 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
+release), `npm ci && npm test` from a fresh clone: all 6 mods pass, 6,276 tests, 0
+failures; the four `shell.ts` copies match. Every new deny was first written
+as a failing test. The 60 KB timing tests run in under 400 ms against a 1 s
+limit.
 
 | Mod | Tests |
 |---|---|
-| aws-guard | 1,194 |
-| secret-allow-guard | 166 |
-| secret-read-guard | 1,934 |
-| supply-chain-guard | 666 |
-| terraform-guard | 668 |
+| aws-guard | 1,350 |
+| secret-allow-guard | 176 |
+| secret-read-guard | 2,256 |
+| supply-chain-guard | 786 |
+| terraform-guard | 918 |
 | tf-lint | 790 |
 
 The tests run each guard through Claude Code's engine with mocked tool
@@ -484,8 +486,8 @@ when it would be worth lifting.
 
 ### Still open after the 0.10 pass
 
-0.10.0 closed every item a text guard can close (see
-[CHANGELOG.md](CHANGELOG.md)). What remains needs the command's run-time
+0.10.0 closed every item a text guard can close, and 0.10.1 closed the
+bypasses its review found (see [CHANGELOG.md](CHANGELOG.md)). What remains needs the command's run-time
 values, which a guard that reads text does not have. Each item names the
 control that covers it; the [managed-settings baseline](#a-managed-settings-baseline)
 sets most of them up (sandbox, credential env vars denied, `permissions.deny`
@@ -495,7 +497,9 @@ the real limits on what a command can do.
 - **Every command guard, shared parser.** A command over 64 KB, nested past 8
   levels, with a `case` inside `$( )`, a `'` inside a quoted `${ }` or a `${`
   never closed is denied as unreadable. A substitution is marked, not
-  expanded, and aliases from a shell profile are not followed.
+  expanded, and aliases from a shell profile are not followed. Input handed
+  to `source`, or to a function that sources it, by process substitution or
+  a file (`source <(...)`, `f < <(...)`, `f < file`) is not read as a script.
   *Covered by:* IAM and the sandbox.
 - **terraform-guard.** A program and verb both filled in by the shell
   (`$TF $(echo destroy -auto-approve)`) and PowerShell
@@ -506,8 +510,12 @@ the real limits on what a command can do.
   hold apply rights.
 - **aws-guard.** An SDK script file, Organizations or Identity Center calls
   through an SDK, base64 `-EncodedCommand`, and a cmdlet name known only at run
-  time (`& $cmd` alone) run. Denied though harmless: a `remove…`/`delete…` name
-  (`removeEventListener`) in inline code that also loads an AWS SDK client.
+  time (`& $cmd` alone) run, as does a CLI call whose service and operation
+  are both filled in by the shell (`$AWS $(echo iam delete-role)`). Denied
+  though harmless: a `remove…`/`delete…` name (`removeEventListener`) in
+  inline code that also loads an AWS SDK client, and a program named by a
+  variable whose arguments name a guarded service or start with a denied
+  operation (`$G grep "$PAT" iam`, `$PY remove-dupes "$IN"`).
   *Covered by:* IAM least privilege and SCPs on the agent's role.
 - **supply-chain-guard.** `poetry run pip install x` and a substitution that
   reads its words from a file (`python $(cat args)`) are not followed;
@@ -522,13 +530,18 @@ the real limits on what a command can do.
   the folder it names; `find | xargs grep`, a loop over a credential's
   characters, and a file read by a nested call
   (`git cat-file -p $(git rev-parse HEAD:.env)`) pass; a multi-line hashtable
-  with an unquoted key (`a = $env:T`) printed as a statement passes. Denied
+  with an unquoted key (`a = $env:T`) printed as a statement passes, as do a
+  credential kept in a variable and printed by a later statement
+  (`$h = @{a=$env:T}; Write-Host $h.a`), a printer named at run time
+  (`& ('Write-' + 'Host')`) and a printer off its list (`Out-File CON`). Denied
   though harmless: a credential-name read after `cd $VAR` or `cd "$(…)"`,
   `cat .env.ex*` and `cat config.*`, `grep -rl` in a folder that holds a
   credential file, comparisons such as `$env:TOKEN -eq 'x'`, a hashtable
   passed positionally holding a credential variable, `git -c k=v log … .env`,
   and `openssl x509 -in cert.pem` until `SECRET_READ_ALLOW` names the
-  certificate. *Covered by:* `permissions.deny` on credential files and the
+  certificate; also `[void]($h = @{a=$env:T})`, and a hashtable used as a
+  parameter value in a pipeline that ends in a host writer
+  (`irm -Headers @{...} | Write-Host`). *Covered by:* `permissions.deny` on credential files and the
   sandbox's credential env-var deny in the managed baseline; keep secrets out
   of the account the agent runs as.
 - **secret-allow-guard.** A bare password with no name or flag beside it is

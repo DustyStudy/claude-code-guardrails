@@ -1,9 +1,9 @@
-# Release checklist: v0.10.0
+# Release checklist: v0.10.1
 
-Release branch: `release/v0.10.0` (from `origin/main` f422fb3). Draft PR: https://github.com/DustyStudy/claude-code-guardrails/pull/86
-Goal: close every item in the README's "Still open after the 0.9 pass" and every "Known limits"
-item a text guard can close; document the rest with the control that covers it.
-The v0.9.0 checklist is in git history (`git show v0.9.0:RELEASE_CHECKLIST.md`).
+Release branch: `release/v0.10.1` (from `origin/main` 53be7a6). Draft PR: _pending_
+Goal: release the fixes merged after v0.10.0 (PRs #88, #89), close the aws-guard gap they
+left (a program the shell names), and fix every bypass the hostile reviews of this release
+confirm. The v0.10.0 checklist is in git history (`git show v0.10.0:RELEASE_CHECKLIST.md`).
 
 Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
@@ -11,57 +11,87 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 
 | # | Criterion (pass/fail check) | Status | Evidence / blocker |
 |---|---|---|---|
-| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at efd86c9, Claude Code 2.1.325: 5,418 pass, 0 fail |
-| C2 | CI "Mod tests" (Linux) passes on the release PR | PASS | PR #86 at efd86c9 |
-| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor, CodeQL | PASS | PR #86 at efd86c9 |
-| C4 | Every fixable "Still open" / "Known limits" item is denied (or flagged), with a must-deny test per item | PASS | Each implementer wrote failing tests first; see Integration log |
-| C5 | Every item left open has a one-line reason and its compensating control in the README | PASS | README "Still open after the 0.10 pass" |
-| C6 | No existing deny relaxed; new false denies listed in the README | PASS | Both Opus reviews found no regressions vs f422fb3; harmless denies listed per mod |
-| C7 | `plugin.json` minor bump for each changed mod; CHANGELOG 0.10.0 section | PASS | aws 0.8.0, secret-allow 0.6.0, secret-read 0.6.0, supply-chain 0.5.0, terraform 0.6.0, tf-lint 0.10.0 |
-| C8 | `shell.ts` copies byte-identical; fail-closed `.catch` and 4-tool coverage intact | PASS | `npm test`; a hook timeout (10 s) runs the deny-on-throw `.catch` |
-| C9 | Hostile security review of the integrated diff; findings fixed or accepted by owner | PASS (Fable pending) | Opus x2 + Codex reviews; every confirmed finding fixed with tests. Fable re-review not run (limit until 2026-11-28 16:00 CT): owner call |
-| C10 | README updated (Known limits, Still open, test results) | PASS | efd86c9 |
-| C11 | Merge to `main`, tag `v0.10.0`, GitHub release | PASS | Owner approved 2026-11-24 without waiting for a Fable review. Squash-merged from PR #86; tag `v0.10.0` on the merge commit; release https://github.com/DustyStudy/claude-code-guardrails/releases/tag/v0.10.0 |
+| C1 | `npm ci && npm test` passes on Windows from a fresh clone of the release branch | PASS | Fresh clone at 6ddae53, Claude Code 2.1.325: 1,350 / 176 / 2,256 / 786 / 918 / 790 = 6,276 pass, 0 fail, copies match; T09/T10 310/216 ms |
+| C2 | CI "Mod tests" (Linux) passes on the release PR | PASS | PR #90 at fd7071e: Mod tests pass (4m6s) |
+| C3 | Required scans pass on the release PR: Gitleaks, Checkov, Trivy, zizmor (and CodeQL) | PASS | PR #90 at fd7071e: all pass, CodeQL actions + javascript-typescript pass |
+| C4 | aws-guard denies a shell-named `aws` with a denied operation (`$AWS iam delete-role`, `$(which aws) ...`, `xargs -IX X iam delete-role`, `& $aws`), with must-deny tests; read-only shell-named calls (`$AWS s3 ls`) still run | PASS | 1cb6b58, 3d3cb7f; lead probes on 6ddae53 denied |
+| C5 | No existing deny relaxed vs 53be7a6; new harmless denies listed in CHANGELOG/README | PASS | Codex confirm pass: 0 old-deny/new-allow in 4,322 comparisons (53be7a6 vs 1e57d0e); later fixes only add denies (each kept the as-written reading); every existing test still passes |
+| C6 | `plugin.json` bump for each changed mod matches CHANGELOG; Unreleased becomes 0.10.1 | PASS | aws 0.8.3, secret-allow 0.6.1, secret-read 0.6.3, supply-chain 0.5.3, terraform 0.6.3, tf-lint 0.10.0 (unchanged); `## 0.10.1 (2026-11-25)` |
+| C7 | `shell.ts` copies byte-identical; fail-closed `.catch` and 4-tool coverage intact | PASS | `npm test` copy check; Codex: all command guards list the 4 shell tools; no `hooks.json` change |
+| C8 | Hostile security review of the guard diff; confirmed findings fixed or accepted by owner | PASS | Codex review (v0.9.0..53be7a6) + confirm pass (53be7a6..1e57d0e); F1-F12 fixed with must-deny tests; residual items documented in README "Still open" |
+| C9 | Fable hostile review (owner's CLAUDE.md requires Fable for guard code) | N/A | Owner, 2026-11-25: use Opus until Fable resets (2026-11-28 16:00 CT); Codex review + confirm pass stand in (D7) |
+| C10 | README updated (Still open, test results) | PASS | 8c7963a, counts refreshed after C1 |
+| C11 | Merge to `main`, tag `v0.10.1`, GitHub release | PASS | Owner approved 2026-11-25 ("Yes, once CI passes"); squash-merged from PR #90, tag `v0.10.1` on the merge commit, GitHub release |
 
 ## Decisions
 
-- D1 (2026-11-24) Fable (required by the owner's CLAUDE.md for guard code) is at its usage limit until
-  2026-11-28 16:00 CT. The owner chose Opus implementers in parallel. A Fable re-review after the reset
-  is recommended before or after tagging (owner's call).
-- D2 Split: one Opus implementer per mod in its own worktree; the terraform-guard implementer owns the four
-  `shell.ts` copies and adds a dynamic-program helper for supply-chain-guard. Implementers only add denies.
+- D1 (2026-11-25) Fable is at its usage limit until 2026-11-28 16:00 CT (both Fable agents were refused
+  with HTTP 429). As in v0.10.0 (D1 there), implementation went to Opus implementers and the hostile
+  review to Codex (gpt-6-astra, read-only, one review + one confirm pass). C9 stays open for the owner.
+- D2 Release as a patch (v0.10.1): every line closes a bypass ("denies what was wrongly let through" is a
+  patch in the README's version rules), so each changed mod takes a patch bump.
+- D3 Release work runs in its own worktree (`C:\repos\ccg-release`). `C:\repos\claude-code-guardrails-live`
+  is the checkout the running session loads its mods from; it is not touched.
+- D4 Bypasses found during the release (F5-F12) were pre-existing; all were fixed rather than deferred,
+  since each is a guard letting through what it is meant to deny.
+- D5 Accepted, documented, not fixed: items that need run-time values (README "Still open after the 0.10
+  pass"); the quadratic `a=;a=;…` source-line check (~0.8 s at the 64 KB cap; a fix needs a quote-aware
+  splitter); slow secret-read inputs such as 60 KB of ` <#` (~3.5 s). Both stay under the 10 s hook timeout,
+  and a timeout runs the deny `.catch`, so they fail closed.
+- D6 The secret-read T09/T10 timing tests were flaky under load (1,351/1,131 ms vs a 1 s limit). The limit
+  was not raised; the guard was made faster (6ddae53: 815/532 ms to ~370/220 ms unloaded).
+
+- D7 (2026-11-25) Owner: "don't worry about fable, we can use opus until it resets." The Fable review
+  is not a release gate for v0.10.1.
 
 ## Integration log
 
-| Commit | Branch merged | Tests |
+| Commit | Change | Tests |
 |---|---|---|
-| 334687b | secret-allow-guard 0.6.0: mid-session rescan (tool.check ask, Edit/Write to settings, ConfigChange) | 164 pass |
-| 9bfa476 | supply-chain-guard 0.5.0: variable/shell-named tools, python -m pip by substitution, npx -c, go get, lockfile off, poetry, conda | 626 pass |
-| beeba8c | aws-guard 0.8.0: Roles Anywhere writes, cmdlet through a variable, SDK inline code | 1158 pass |
-| 7073ee7 | terraform-guard 0.6.0 + shared parser: nested ${}, namedByShell, shell-filled word before terraform, variable/alias program | full `npm test` 4,843 pass, shell.ts copies match |
-| 52a0ce6 | tf-lint 0.10.0: open() and Set-Item writes, action.yml anywhere, per-statement principal condition, .tf.json rules, more secret names, whole file after Edit | 781 pass |
-| 4e1388b | secret-read-guard 0.6.0: PowerShell writers/expressions, Linux case, openssl/git show/compose config/tar -xO/unzip -p, recursive search/upload, quoted paths | 1,815 pass |
+| 53be7a6 | Baseline (`origin/main`, PRs #88, #89 merged) | `npm ci && npm test` Windows, Claude Code 2.1.325: all 6 mods pass, copies match. Main CI + Security Scan green. 0 open code-scanning, Dependabot or secret-scanning alerts |
+| 1cb6b58, 3d3cb7f | aws-guard 0.8.3: shell-named program (C4), attached inline-code flag (F3), shell-named call led by a denied operation | aws-guard 1,330 pass |
+| 9c75ae3 | Parser F1, F2: xargs/parallel long-option prefixes, `source` after prefix keywords, linear `SOURCE_LINE`; terraform 0.6.3, supply-chain 0.5.3 | Full: 1,330 / 176 / 1,950 / 698 / 828 / 790, 0 fail |
+| 044d8ad, afd534a, 092516b | Parser F6, supply-chain F5, secret-read 0.6.3 F4 | Full: 1,330 / 176 / 2,100 / 762 / 870 / 790, 0 fail |
+| 697e2d4, 1e57d0e | Parser F7, secret-read F8 + F9 | Full: 1,330 / 176 / 2,212 / 786 / 890 / 790, 0 fail |
+| 37a2368, 3b58019, 6ddae53 | aws-guard F11, parser F10, secret-read F12 + speed-up | At 3b58019 only T09/T10 failed under load (the D6 flake); see C1 for 6ddae53 |
+
+Full-suite order: aws-guard / secret-allow-guard / secret-read-guard / supply-chain-guard / terraform-guard / tf-lint.
 
 ## Security review log
 
-- Codex on tf-lint + secret-allow-guard: 3 confirmed findings, sent back for fixing: (1) tf-lint regression, string braces synthesize `Condition` and hide a wildcard-principal warning; (2) tf-lint whole-file recheck echoes an existing token in a finding; (3) secret-allow rescan is count-based, so a replaced secret is not reported.
-- Codex findings 1-3 fixed: secret-allow 79ae2c7 (fingerprints; 166 pass), tf-lint ef2bd62 (790 pass).
-- Opus reviewer on aws-guard, supply-chain-guard, terraform-guard + parser: no regressions (the DYNAMIC skip
-  drops no real call; new regexes bounded; an unclosed `${` fails closed). 7 confirmed gaps in the new
-  aws-guard checks (`& ${c}`, `& "$c"`, variable case, `python -Ic`/`node -pe`, ipython/deno eval, SDK code
-  on stdin, boto3 resource `.delete()`); traced, unconfirmed gaps in supply-chain (lockfile env spellings,
-  `${X:-npx}`, `python $M`, conda create/update/run, `go get -u`) and terraform (the `namedByShell` path
-  checks only `-auto-approve`, `$TF.exe`, `sal`/`nal`, same-line function). Sent back to the three implementers.
-  Fixed: supply-chain c796f57 (666 pass), aws-guard 86a6b58 (1,194 pass), terraform + parser 4b78a94 (668 pass).
-  Full `npm test` at 4b78a94: 5,299 pass, 0 fail, shell.ts copies match. Left open:
-  `$TF $(echo destroy -auto-approve)` (program and verb both shell-filled).
-- Opus reviewer (worktree, edit access) on secret-read-guard 0.6.0: no regressions; a quadratic regex
-  (60 KB input, 9.8 s) and 12 bypasses of the new denies. Fixed in cb882bd (1,934 pass), including a
-  narrowing the lead asked for: a hashtable used as `-Headers`/`-Body` or assigned runs again (it ran in v0.9).
-  Hook timeout (engine types): 10 s per hook, then the hook's `.catch` (1 s); every guard's `.catch` denies,
-  so a timeout fails closed.
-- Full `npm test` at cb882bd: 5,418 pass, 0 fail, shell.ts copies match.
+- Fable hostile review attempted 2026-11-25: refused, usage limit. See C9.
+- Codex (gpt-6-astra, read-only) on `v0.9.0..53be7a6`: no regressions (603 aws + 339 supply-chain fixtures
+  vs v0.9.0); 60 KB regex probes 1-17 ms; 4 shell tools covered; no hooks.json change. 4 plausible
+  bypasses, all pre-existing, all confirmed by the lead on the engine (mod copies with injected must-deny
+  cases, Claude Code 2.1.325).
+- Findings and fixes (all pre-existing, none a regression):
+
+| # | Mod | Bypass | Found by | Fixed in |
+|---|---|---|---|---|
+| F1 | parser | `xargs --rep=X` (GNU unique-prefix long option) hides the replace string | Codex | 9c75ae3 |
+| F2 | parser | `time`/`!` before `source /dev/stdin <<EOF` | Codex | 9c75ae3 |
+| F3 | aws-guard | `python -c"...boto3 delete..."` (code attached to the flag) | Codex | 1cb6b58 |
+| F4 | secret-read | `($h = @{a=$env:GITHUB_TOKEN})` prints the credential | Codex | 092516b |
+| F5 | supply-chain | `echo install \| xargs -Ici npm ci evil` (marked verb) | parser implementer | afd534a |
+| F6 | parser | function/alias defined earlier in the command that sources a later heredoc | parser implementer | 044d8ad |
+| F7 | parser | xargs replace strings inside a wrapper's script (`xargs -Ici sh -c 'npm ci evil'`) | supply-chain implementer | 697e2d4 |
+| F8 | secret-read | `$x = @{a=$env:T}.a \| Write-Host` | secret-read implementer | 1e57d0e |
+| F9 | secret-read | `ConvertTo-Json -InputObject @{a=$env:T}` | secret-read implementer | 1e57d0e |
+| F10 | parser | `coproc JOB { source /dev/stdin <<EOF ... }` | Codex confirm pass | 3b58019 |
+| F11 | aws-guard | `python "-cimport boto3; ...delete_role(...)"` (quoted flag) | Codex confirm pass | 37a2368 |
+| F12 | secret-read | `Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject @{...}` | Codex confirm pass | 6ddae53 |
+
+- Also fixed: `SOURCE_LINE` backtracked exponentially (`'> -x '` x24 = 638 ms; 60 KB never finished; 9c75ae3).
+- Codex confirm pass (read-only) on `53be7a6..1e57d0e`: 0 old-deny/new-allow in 4,322 comparisons; no
+  catastrophic backtracking; F10-F12 as above.
+- Lead verification on 6ddae53: every F1-F4 and F10-F12 command, plus `$AWS iam delete-role`,
+  `xargs -IX X iam delete-role`, `xargs -Isvc sh -c "aws svc delete-role ..."` and
+  `xargs -Ici sh -c "$(echo npm ci evil)"`, injected as must-deny cases into copies of the mods: all denied
+  under Bash and PowerShell.
+- Mocked: every test runs the guards through Claude Code's engine with mocked tool calls and a mocked file
+  listing; no real AWS, Terraform, npm or pip command was run.
 
 ## Resume here
 
-Released 2026-11-24. Optional follow-up: a Fable hostile review of the v0.10.0 diff (`git diff v0.9.0 v0.10.0 -- mods/`) after 2026-11-28 16:00 CT.
+Released 2026-11-25 from PR #90. Nothing left for this release; the agent worktrees and
+`C:\repos\ccg-release` can be removed.

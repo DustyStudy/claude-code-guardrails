@@ -269,7 +269,13 @@ const takesListed = (path: string, world: World) => {
 
 // Whether a resolved path names a credential file, a folder of them, or a wildcard that takes one in.
 const isSecret = (path: string, world: World) => {
-  if (isSecretFile(path, world) || SECRET_DIR.test(path) || HOME_DIRS.some(dir => path === norm(world.home) + dir)) {
+  if (isSecretFile(path, world) || SECRET_DIR.test(path)) {
+    return true
+  }
+  // Once per path, not once per folder: a long command names many paths.
+  const home = norm(world.home)
+
+  if (HOME_DIRS.some(dir => path === home + dir)) {
     return true
   }
 
@@ -299,7 +305,24 @@ const pathsOf = (word: string, world: World) =>
     .filter(Boolean)
     .map(one => resolve(one, world))
 
-const secretIn = (words: readonly string[], world: World) => words.flatMap(word => pathsOf(word, world)).find(path => isSecret(path, world))
+// Each word is judged once per world: a long command repeats its words.
+const JUDGED = new WeakMap<World, Map<string, string | undefined>>()
+const secretIn = (words: readonly string[], world: World) => {
+  const judged = JUDGED.get(world) ?? new Map<string, string | undefined>()
+
+  JUDGED.set(world, judged)
+
+  for (const word of words) {
+    const found = judged.has(word) ? judged.get(word) : pathsOf(word, world).find(path => isSecret(path, world))
+
+    judged.set(word, found)
+    if (found !== undefined) {
+      return found
+    }
+  }
+
+  return undefined
+}
 
 // Programs that print what a file holds. Ones that only use a file (terraform -var-file, ssh -i, git, aws) or only look at
 // it (ls, stat, Test-Path, wc) are not here.
@@ -427,7 +450,17 @@ const isEscape = (part: string) => part.startsWith('\\')
 const SKIPPED =
   /^(\w+=.*|!|if|then|else|elif|do|while|until|sudo|doas|command|exec|time|nohup|winpty|cmd|\/[ck]|(ba|z|da|k)?sh|pwsh|powershell|-c|-command|-noprofile)(\.exe)?$/i
 /** The command as statements, each a pipeline of stages, each the words of one call. A quoted argument is read as a command too. */
+// The same text is read for several checks: each is split once. Nothing changes what it hands back.
+const STATEMENTS = new Map<string, string[][][]>()
 const statementsOf = (command: string, depth = 0): string[][][] => {
+  const known = depth === 0 ? STATEMENTS.get(command) : undefined
+
+  if (known !== undefined) {
+    return known
+  }
+  if (STATEMENTS.size > 16) {
+    STATEMENTS.clear()
+  }
   const inner =
     depth < 3
       ? (command.match(QUOTED) ?? [])
@@ -454,7 +487,13 @@ const statementsOf = (command: string, depth = 0): string[][][] => {
       .filter(words => words.length > 0),
   )
 
-  return [...own.filter(stages => stages.length > 0), ...inner]
+  const found = [...own.filter(stages => stages.length > 0), ...inner]
+
+  if (depth === 0) {
+    STATEMENTS.set(command, found)
+  }
+
+  return found
 }
 
 const nameOf = (program = '') => program.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()
@@ -542,9 +581,12 @@ const BARE_STRING = new RegExp(String.raw`(?:^|[;\n&{]|\|\|)[ \t(]*"(?<text>[^"\
 // line of spaces or operators is read in linear time.
 const STATEMENT = /(?:^|\|\||[;\n&{}])([^;\n&{}|]*)(?:\|(?!\|)[ \t]*([^\s|;&{}]*))?/g
 const EXPRESSION_START = /^[ \t(]*(?:-[ic]?(?:join|split)(?![\w-])|[$"'@\d,+]|\[\w)/
-const WRITER_START = /^[ \t]*(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]/i
+// A cmdlet's name may carry its module's: Microsoft.PowerShell.Utility\Write-Output. Names read by word go through nameOf or bin,
+// which drop it the same way.
+const WRITER_START = /^[ \t]*(?:[\w.]+\\)?(?:echo|printf|write|write-output|write-host|write-information)(?:\.exe)?[ \t]/i
 // What reaches the screen whatever is done with the statement's value: $x = $env:TOKEN | Write-Host, $x = Write-Host $env:TOKEN.
-const HOST_WRITER = /(?<![\w-])(?:write-host|out-host|write-information)(?![\w-])/i
+const HOST_WRITER =
+  /(?<![\w-])(?:(?:write-host|out-host|oh|out-default|write-information)(?![\w-])|\[(?:system\.)?console\]::write|\$host\.ui\.write)/i
 const SECRET_VARS = new RegExp(SECRET_VAR.source, 'gi')
 const LENGTH = /\}?\.length(?![\w.[(])/iy
 // An assignment yields nothing ($t = $env:TOKEN, [string]$t = ...), nor does a test ([string]::IsNullOrEmpty($env:TOKEN)) or
@@ -568,29 +610,178 @@ const yieldsSecret = (text: string, next = '') => {
 // A hashtable handed to a parameter (irm $u -Headers @{ 'Authorization' = "Bearer $env:TOKEN" }) or assigned ($h = @{ ... })
 // is used, not printed: its contents are blanked. One alone as a statement, piped on, or in a writer's call is read.
 // One pass over the text, a stack of braces: linear.
-const PRINTER_WORD = /^[ \t(]*(?:echo|printf|write|write-\w+|out-\w+|format-\w+)(?![\w-])/i
+// An assignment prints nothing only where it is a statement: at the start of one, in $( ) or @( ), or itself assigned so
+// ($x = ($h = @{ ... }), $x = $h = @{ ... }). In grouping parentheses it prints what it assigns: ($h = @{ ... }).a,
+// [void]($h = ...), "{0}" -f ($h = ...).a, a ( on the line before. Read backwards from @{ over the 200 characters before it:
+// the targets ($h, [type]$h, $h.k, $h['k'], $h, $g) and their = , then what comes before them. A target cut off by the 200,
+// or a comment before it, is read. Anchored at @{, so each brace reads at most 200 characters.
+const ASSIGN_REVERSED = String.raw`=(?:\?\?|[-+*/%])?(?![=!<>])`
+const TARGET_REVERSED = String.raw`(?:\][^[\n]*\[|\w+\.)*[\w:]+\$(?:\s*\][\w.]+\[)*`
+const TARGETS_REVERSED = String.raw`(?:\s*${TARGET_REVERSED}\s*,)*\s*${TARGET_REVERSED}`
+const SILENT_REVERSED = new RegExp(
+  String.raw`^@\s*${ASSIGN_REVERSED}${TARGETS_REVERSED}(?:[ \t]*\(?\s*${ASSIGN_REVERSED}${TARGETS_REVERSED})*[ \t]*(?:[;{&]|\([$@]|(\n))`,
+)
+// parens: the open ( and braces, true for a ( whose contents are printed.
+// reversed: the whole text backwards, reversed once.
+const isSilentAssignment = (reversed: string, i: number, parens: readonly (boolean | 'brace')[]) => {
+  const at = reversed.length - i
+  // The text's own start reads as a line's.
+  const match = SILENT_REVERSED.exec(i > 200 ? reversed.slice(at, at + 200) : `${reversed.slice(at)}\n`)
+  // At a line's start, the ( open around the assignment (past those the targets were read through) must not group.
+  const crossed = (match?.[0].match(/\(/g)?.length ?? 0) - (match?.[0].match(/\)/g)?.length ?? 0)
+
+  return match !== null && (match[1] === undefined || parens.at(-1 - crossed) !== true)
+}
+// PowerShell's operators look like parameters: "{0}" -f @{ ... }.a and -join @{ ... }.Values print what the table holds.
+const PARAM_TABLE =
+  /(?<![\w-])-(?!(?:[ic]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|join|f|as|is|isnot|and|or|xor|not|band|bor|bxor|bnot|shl|shr)(?![\w-]))\w+:?\s*@$/i
+// A cmdlet that prints or serializes what it is handed: ConvertTo-Json -InputObject @{ ... }, New-Object psobject -Property @{ ... }.
+// After return, throw, ( , $( or @( too: $(ConvertTo-Json -InputObject @{ ... }) is printed.
+const PRINTER_WORD =
+  /^(?:[ \t]|[$@]?\(|(?:return|throw)[ \t])*(?:[\w.]+\\)?(?:echo|printf|write|write-\w+|out-\w+|format-\w+|convertto-\w+|join-string|select|\w+-object)(?![\w-])/i
+const HOST_WRITERS = new RegExp(HOST_WRITER.source, 'gi')
+const LEAD = /(?:[ \t]|[$@]?\(|(?:return|throw)[ \t])*/y
 const usedTables = (text: string) => {
   const chars = text.split('')
-  // Each open brace: whether its contents are a used table's (inherited by the braces inside it).
-  const stack: boolean[] = []
+  const reversed = [...chars].reverse().join('')
+  // Each open brace: true if its contents are a used table's (inherited by the braces inside it), 'table' for a printed @{ }.
+  const stack: (boolean | 'table')[] = []
+  // A host writer anywhere in a pipeline prints what reaches it, an assigned table's value too: $x = @{ ... }.a | Write-Host.
+  // hostEnd[j]: where the first host writer at or after j ends. Per brace depth, the open pipeline's start and its first used
+  // table; a pipeline that ends with both has its tables read after all (fail closed: a printed table's contents).
+  const hostEnd = new Array<number>(text.length + 1).fill(Infinity)
+  for (const { index = 0, 0: found } of text.matchAll(HOST_WRITERS)) {
+    hostEnd[index] = Math.min(hostEnd[index] ?? Infinity, index + found.length)
+  }
+  for (let j = text.length - 1; j >= 0; j--) {
+    hostEnd[j] = Math.min(hostEnd[j] ?? Infinity, hostEnd[j + 1] ?? Infinity)
+  }
+  const pipeStart: number[] = [0]
+  const firstUsed: (number | undefined)[] = []
+  // A block's first used table belongs to the pipeline the block is in too: % { $h = @{ ... }; $h.a } | Write-Host.
+  const blockFirst: (number | undefined)[] = []
+  let lastSeen = ''
+  const reread = new Array<number>(text.length + 1).fill(0)
+  const endPipeline = (depth: number, i: number) => {
+    const from = firstUsed[depth]
+
+    if (from !== undefined && (hostEnd[pipeStart[depth] ?? 0] ?? Infinity) <= i) {
+      reread[from] = (reread[from] ?? 0) + 1
+      reread[i] = (reread[i] ?? 0) - 1
+    }
+    firstUsed[depth] = undefined
+    pipeStart[depth] = i + 1
+  }
+  // The statement's start and whether it is a printer's, kept for the braces open around the one being read.
+  const outer: [number, boolean | undefined, number, boolean | undefined][] = []
+  let lineStart = 0
+  let linePrinter: boolean | undefined
+  // What stands before a cmdlet's name (blanks, ( , $( , @( , return, throw) is skipped once per statement, however long.
+  const printerAt = (from: number) => {
+    LEAD.lastIndex = from
+    LEAD.test(text)
+
+    return PRINTER_WORD.test(text.slice(LEAD.lastIndex, LEAD.lastIndex + 120))
+  }
+  // Parentheses in quotes or comments are text.
+  const isText = new Array<boolean>(text.length).fill(false)
+  for (const { index = 0, 0: part } of text.matchAll(QUOTED)) {
+    isText.fill(!isEscape(part), index, index + part.length)
+  }
+  const parens: (boolean | 'brace')[] = []
+  let comment: '' | '#' | '<#' = ''
   let start = 0
   let isPrinter: boolean | undefined
 
   chars.forEach((char, i) => {
+    if (comment === '#' ? char === '\n' : comment === '<#' && char === '>' && text[i - 1] === '#') {
+      comment = ''
+    } else if (!comment && !isText[i] && stack.at(-1) !== true) {
+      if (char === '#') {
+        comment = text[i - 1] === '<' ? '<#' : /^\s?$/.test(text[i - 1] ?? '') ? '#' : ''
+      } else if (char === '(') {
+        // $( ), @( ) and an assigned $x = ( ) print nothing of an assignment in them.
+        parens.push(!/[$@]/.test(text[i - 1] ?? '') && !/(?<![=!<>])=[ \t]*$/.test(text.slice(Math.max(0, i - 20), i)))
+      } else if (char === ')') {
+        parens.pop()
+      }
+    }
+
+    if (!comment && stack.at(-1) !== true) {
+      // A line that ends in | or whose next starts with one goes on with the pipeline; 200 blanks are taken to go on too.
+      const goesOn = char === '\n' && (lastSeen === '|' || /[ \t\r]*(?:\||$)/y.test(text.slice(i + 1, i + 200)))
+
+      // Inside an open ( the pipeline goes on: $x = $($h = @{ ... }; $h.a) | Write-Host.
+      if ((parens.length === 0 || parens.at(-1) === 'brace') && (char === ';' || (char === '\n' && !goesOn))) {
+        endPipeline(stack.length, i)
+      }
+      if (!/\s/.test(char)) {
+        lastSeen = char
+      }
+    }
+
     if (/[;\n&|]/.test(char) && stack.at(-1) !== true) {
       start = i + 1
       isPrinter = undefined
+      if (/[;\n]/.test(char)) {
+        lineStart = i + 1
+        linePrinter = undefined
+      }
     } else if (char === '{') {
-      isPrinter ??= PRINTER_WORD.test(text.slice(start, start + 40))
+      // The statement's printer too, past a | or & : Write-Output (& { 1 }) -InputObject @{ ... }.
+      linePrinter ??= printerAt(lineStart)
+      isPrinter ??= printerAt(start) || linePrinter
       // The 40 characters before @{ are enough to see -Param or = : anchored at their end, they are read once per brace.
       const before = text.slice(Math.max(start, i - 40), i)
-      const isUsed = !isPrinter && /(?:(?<![\w-])-\w+:?|(?<![=!<>])=)\s*@$/.test(before)
+      // A table that is a printed table's value (@{ 'a' = @{ ... } }) is printed with it.
+      const isUsed =
+        !isPrinter && stack.at(-1) !== 'table' && (PARAM_TABLE.test(before) || (/=\s*@$/.test(before) && isSilentAssignment(reversed, i, parens)))
 
-      stack.push((stack.at(-1) ?? false) || isUsed)
+      if (isUsed && stack.at(-1) !== true) {
+        firstUsed[stack.length] ??= i
+        blockFirst[stack.length] ??= i
+      }
+      stack.push(stack.at(-1) === true || isUsed ? true : text[i - 1] === '@' ? 'table' : false)
+      parens.push('brace')
+      outer.push([start, isPrinter, lineStart, linePrinter])
+      // A block's statements start after its brace: if ($x) { ConvertTo-Json -InputObject @{ ... } }.
+      start = i + 1
+      lineStart = i + 1
+      isPrinter = undefined
+      linePrinter = undefined
+      pipeStart[stack.length] = i + 1
+      firstUsed[stack.length] = undefined
+      blockFirst[stack.length] = undefined
     } else if (char === '}') {
+      if (stack.length > 0 && stack.at(-1) !== true) {
+        const inner = blockFirst[stack.length]
+
+        endPipeline(stack.length, i)
+        firstUsed[stack.length - 1] ??= inner
+        blockFirst[stack.length - 1] ??= inner
+      }
       stack.pop()
+      parens.pop()
+      ;[start, isPrinter, lineStart, linePrinter] = outer.pop() ?? [i + 1, undefined, i + 1, undefined]
     } else if (stack.at(-1) === true) {
       chars[i] = char === '\n' ? '\n' : ' '
+    } else if (stack.at(-1) === 'table' && char === '=') {
+      // A printed table's key = value is printed with it: the value is read as a statement of its own, @{a=$env:TOKEN} too.
+      chars[i] = ';'
+    }
+  })
+  // Braces left open end with the text.
+  for (let open = stack.length; open >= 0; open--) {
+    endPipeline(open, text.length)
+    if (open > 0) {
+      firstUsed[open - 1] ??= blockFirst[open]
+    }
+  }
+  let depth = 0
+  reread.forEach((step, j) => {
+    depth += step
+    if (depth > 0 && j < text.length) {
+      chars[j] = text[j] === '=' ? ';' : (text[j] ?? '')
     }
   })
 
