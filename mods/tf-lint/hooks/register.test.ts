@@ -171,9 +171,10 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a deny of everything but IAM and STS', 'scp.tf', 'data "aws_iam_policy_document" "d" {\n  statement {\n    effect      = "Deny"\n    not_actions = ["iam:*", "sts:*"]\n    resources   = ["*"]\n  }\n}\nlocals {\n  p = jsonencode({ Effect = "Deny", NotAction = ["iam:*"], Resource = "*" })\n}', null],
   // GitHub OIDC trust.
   ['a GitHub OIDC trust pinned to a branch', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/infra:ref:refs/heads/main"')}`), null],
-  ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(repo:acme\/\*\)/],
-  ['a GitHub OIDC trust listing repo:*', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:acme/infra:*", "repo:*"]')}`), /wildcard repository \(repo:\*\)/],
-  ['a GitHub OIDC trust for a bare *', 'role.tf', ROLE(`${AUD}\n${SUB('"*"')}`), /wildcard repository \(\*\)/],
+  ['a GitHub OIDC trust for any repo in an org', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:acme/*"')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust listing repo:*', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:acme/infra:*", "repo:*"]')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust for a bare *', 'role.tf', ROLE(`${AUD}\n${SUB('"*"')}`), /wildcard repository \(1 :sub value\)/],
+  ['a GitHub OIDC trust with two wildcard subs', 'role.tf', ROLE(`${AUD}\n${SUB('["repo:*", "*"]')}`), /wildcard repository \(2 :sub values\)/],
   ['a GitHub OIDC trust without sub', 'role.tf', ROLE(AUD), /without a :sub condition/],
   ['a GitHub OIDC trust without aud', 'role.tf', ROLE(SUB('"repo:acme/infra:*"')), /without a :aud condition/],
   ['a GitHub OIDC trust with an interpolated repo', 'role.tf', ROLE(`${AUD}\n${SUB('"repo:${var.org}/${var.repo}:*"')}`), null],
@@ -350,6 +351,10 @@ const FLAGS: readonly (readonly [string, string, string, RegExp | null | undefin
   ['a policy document wildcard with its own condition', 'bucket.tf', 'data "aws_iam_policy_document" "p" {\n  statement {\n    actions = ["s3:GetObject"]\n    principals {\n      type        = "AWS"\n      identifiers = ["*"]\n    }\n    condition {\n      test     = "StringEquals"\n      variable = "aws:PrincipalOrgID"\n      values   = ["o-1"]\n    }\n  }\n  statement {\n    actions = ["s3:ListBucket"]\n  }\n}', null],
   ['a JSON wildcard with its own condition beside a plain statement', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [\n  { "Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Condition": { "StringEquals": { "aws:PrincipalOrgID": "o-1" } } },\n  { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "*" }\n] }\nEOF', null],
   ['a wildcard principal whose description has a brace', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Sid       = "open }"\n    Principal = "*"\n    Action    = "s3:GetObject"\n  }, {\n    Sid       = "x"\n    Condition = { Bool = { "aws:SecureTransport" = "false" } }\n  }]\n})', /Principal "\*" with no condition/],
+  // Found by the 0.10 review: text inside a string never counts as a Condition key.
+  ['a Condition spelled with braces inside a string', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Principal = "*"\n    Action    = "s3:GetObject"\n    Resource  = "arn:${data.aws_partition.current.partition}:s3:::example/Condi{tion}"\n  }]\n})', /Principal "\*" with no condition/],
+  ['a Condition named only in a string value', 'bucket.tf', 'policy = jsonencode({\n  Statement = [{\n    Sid       = "Condition = none"\n    Principal = "*"\n    Action    = "s3:GetObject"\n  }]\n})', /Principal "\*" with no condition/],
+  ['a quoted Condition key in heredoc JSON', 'bucket.tf', 'policy = <<EOF\n{ "Statement": [{ "Principal": "*", "Action": "s3:GetObject", "Condition": { "Bool": { "aws:SecureTransport": "true" } } }] }\nEOF', null],
   // 0.10: .tf.json forms of the KMS, provider, partition and port rules.
   ['a KMS key in .tf.json with neither setting', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "description": "logs" } } } }', /enable_key_rotation = true; and .*7 to 30/],
   ['a KMS key in .tf.json with a 3-day window', 'kms.tf.json', '{ "resource": { "aws_kms_key": { "logs": { "enable_key_rotation": true, "deletion_window_in_days": 3 } } } }', /^(?!.*enable_key_rotation).*7 to 30/],
@@ -472,7 +477,19 @@ test('an Edit to a trust policy sub is read with the file around it', async ($, 
   const ran = await $.tool.call({ tool: 'Edit', file_path: 'role.tf', old_string: 'x', new_string: SUB('"repo:acme/*"') })
 
   expect(ran.deny).toBe(undefined)
-  expect((ran.context ?? []).join('\n')).toMatch(/role\.tf, or the file around it, trusts GitHub Actions OIDC for a wildcard repository \(repo:acme\/\*\)/)
+  expect((ran.context ?? []).join('\n')).toMatch(/role\.tf, or the file around it, trusts GitHub Actions OIDC for a wildcard repository \(1 :sub value\)/)
+})
+
+// Found by the 0.10 review: a finding never echoes a value from the file, so a token there stays out of the context.
+test('a finding about a file with a token in a sub or a name does not echo the token', async ($, on) => {
+  on('tool.call', { tool: ['Edit'] }, () => ({ result: {} as never }))
+  on('fs.read', () => ({ value: `${ROLE(`${AUD}\n${SUB(`"repo:*${TOKEN}"`)}`)}\nvariable "password-${TOKEN}" {}` }))
+
+  const ran = await $.tool.call({ tool: 'Edit', file_path: 'role.tf', old_string: 'x', new_string: AUD })
+  const context = (ran.context ?? []).join('\n')
+
+  expect(context).toMatch(/wildcard repository \(1 :sub value\)/)
+  expect(context.includes(`${'ghp'}_`)).toBe(false)
 })
 
 test('an Edit to a .tf.json fragment is read with the file around it', async ($, on) => {
