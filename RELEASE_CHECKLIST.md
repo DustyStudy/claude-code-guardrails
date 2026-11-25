@@ -40,6 +40,7 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
 | 53be7a6 | Baseline (`origin/main`, PRs #88, #89 merged) | `npm ci && npm test` Windows, Claude Code 2.1.325: all 6 mods pass, shell.ts copies match. Main CI + Security Scan green. 0 open code-scanning, Dependabot or secret-scanning alerts |
 
 | 1cb6b58, 3d3cb7f | aws-guard 0.8.3: shell-named program (C4) and attached inline-code flag (F3); a shell-named call led by a denied operation (`$(which aws) $(echo iam) delete-role`) | aws-guard 1,330 pass; full `npm test` in the implementer's worktree exit 0 |
+| 9c75ae3 | Shared parser (F1, F2): xargs/parallel long-option prefixes, `source` after prefix keywords, linear `SOURCE_LINE`; terraform 0.6.3, supply-chain 0.5.3 | Full `npm test` at 9c75ae3: aws 1,330 / secret-allow 176 / secret-read 1,950 / supply-chain 698 / terraform 828 / tf-lint 790, 0 fail, copies match |
 
 ## Security review log
 
@@ -52,6 +53,13 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
   - F2 shared parser: `time`/`!` before `source /dev/stdin <<EOF` hides the heredoc script. OPEN
   - F3 aws-guard: `python -c"...boto3 delete..."` (code attached to the flag) skips the SDK check. OPEN
   - F4 secret-read-guard: `($h = @{a=$env:GITHUB_TOKEN})` prints the credential. OPEN
+  - F5 supply-chain-guard (found by the parser implementer): `echo install | xargs -Ici npm ci evil` runs
+    `npm install evil`; the parser marks the verb but the mod does not read a marked verb as an install. OPEN
+  - F6 shared parser: a function/alias defined on an earlier line of the same command that runs `source`,
+    then `f <<EOF`, hides the heredoc script. OPEN
+  - Pre-existing, fixed in 9c75ae3: `SOURCE_LINE` backtracked exponentially (`'> -x '` x24 = 638 ms; 60 KB
+    never finished) — a fail-open by hook timeout? No: a hook timeout runs the deny `.catch`, so it failed
+    closed, but it made long lines unusable.
   Assigned: F1+F2 one implementer (owns the 4 `shell.ts` copies; bumps terraform 0.6.3, supply-chain
   0.5.3); F3 with the aws-guard fix (0.8.3); F4 secret-read (0.6.3).
 
