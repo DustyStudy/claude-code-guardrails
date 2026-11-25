@@ -1,6 +1,6 @@
 {
   "name": "terraform-guard",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Denies terraform apply/destroy with -auto-approve, and apply without a saved plan file",
   "author": {
     "name": "Dustin Arrington",

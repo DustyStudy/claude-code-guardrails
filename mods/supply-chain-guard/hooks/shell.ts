@@ -11,6 +11,11 @@
 // - invocations(source, binary, true): the same calls with DYNAMIC where each such word stood, not at the end, and a NUL left in a
 //   word a quoted substitution is part of ("$(x)" is one word), for a guard that must know what stands before the unread word. A
 //   DYNAMIC at the end is one that stood before the program (sudo $(x) prog).
+// - namedByShell(source): the argument list of every call whose program the shell names, which invocations cannot match by name:
+//   a variable ($NPM, ${NPM}, $env:NPM, "$NPM") or a substitution ($(which npm), "$(x)", ` `), first or as the first such word
+//   after a wrapper (sudo $NPM install x, env $(x) prog). Each list is in invocations(source, binary, true)'s form, the program
+//   word itself left out: `$NPM install x` gives ['install', 'x'], `sudo $(x) terraform plan` ['terraform', 'plan']. Throws Unreadable.
+//   invocations is unchanged: it still passes over a variable first and takes the next word as the program.
 
 // A command that runs another: its target can sit anywhere after it.
 const WRAPPER =
@@ -27,6 +32,9 @@ const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
+
+// A word that is a variable as a whole, so the shell names what it holds: $NPM, ${NPM}, ${NPM:-npm}, $env:NPM.
+const VARIABLE = /^\$(\{.*\}|[\w:]+)$/s
 
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
@@ -70,8 +78,95 @@ const spend = (state: State, cost: number) => {
   }
 }
 
+const unclosed = () => new Unreadable('a ${ } in the command is never closed')
+
+// Where bash's ${ } that starts at `at` ends: a } quoted or nested in it does not end it (${a:-"}"}, ${a:-${b}}, ${a:-$(echo })}).
+// Inside double quotes a ' in it quotes or not by bash version, so that line is refused, not guessed; so is one never closed.
+const braceEnd = (text: string, at: number, state: State, isQuoted: boolean, depth = 0): number => {
+  if (depth > DEEPEST) {
+    throw new Unreadable('the command nests too deeply to read')
+  }
+
+  let end = at + 2
+
+  while (end < text.length && text[end] !== '}') {
+    const char = text[end]
+
+    if (char === "'" && isQuoted) {
+      throw new Unreadable("a ' inside a quoted ${ } cannot be read")
+    }
+
+    const next =
+      char === '\\'
+        ? end + 2
+        : char === '$' && text[end + 1] === '{'
+          ? braceEnd(text, end, state, isQuoted, depth + 1)
+          : char === '$' && text[end + 1] === '('
+            ? parenEnd(text, end + 1, state, depth + 1)
+            : char === '$' && text[end + 1] === "'" && state.isAnsi && !isQuoted
+              ? skip(text, end, 'bash', state, depth + 1)
+              : char === '"'
+                ? skip(text, end, 'bash', state, depth + 1)
+                : char === "'" || char === '`'
+                  ? text.indexOf(char, end + 1) + 1
+                  : end + 1
+
+    if (next <= end) {
+      throw unclosed()
+    }
+
+    end = next
+  }
+
+  if (end >= text.length) {
+    throw unclosed()
+  }
+
+  spend(state, end - at)
+
+  return end + 1
+}
+
+// Where the $( ) whose ( stands at `at` ends, read for braceEnd: quotes and nested ( ) and ${ } in it.
+const parenEnd = (text: string, at: number, state: State, depth: number): number => {
+  let open = 0
+
+  for (let end = at; end < text.length; ) {
+    const char = text[end]
+
+    if (char === '(' || char === ')') {
+      open += char === '(' ? 1 : -1
+
+      if (open === 0) {
+        spend(state, end - at)
+
+        return end + 1
+      }
+    }
+
+    const next =
+      char === '\\'
+        ? end + 2
+        : char === '$' && text[end + 1] === '{'
+          ? braceEnd(text, end, state, false, depth + 1)
+          : char === '"' || (char === '$' && text[end + 1] === "'" && state.isAnsi)
+            ? skip(text, end, 'bash', state, depth + 1)
+            : char === "'"
+              ? text.indexOf("'", end + 1) + 1
+              : end + 1
+
+    if (next <= end) {
+      throw unclosed()
+    }
+
+    end = next
+  }
+
+  throw unclosed()
+}
+
 // Where the quoted run, escaped character or ${VAR} that starts at `at` ends; `at` itself when none starts there (an open quote too).
-const skip = (text: string, at: number, shell: Shell, state: State): number => {
+const skip = (text: string, at: number, shell: Shell, state: State, depth = 0): number => {
   const char = text[at]
 
   if (char === ESCAPE[shell] && at + 1 < text.length) {
@@ -89,6 +184,23 @@ const skip = (text: string, at: number, shell: Shell, state: State): number => {
 
     while (end < text.length && text[end] !== "'") {
       end += text[end] === '\\' ? 2 : 1
+    }
+
+    spend(state, end - at)
+
+    return end < text.length ? end + 1 : at
+  }
+
+  if (shell === 'bash' && char === '$' && text[at + 1] === '{') {
+    return braceEnd(text, at, state, false, depth)
+  }
+
+  // bash's double quotes: a ${ } in them is read whole ("${a:-"}"}" is one word).
+  if (shell === 'bash' && char === '"') {
+    let end = at + 1
+
+    while (end < text.length && text[end] !== '"') {
+      end = text[end] === '\\' ? end + 2 : text[end] === '$' && text[end + 1] === '{' ? braceEnd(text, end, state, true, depth) : end + 1
     }
 
     spend(state, end - at)
@@ -584,6 +696,16 @@ const read = (source: string, depth: number, state: State): string[][] => {
       }
 
       add(placed)
+
+      // A program the shell names: a variable first, which LEAD passes over as PowerShell's `$out =` ($NPM install x), or a
+      // substitution in the program's place ($(echo npm) install x). Kept for namedByShell, marked by a DYNAMIC first.
+      // PowerShell's ( ) there is left out: (terraform plan) runs what is inside it.
+      // shortcut: FOO=$(x) npm reads as a substitution in the program's place too; it errs toward a shell-named program.
+      const isNamed = raw.slice(0, from).some((word, i) => VARIABLE.test(word) && !/^[-+*/%]?=/.test(raw[i + 1] ?? ''))
+
+      if (isNamed || (shell !== 'powershell' && marks.has(from))) {
+        add([DYNAMIC, ...placed])
+      }
     }
   }
 
@@ -645,6 +767,11 @@ export const invocations = (source: string, binary: RegExp, inPlace = false): st
   const isUnread = (word: string) => word.includes('\0')
 
   for (const placed of commandsOf(source)) {
+    // namedByShell's: a DYNAMIC never stands first in a call read here.
+    if (placed[0] === DYNAMIC) {
+      continue
+    }
+
     const names = placed.map(word => word.replaceAll('\0', ''))
     const at = WRAPPER_NAME.test(names[0] ?? '') ? names.findIndex((name, i) => i > 0 && binary.test(name)) : binary.test(names[0] ?? '') ? 0 : -1
 
@@ -659,4 +786,21 @@ export const invocations = (source: string, binary: RegExp, inPlace = false): st
   }
 
   return found
+}
+
+/** The argument list of every call whose program is a variable or a substitution, first or after a wrapper. Throws Unreadable. */
+export const namedByShell = (source: string): string[][] => {
+  const isFilled = (word: string) => word === DYNAMIC || word.includes('\0') || VARIABLE.test(word)
+
+  return commandsOf(source).flatMap(placed => {
+    const at =
+      isFilled(placed[0] ?? '')
+        ? 0
+        : WRAPPER_NAME.test((placed[0] ?? '').replaceAll('\0', ''))
+          ? placed.findIndex((word, i) => i > 0 && isFilled(word))
+          : -1
+
+    // A wrapper's arguments may be a command line in one word (bash -c "$X install"): split, as invocations does.
+    return at < 0 ? [] : [at > 0 ? placed.slice(at + 1).flatMap(word => word.split(/[\s,]+/)).filter(Boolean) : placed.slice(1)]
+  })
 }
