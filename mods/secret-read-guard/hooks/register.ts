@@ -623,7 +623,7 @@ const NAMED_IN_CODE = new RegExp(
 )
 // What prints what is piped into it; a program that takes it as a credential (gh auth login --with-token, docker login
 // --password-stdin) does not.
-const PRINTS_INPUT = [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|\w+-Object|select|where|\?|%|echo|write|Write-Output|Write-Host|Write-Information`)]
+const PRINTS_INPUT = [READER, GREP, PATTERN_FIRST, PS_PATTERN_FIRST, EDITOR, bin(String.raw`tee|tr|xargs|Out-\w+|Format-\w+|ConvertTo-\w+|Join-String|\w+-Object|select|where|\?|%|echo|write|Write-Output|Write-Host|Write-Information`)]
 const printsInput = (program = '') => PRINTS_INPUT.some(prints => prints.test(program))
 const HERE_VAR = new RegExp(String.raw`<<<\s*(?:${SECRET_VAR.source})`, 'i')
 const printsVar = (stages: readonly (readonly string[])[]) =>

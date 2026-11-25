@@ -517,6 +517,12 @@ const DENIED = [
   '$env:GITHUB_TOKEN | Out-Host',
   '$env:GITHUB_TOKEN | Out-String',
   '$env:GITHUB_TOKEN | Format-List',
+  // A conversion cmdlet prints what is piped into it too.
+  '$env:GITHUB_TOKEN | ConvertTo-Json',
+  '$env:AWS_SECRET_ACCESS_KEY | ConvertTo-Csv',
+  '$env:GITHUB_TOKEN | ConvertTo-Html',
+  '$env:GITHUB_TOKEN | Join-String',
+  'Get-ChildItem Env: | ConvertTo-Json',
   '$env:GITHUB_TOKEN | echo',
   // 0.10: any expression on the variable alone as a statement prints what it yields.
   "$env:GITHUB_TOKEN -replace 'a','b'",
@@ -592,6 +598,8 @@ const DENIED = [
 
 // Ordinary work: runs.
 const ALLOWED = [
+  '@{ a = 1 } | ConvertTo-Json',
+  'Get-Process | ConvertTo-Csv',
   'cat .env.example',
   'cat .env.sample .env.template',
   'cat ~/.ssh/id_rsa.pub',

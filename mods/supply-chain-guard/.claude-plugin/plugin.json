@@ -1,6 +1,6 @@
 {
   "name": "supply-chain-guard",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Denies installs of a package no lockfile or hash pins (pip without --require-hashes, npm/pnpm/yarn/bun/uv add of a named package), so the user runs them",
   "author": {
     "name": "Dustin Arrington",

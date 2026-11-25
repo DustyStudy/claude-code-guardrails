@@ -1,6 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
 const CASES: readonly (readonly [string, boolean])[] = [
+  // xargs and parallel add words from their input; source and . run piped input as a script.
+  ['echo iam delete-role --role-name x | xargs aws', false],
+  ['echo delete-role --role-name x | parallel aws iam', false],
+  ["echo 'aws iam delete-role --role-name x' | source /dev/stdin", false],
+  ["echo 'aws iam delete-role --role-name x' | . /dev/stdin", false],
+  ['ls *.json | xargs wc -l', true],
   ['aws iam delete-role --role-name it-admin', false],
   ['aws --profile security iam delete-role-policy --role-name x --policy-name y', false],
   ['aws iam delete-policy-version --policy-arn x --version-id v1', false],

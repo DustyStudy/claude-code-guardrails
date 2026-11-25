@@ -5,6 +5,28 @@ import { invocations, namedByShell } from './shell'
 const CASES: readonly (readonly [string, boolean])[] = [
   ['terraform apply -auto-approve', false],
   ['terraform destroy -auto-approve', false],
+  // xargs and parallel add words from their input; source and . run piped input as a script.
+  ["printf 'apply -auto-approve' | xargs terraform", false],
+  ["echo apply -auto-approve | xargs -n2 /usr/bin/terraform", false],
+  ["echo apply -auto-approve | sudo xargs terraform", false],
+  ["echo -auto-approve | parallel terraform apply", false],
+  ["echo 'terraform apply -auto-approve' | source /dev/stdin", false],
+  ["echo 'terraform apply -auto-approve' | . /dev/stdin", false],
+  ['ls *.log | xargs wc -l', true],
+  ["echo 'terraform plan' | grep -c .", true],
+  // Found in review: xargs inside a script, source after builtin or command, and a pipe that goes on past |& or a line end.
+  ["printf 'apply -auto-approve' | xargs sh -c 'terraform \"$@\"' sh", false],
+  ["printf 'terraform apply -auto-approve' | builtin source /dev/stdin", false],
+  ["printf 'terraform apply -auto-approve' | command source /dev/stdin", false],
+  ["printf 'terraform apply -auto-approve' | command -- source /dev/stdin", false],
+  ["printf 'terraform apply -auto-approve' | builtin -- . /dev/stdin", false],
+  ["printf 'apply -auto-approve' | sh -c 'x\"\"args terraform'", false],
+  ["printf 'terraform apply -auto-approve' |& source /dev/stdin", false],
+  ["printf 'terraform apply -auto-approve' |\nsource /dev/stdin", false],
+  ["printf 'terraform apply -auto-approve' |& bash", false],
+  ["printf 'terraform apply -auto-approve' |\n  bash", false],
+  ['terraform plan -no-color |\n  tee plan.log', true],
+  ['make fmt || source .venv/bin/activate', true],
   // The rest of a heredoc's opening line is a command too.
   ['cat <<EOF | terraform apply -auto-approve\nyes\nEOF', false],
   // A here-string is no heredoc; an unquoted heredoc runs its substitutions; one piped to a later shell is its script.
