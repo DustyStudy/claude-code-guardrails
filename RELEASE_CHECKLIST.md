@@ -56,7 +56,11 @@ Status: `PASS` (evidence linked), `OPEN`, `BLOCKED` (needs owner input), `N/A`.
   Full `npm test` at 4b78a94: 5,299 pass, 0 fail, shell.ts copies match. Left open:
   `$TF $(echo destroy -auto-approve)` (program and verb both shell-filled).
 - Opus reviewer (worktree, edit access) on secret-read-guard 0.6.0: no regressions; a quadratic regex
-  (60 KB input, 9.8 s) and 12 bypasses of the new denies. Sent back to the implementer.
+  (60 KB input, 9.8 s) and 12 bypasses of the new denies. Fixed in cb882bd (1,934 pass), including a
+  narrowing the lead asked for: a hashtable used as `-Headers`/`-Body` or assigned runs again (it ran in v0.9).
+  Hook timeout (engine types): 10 s per hook, then the hook's `.catch` (1 s); every guard's `.catch` denies,
+  so a timeout fails closed.
+- Full `npm test` at cb882bd: 5,418 pass, 0 fail, shell.ts copies match.
 
 ## Resume here
 

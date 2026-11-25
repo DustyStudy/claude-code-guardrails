@@ -293,18 +293,18 @@ fails if the copies drift apart.
 
 ### Latest test results
 
-0.9.0 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
-release), `npm test`: all 6 mods pass, 4,523 tests, 0 failures; the four
-`shell.ts` copies match.
+0.10.0 release candidate, Windows 11, Claude Code 2.1.325 (the pinned dev
+release), `npm test`: all 6 mods pass, 5,418 tests, 0 failures; the four
+`shell.ts` copies match. Every new deny was first written as a failing test.
 
 | Mod | Tests |
 |---|---|
-| aws-guard | 1,050 |
-| secret-allow-guard | 143 |
-| secret-read-guard | 1,609 |
-| supply-chain-guard | 490 |
-| terraform-guard | 579 |
-| tf-lint | 652 |
+| aws-guard | 1,194 |
+| secret-allow-guard | 166 |
+| secret-read-guard | 1,934 |
+| supply-chain-guard | 666 |
+| terraform-guard | 668 |
+| tf-lint | 790 |
 
 The tests run each guard through Claude Code's engine with mocked tool
 calls and a mocked file listing. secret-read-guard's folder listing was also
@@ -414,15 +414,21 @@ when it would be worth lifting.
   built from pieces, a symlink, a renamed copy made earlier, or a script
   file that opens the credential itself slips past. It follows the usual
   readers and the common file-reading calls handed to an interpreter
-  (`open(`, `readFileSync`, `ReadAllText`), not every program that can
-  print a file (`openssl`, `tar -x` then `cat`, `git show`, `git diff`, `docker compose config`). A recursive search of
-  a project folder (`grep -r x .`, the Grep tool with no path) still reads
-  a `.env` there unless `.gitignore` hides it; `aws s3 sync .` uploads one
-  too. A variable is judged by its name, so `echo $DB_CONN` runs even when
+  (`open(`, `readFileSync`, `ReadAllText`), and the printers `openssl -in`,
+  `git show`/`diff`/`blame`/`cat-file`/`archive`/`format-patch --stdout`/`log -p`,
+  `docker compose config`/`convert`, `tar -xO`/`--to-command`, `unzip -p` and
+  `7z -so`; a program off that list that prints a file is not followed. A
+  recursive search or upload of a folder (`grep -r x .`, `gci -Recurse | sls`,
+  `aws s3 sync .`) is denied when the folder directly holds a credential file
+  and no filter leaves it out, and an upload of a folder it cannot resolve is
+  denied; subfolders are not listed, and `rg`, `git grep` and the Grep tool are
+  left to `.gitignore`. A variable is judged by its name, so `echo $DB_CONN` runs even when
   it holds a password, and one printed by a program the guard does not
-  know runs, while a quoted literal (`echo '$GITHUB_TOKEN'`) is denied. A
-  `git add` or `gh gist create` path with a space in it is read as a
-  message and slips past. It also
+  know runs, while a quoted literal (`echo '$GITHUB_TOKEN'`) is denied. In
+  PowerShell any expression that prints a credential variable is denied
+  (`-replace`, `-join`, `"x" + $env:TOKEN`, a cast, a bare hashtable holding
+  one), while one used as a parameter value or assigned (`irm -Headers @{…}`)
+  runs. It also
   denies `aws secretsmanager create-secret --secret-string file://.env`,
   `terraform output -raw vpc_id` and `terraform show -json plan.out`,
   where the credential goes to AWS or nothing secret would print. MCP file tools are not covered. It
@@ -512,12 +518,19 @@ the real limits on what a command can do.
   with a substitution holding `pip` or `-m`, any line that turns
   `npm_config_package_lock` off, and a two-part conda version (`pkg=1.26`).
   *Covered by:* the sandbox's network allowlist and dependency review in CI.
-- **secret-read-guard.** The wildcard listing lower-cases the folder path, so
-  on a case-sensitive disk (Linux) a wildcard in a subfolder with capitals in
-  its name is judged by its text alone, as in 0.8. `$env:GITHUB_TOKEN | Write-Output` and
-  `$env:GITHUB_TOKEN -replace 'a','b'` pass. Denied though harmless: a
-  credential-name read after `cd $VAR` or `cd "$(…)"`, and `cat .env.ex*` and
-  `cat config.*`, which could match a real credential file.
+- **secret-read-guard.** A recursive search checks only the files directly in
+  the folder it names; `find | xargs grep`, a loop over a credential's
+  characters, and a file read by a nested call
+  (`git cat-file -p $(git rev-parse HEAD:.env)`) pass; a multi-line hashtable
+  with an unquoted key (`a = $env:T`) printed as a statement passes. Denied
+  though harmless: a credential-name read after `cd $VAR` or `cd "$(…)"`,
+  `cat .env.ex*` and `cat config.*`, `grep -rl` in a folder that holds a
+  credential file, comparisons such as `$env:TOKEN -eq 'x'`, a hashtable
+  passed positionally holding a credential variable, `git -c k=v log … .env`,
+  and `openssl x509 -in cert.pem` until `SECRET_READ_ALLOW` names the
+  certificate. *Covered by:* `permissions.deny` on credential files and the
+  sandbox's credential env-var deny in the managed baseline; keep secrets out
+  of the account the agent runs as.
 - **secret-allow-guard.** A bare password with no name or flag beside it is
   missed. Flagged though harmless: a word after `--token` (`--token
   enabled-mode`), and `TOKEN_ENDPOINT` with a plain url, since a signed url

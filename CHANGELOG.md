@@ -24,6 +24,21 @@ denied now runs. Each mod's line names the new harmless denies.
   "don't ask again" saves a rule), after an Edit/Write/MultiEdit to one of
   them, and on a settings change; warns once per new entry (by a hash, never
   the value), including a secret replaced by another.
+- secret-read-guard 0.6.0: denies a credential variable piped to
+  Write-Output/Write-Host/Write-Information and any PowerShell expression that
+  prints one (`-replace`, `-split`, `-join`, `+`, casts, subexpressions, a bare
+  hashtable holding one, `"$env:TOKEN.Length"`), while one used as a parameter
+  value or assigned still runs; denies `openssl -in`, `git show`/`diff`/`blame`/
+  `cat-file`/`archive`/`format-patch --stdout`/`log -p` (and `--word-diff`,
+  `--cc`) of a credential file, `docker compose config`/`convert`, `tar -xO`/
+  `--to-command`, `unzip -p` and `7z -so`; denies `grep -r` (also
+  `-d recurse`), `gci -Recurse`/`-Depth | sls` and `aws s3 sync`/`cp --recursive`
+  of a folder that holds a credential file unless filtered, and an upload of a
+  folder it cannot resolve; lists folders in their written case; checks a
+  quoted `git add`/`gh gist` path with a space; reads long PowerShell
+  expressions in linear time. Newly denied though harmless: `grep -rl` in such
+  a folder, `$env:TOKEN -eq 'x'`, `git -c k=v log … .env`, and
+  `openssl x509 -in cert.pem` until `SECRET_READ_ALLOW` names it.
 - supply-chain-guard 0.5.0: denies a tool named by a variable or substitution
   (`sudo $NPM install x`, `$(echo npx) pkg`, `${X:-npx} pkg`), python handed
   `-m pip` by the shell, `npx -c`/`npm exec --call` strings, `go get` without an
