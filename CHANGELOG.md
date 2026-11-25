@@ -75,6 +75,14 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   as terraform-guard's `$TF $(echo destroy -auto-approve)`. Inline code attached to its flag
   (`python -c"..."`, `-Ic'...'`, `node -e"..."`, `-pe'...'`,
   `--eval=...`) is read for SDK calls, as code after `-c ` was.
+- supply-chain-guard 0.5.3: a verb `xargs` or `parallel` replace is the
+  input's, read as an install, for every package manager it checks
+  (`echo install | xargs -Ici npm ci evil`, `xargs --rep=ci`,
+  `parallel -I@@ npm @@ evil`, `xargs -Ilist pip list evil`). A written
+  verb still runs with the input after it (`xargs -I{} npm view {} version`).
+  Newly denied though harmless: a replaced word before the verb
+  (`xargs -Iweb npm --prefix web ci`). Still not covered: a replaced word
+  inside a script a wrapper runs (`xargs -Ici sh -c 'npm ci evil'`).
 
 ## 0.10.0 (2026-11-24)
 
