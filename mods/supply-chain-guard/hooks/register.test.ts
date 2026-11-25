@@ -123,6 +123,8 @@ const CASES: readonly (readonly [string, boolean])[] = [
   ["echo evil | sh -c 'xargs \"$@\"' sh npm install", false],
   ["echo evil | sh -c 'x\"\"args \"$@\"' sh npm install", false],
   ["echo evil | sh -c 'x\\args \"$@\"' sh npm install", false],
+  // A replace string that is also the program's name still names the program.
+  ['echo npm | xargs -Inpm npm install evil', false],
   // An install that sets the lockfile aside.
   ['npm install --no-package-lock evil', false],
   ['npm install --no-package-lock', false],

@@ -29,7 +29,15 @@ const ASSIGNED = /^(?:\[[^\]]*\])*\$[\w:.{}]+[-+*/%]?=(.+)$/s
 const OPENER = /<<(?!<)-?[ \t]*(["']?)(\w+)\1(?![\w"'\\])/y
 // A shell named on a heredoc's opening line, or piped the heredoc after its end, reads the body as its script: bash <<EOF,
 // cat <<EOF | sh, and cat <<EOF | ... EOF sh.
+// source and . read it too where they are the program (. /dev/stdin <<EOF, not cp x . <<EOF or cat > source <<EOF), after
+// VAR=x, a redirection, builtin, command, eval, exec, sudo and their flags. Matched against the line as written and with its
+// quotes and backslashes gone, as the shell drops them from a name (sou""rce, b\ash).
 const SHELL = /(^|[\s;|&(\\/"'])(bash|sh|zsh|dash|ksh|fish|pwsh|powershell)(\.exe)?(?=[\s;|&)"']|$)/i
+// A redirection is one word (2>/dev/null, <<<x) or a bare one and its target (2> /dev/null); the target is never a redirection
+// itself (2> 2>), so no text matches two ways and a run of them stays linear.
+const SOURCE_LINE =
+  /(^|[;|&(])\s*((\w+=\S*|\d*[<>]+&?[ \t]+(?!\d*[<>])[^\s;|&]+|\d*[<>][^\s;|&]*|builtin|command|eval|exec|sudo|-[\w-]*)\s+)*(source|\.)(?=\s)/
+const readsHeredoc = (line: string) => [line, line.replace(/\$?["']|\\/g, '')].some(one => SHELL.test(one) || SOURCE_LINE.test(one))
 // A program that reads its input as commands: what is piped to it is a command line (echo "prog ..." | bash).
 const READER = /^(.*[\\/])?(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|iex|invoke-expression)(\.exe)?$/i
 // bash's builtins that run a file as a script, piped input too (echo "prog ..." | source /dev/stdin): only as the program word,
@@ -39,6 +47,111 @@ const BUILTIN = /^(builtin|command|--|-[a-zA-Z]+)$/
 // Wrappers that add words from their input to the call: what they run has arguments the shell fills in (echo apply | xargs prog),
 // named on their own or inside a script a wrapper runs (sh -c 'xargs "$@"' sh prog).
 const FEEDER = /(^|[\s;&|(`'"\\/])(xargs|parallel)(\.exe)?(?=[\s;&|)`'"]|$)/i
+const FEEDER_NAME = /^(.*[\\/])?(xargs|parallel)(\.exe)?$/i
+// xargs and parallel options that take the next word as their value when it is not attached (-n 2, -P4), BSD's -J and -R included.
+const VALUED = 'adELnPsRSjN'
+
+// Whether `list` runs source or . : first, or after wrappers, builtin, command, their flags, VAR=x, a redirection and its target
+// and the like (eval source x, 2> /dev/null source x).
+const sources = (list: readonly string[]) => {
+  const at = list.findIndex(word => SOURCER.test(word))
+
+  return (
+    at >= 0 &&
+    list
+      .slice(0, at)
+      .every((word, i) => BUILTIN.test(word) || WRAPPER_NAME.test(word) || LEAD.test(word) || /^\d*[<>]+[&|]?$/.test(list[i - 1] ?? ''))
+  )
+}
+
+// More replacement strings than this, or one we cannot read, and every word after the program counts as replaced: it bounds
+// the work too.
+const MOST_REPLACED = 8
+
+// The strings xargs or parallel replace with their input wherever they stand in what runs after them, read generously so a
+// misread marks more, never fewer: -I, -J, -i and any long option naming replace (--replace, --extensionreplace) give their
+// attached value or the next word, and -i and --replace {} too; parallel replaces {} always. Options are read up to the
+// program; a long one without = may take the next word as its value, so that word is passed over too.
+// shortcut: parallel's other replacement strings ({.}, {/}, {1}) are caught by its { alone.
+// Also where the program stands: the words before it are the options' own (-I{} is not the input's).
+const replacements = (words: readonly string[]): { found: string[]; program: number } => {
+  const found: string[] = []
+  let program = words.length
+  // A feeder among the words an earlier one's options already read (xargs -a xargs -a ...) is not read again: linear work.
+  let read = 0
+
+  words.forEach((feeder, at) => {
+    if (at < read || !FEEDER_NAME.test(feeder)) {
+      return
+    }
+
+    if (/parallel/i.test(feeder)) {
+      found.push('{')
+    }
+
+    let i = at + 1
+
+    for (; i < words.length; i++) {
+      const word = words[i] ?? ''
+
+      if (word === '--') {
+        i++
+        break
+      }
+
+      if (!/^-./.test(word)) {
+        break
+      }
+
+      if (word.startsWith('--')) {
+        const [, name = '', value] = /^--([^=]*)(?:=([\s\S]*))?$/.exec(word) ?? []
+
+        if (/replace/i.test(name)) {
+          found.push(value || '{}')
+        }
+
+        if (value === undefined && !/^-/.test(words[i + 1] ?? '-')) {
+          found.push(/replace/i.test(name) ? (words[i + 1] ?? '') : '')
+          i++
+        }
+
+        continue
+      }
+
+      for (let k = 1; k < word.length; k++) {
+        const letter = word[k] ?? ''
+        const rest = word.slice(k + 1)
+
+        if (letter === 'I' || letter === 'J') {
+          found.push(rest || (words[++i] ?? ''))
+          break
+        }
+
+        // -i takes an attached value in xargs and the next word in parallel: both are taken, the next word left in place.
+        if (letter === 'i') {
+          found.push(rest || '{}', rest ? '' : (words[i + 1] ?? ''))
+          break
+        }
+
+        if (VALUED.includes(letter)) {
+          i += rest ? 0 : 1
+          break
+        }
+
+        // -e and -l take an attached value only.
+        if (letter === 'e' || letter === 'l') {
+          break
+        }
+      }
+    }
+
+    // The first feeder's program: a later feeder's options stand in its arguments, which are marked anyway.
+    program = Math.min(program, i)
+    read = i
+  })
+
+  return { found: found.filter(Boolean), program }
+}
 
 // A wrapper counts by its name wherever it is installed: /bin/bash, /usr/bin/env, C:\...\pwsh.exe.
 const WRAPPER_NAME = new RegExp(String.raw`^(.*[\\/])?${WRAPPER.source.slice(1)}`, 'i')
@@ -389,7 +502,7 @@ const cut = (text: string, shell: Shell, state: State, nested: (body: string) =>
         const lineEnd = text.indexOf('\n', after)
         const pipedTo = opening.trimEnd().endsWith('|') ? text.slice(after, lineEnd < 0 ? text.length : lineEnd) : ''
 
-        if (SHELL.test(opening) || SHELL.test(pipedTo)) {
+        if (readsHeredoc(opening) || readsHeredoc(pipedTo)) {
           nested(body)
         } else if (!quote) {
           // An unquoted body runs its substitutions wherever it goes: cat <<EOF $(terraform apply) EOF.
@@ -659,7 +772,7 @@ const read = (source: string, depth: number, state: State): string[][] => {
       // Piped to a shell, straight or through other commands (echo "prog ..." | tee log | bash).
       feeds =
         isPiped &&
-        (next.some(word => READER.test(word)) || SOURCER.test(next.find(word => !BUILTIN.test(word)) ?? '') || (feeds && next.length > 0))
+        (next.some(word => READER.test(word)) || sources(next) || (feeds && next.length > 0))
 
       let from = 0
 
@@ -682,10 +795,12 @@ const read = (source: string, depth: number, state: State): string[][] => {
       // shortcut: any word counts, so a harmless one (find -name xargs) marks the call too; narrow it if that bites.
       const isFed = WRAPPER_NAME.test(kept[0] ?? '') && kept.some(word => FEEDER.test(word.replace(/\$?["']|\\/g, '')))
 
-      if (WRAPPER_NAME.test(kept[0] ?? '')) {
+      // source or . reads a here-string as its script too (source /dev/stdin <<< "..."), so its words are read as a wrapper's are.
+      if (WRAPPER_NAME.test(kept[0] ?? '') || sources(words)) {
         // A quoted argument of a wrapper is a command line of its own, an option's attached one (su --command="...") and a
         // here-string (bash <<< "...") too.
-        for (const word of words.slice(from + 1).filter(one => /\s/.test(one))) {
+        // Every word for source: its here-string may stand before it (<<< "..." source /dev/stdin).
+        for (const word of (sources(words) ? words : words.slice(from + 1)).filter(one => /\s/.test(one))) {
           nested(word.replace(/^(--?[\w-]+=|<<<)/, ''), isFed)
         }
       }
@@ -714,6 +829,24 @@ const read = (source: string, depth: number, state: State): string[][] => {
 
       if (isFed) {
         placed.push(DYNAMIC)
+
+        // A second reading where a word holding a string xargs or parallel replace is the input's, the program's name too
+        // (xargs -IX X apply); the first, as written, still names the program for a guard that reads it. The strings come from
+        // a script a wrapper runs too (sh -c 'xargs -Iplan "$@"' sh terraform plan), whose words are then all after its program.
+        // The strings from the words as written and from each script split into words, so one standing feeder does not hide a
+        // script's (sh -c 'xargs -Iplan "$@"' xargs terraform plan).
+        const direct = placed.some(word => FEEDER_NAME.test(word))
+        const tokens = placed.flatMap(word => word.replace(/\$?["']|\\/g, '').split(/\s+/)).filter(Boolean)
+        const { found: written, program } = replacements(placed)
+        const replaced = [...new Set([...written, ...replacements(tokens).found])]
+        const isAll = replaced.length > MOST_REPLACED
+        const start = direct ? program : 1
+
+        spend(state, placed.length * Math.min(replaced.length, MOST_REPLACED))
+
+        if (isAll || replaced.length > 0) {
+          add(placed.map((word, at) => (at >= start && word !== DYNAMIC && (isAll || replaced.some(one => word.includes(one))) ? DYNAMIC : word)))
+        }
       }
 
       add(placed)

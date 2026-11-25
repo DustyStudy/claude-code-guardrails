@@ -1,6 +1,6 @@
 {
   "name": "aws-guard",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Denies AWS CLI and AWS Tools for PowerShell calls that turn off logging or detection, open S3 to the public, change IAM access, Organizations or KMS keys, or destroy data, so the user runs them",
   "author": {
     "name": "Dustin Arrington",

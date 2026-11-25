@@ -523,6 +523,8 @@ const DENIED = [
   '$env:GITHUB_TOKEN | ConvertTo-Html',
   '$env:GITHUB_TOKEN | Join-String',
   'Get-ChildItem Env: | ConvertTo-Json',
+  // A replace string that is also the program's name still names the program.
+  'echo cat | xargs -Icat cat .env',
   '$env:GITHUB_TOKEN | echo',
   // 0.10: any expression on the variable alone as a statement prints what it yields.
   "$env:GITHUB_TOKEN -replace 'a','b'",

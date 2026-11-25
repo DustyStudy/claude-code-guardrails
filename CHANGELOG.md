@@ -13,6 +13,22 @@ Fixes from the review of 0.10.0. Nothing that was denied now runs.
   line (`echo '...' | source /dev/stdin`); and a pipe goes on past `|&` or a
   line end (`echo '...' |& bash`). Still not followed: `source <(...)`.
   Newly denied though harmless: `echo '...' | source /dev/null`.
+- Shared parser, from the review of 1174367 (aws-guard 0.8.2,
+  secret-read-guard 0.6.2, supply-chain-guard 0.5.2, terraform-guard
+  0.6.2): a second reading of a call through `xargs` or `parallel` takes
+  each word holding a string they replace as the input's, the program's
+  name too (`echo apply | xargs -Iplan terraform plan -auto-approve`,
+  `xargs -IX X apply`, `parallel --replace plan ...`), with the strings
+  read from `-I`, `-J`, `-i`, any `--*replace*` option, parallel's `{}`
+  and a script a wrapper runs; past 8 strings every word counts. The
+  reading as written stays, so `echo cat | xargs -Icat cat .env` is still
+  denied. `source` and `.` read a heredoc or here-string as their script
+  (`source /dev/stdin <<< '...'`, a quoted `sou""rce` too), and are found
+  after `eval`, other wrappers and a redirection (`| eval source
+  /dev/stdin`, `2> /dev/null source ...`); a `.` that is only an argument
+  (`cp x . <<EOF`) reads no heredoc. Still not covered: aws-guard does
+  not check a program the shell names (`$AWS iam delete-role`,
+  `xargs -IX X iam delete-role`).
 - aws-guard 0.8.1, terraform-guard 0.6.1: deny those two forms. Newly
   denied though harmless: `printf plan | xargs terraform`.
 - secret-read-guard 0.6.1: `ConvertTo-*` and `Join-String` print what is
